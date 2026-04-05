@@ -324,8 +324,10 @@ fn build_scoped_source(
     // Client preamble (colors, etc.) is additional.
     let client_preamble = preamble_override.unwrap_or("");
 
+    // page_setup goes AFTER skeleton so it overrides any page settings
+    // from show rules (e.g. kodama sets paper: "iso-b6", margin: 2em)
     Ok(format!(
-        "{page_setup}{DEFAULT_RENDERING_PREAMBLE}{client_preamble}\n{skeleton}{fragment}{closing}\n"
+        "{DEFAULT_RENDERING_PREAMBLE}{client_preamble}\n{skeleton}{page_setup}{fragment}{closing}\n"
     ))
 }
 
