@@ -55,7 +55,7 @@
 
 (let ((base (file-name-directory load-file-name)))
   (find-file (expand-file-name
-              "../tip-server/crates/tip-core/tests/fixtures/baseline_stress.typ"
+              "../tip-server/crates/tip-core/tests/fixtures/list_math.typ"
               base)))
 
 (message "TIP-TEST: ready. Fragments compile in ~1.5s.")

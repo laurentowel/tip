@@ -429,22 +429,18 @@ fn collect_scope_nodes(
         }
 
         // For ANY other node that contains the fragment (FuncCall, Args, etc.):
-        // Emit the source of children that are entirely before the fragment,
-        // and recurse into the child that contains the fragment.
-        // This preserves structural context like #list[...$frag$...].
+        // DON'T emit the node's own syntax (no function names, no bullets).
+        // Just recurse into the child that contains the fragment.
+        // This strips layout containers (#list, #box, #definition, etc.)
+        // while preserving structural blocks (ContentBlock, CodeBlock).
         _ => {
             let mut child_offset = offset;
             for child in node.children() {
                 let child_end = child_offset + child.len();
-                if child_end <= frag_start {
-                    // Child entirely before fragment: emit its source verbatim
-                    // (this includes function names, punctuation, args before the fragment)
-                    result.push_str(&source[child_offset..child_end]);
-                } else if child_offset < frag_start {
+                if child_offset < frag_start && child_end > frag_start {
                     // Child contains the fragment: recurse
                     collect_scope_nodes(child, source, frag_start, child_offset, result);
                 }
-                // else: child at or after fragment, skip
                 child_offset = child_end;
             }
         }
