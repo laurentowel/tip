@@ -366,20 +366,24 @@ fn collect_scope_nodes(
     // Case 1: node is entirely before fragment
     if node_end <= frag_start {
         match node.kind() {
-            // Scope-defining: include full source
+            // Scope-defining: include full source WITH the preceding #
             SyntaxKind::LetBinding
             | SyntaxKind::SetRule
             | SyntaxKind::ShowRule
             | SyntaxKind::ModuleImport
             | SyntaxKind::ModuleInclude => {
-                result.push_str(&source[offset..node_end]);
+                // Include the # prefix if present (it's the preceding Hash sibling)
+                let start = if offset > 0 && source.as_bytes().get(offset - 1) == Some(&b'#') {
+                    offset - 1
+                } else {
+                    offset
+                };
+                result.push_str(&source[start..node_end]);
                 result.push('\n');
             }
-            // Hash prefix: always emit (needed before #let, #set, #show, etc.)
-            SyntaxKind::Hash => {
-                result.push('#');
-            }
-            _ => {} // skip non-scope content before fragment
+            // DON'T emit bare # — it was only needed for scope-defining statements,
+            // and those now include the # themselves via the offset-1 check above.
+            _ => {}
         }
         return;
     }
@@ -423,12 +427,7 @@ fn collect_scope_nodes(
             }
         }
 
-        // Hash (code entry): emit #
-        SyntaxKind::Hash => {
-            result.push('#');
-        }
-
-        // For ANY other node that contains the fragment (FuncCall, Args, etc.):
+        // For ANY other node that contains the fragment (FuncCall, Args, Hash, etc.):
         // DON'T emit the node's own syntax (no function names, no bullets).
         // Just recurse into the child that contains the fragment.
         // This strips layout containers (#list, #box, #definition, etc.)
