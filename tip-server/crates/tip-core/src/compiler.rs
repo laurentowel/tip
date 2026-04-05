@@ -342,8 +342,13 @@ fn extract_scope_skeleton(
     result
 }
 
-/// Recursively collect scope-defining nodes from the syntax tree.
-/// Only includes nodes that are before `frag_start` and define scope.
+/// Recursively collect scope-defining nodes and structural ancestors
+/// of the fragment from the syntax tree.
+///
+/// Three cases for each node:
+/// 1. Node is entirely before frag_start → include if scope-defining, skip otherwise
+/// 2. Node contains frag_start → recurse into children (preserving structure)
+/// 3. Node starts at or after frag_start → skip
 fn collect_scope_nodes(
     node: &typst::syntax::SyntaxNode,
     source: &str,
@@ -353,62 +358,35 @@ fn collect_scope_nodes(
 ) {
     let node_end = offset + node.len();
 
-    // Skip nodes that start at or after the fragment
+    // Case 3: skip nodes at or after fragment
     if offset >= frag_start {
         return;
     }
 
-    match node.kind() {
-        // Scope-defining statements: include their full source text
-        SyntaxKind::LetBinding
-        | SyntaxKind::SetRule
-        | SyntaxKind::ShowRule
-        | SyntaxKind::ModuleImport
-        | SyntaxKind::ModuleInclude => {
-            if node_end <= frag_start {
-                let text = &source[offset..node_end];
-                result.push_str(text);
+    // Case 1: node is entirely before fragment
+    if node_end <= frag_start {
+        match node.kind() {
+            // Scope-defining: include full source
+            SyntaxKind::LetBinding
+            | SyntaxKind::SetRule
+            | SyntaxKind::ShowRule
+            | SyntaxKind::ModuleImport
+            | SyntaxKind::ModuleInclude => {
+                result.push_str(&source[offset..node_end]);
                 result.push('\n');
             }
-        }
-
-        // Code blocks: emit opener, recurse into children, emit closer
-        SyntaxKind::CodeBlock => {
-            result.push_str("{\n");
-            let mut child_offset = offset;
-            for child in node.children() {
-                collect_scope_nodes(child, source, frag_start, child_offset, result);
-                child_offset += child.len();
+            // Hash prefix: always emit (needed before #let, #set, #show, etc.)
+            SyntaxKind::Hash => {
+                result.push('#');
             }
-            // Only close if the fragment is inside this block
-            if frag_start < node_end {
-                // Don't close yet — the fragment will be appended, then we close
-            } else {
-                result.push_str("}\n");
-            }
+            _ => {} // skip non-scope content before fragment
         }
+        return;
+    }
 
-        // Hash (code entry from markup): emit the # prefix
-        SyntaxKind::Hash => {
-            result.push('#');
-        }
-
-        // Content blocks: similar to code blocks
-        SyntaxKind::ContentBlock => {
-            result.push_str("[\n");
-            let mut child_offset = offset;
-            for child in node.children() {
-                collect_scope_nodes(child, source, frag_start, child_offset, result);
-                child_offset += child.len();
-            }
-            if frag_start < node_end {
-                // fragment is inside, don't close yet
-            } else {
-                result.push_str("]\n");
-            }
-        }
-
-        // For markup, code body, and other container nodes: recurse
+    // Case 2: node CONTAINS frag_start — must recurse to preserve structure
+    match node.kind() {
+        // Transparent containers: just recurse
         SyntaxKind::Markup
         | SyntaxKind::Code => {
             let mut child_offset = offset;
@@ -418,8 +396,58 @@ fn collect_scope_nodes(
             }
         }
 
-        // Everything else (text, math, literals, etc.): skip
-        _ => {}
+        // Code blocks: emit { }, recurse
+        SyntaxKind::CodeBlock => {
+            result.push_str("{\n");
+            let mut child_offset = offset;
+            for child in node.children() {
+                collect_scope_nodes(child, source, frag_start, child_offset, result);
+                child_offset += child.len();
+            }
+            // Don't close if fragment is inside (closing handled by compute_closing_delimiters)
+            if frag_start >= node_end {
+                result.push_str("}\n");
+            }
+        }
+
+        // Content blocks: emit [ ], recurse
+        SyntaxKind::ContentBlock => {
+            result.push_str("[\n");
+            let mut child_offset = offset;
+            for child in node.children() {
+                collect_scope_nodes(child, source, frag_start, child_offset, result);
+                child_offset += child.len();
+            }
+            if frag_start >= node_end {
+                result.push_str("]\n");
+            }
+        }
+
+        // Hash (code entry): emit #
+        SyntaxKind::Hash => {
+            result.push('#');
+        }
+
+        // For ANY other node that contains the fragment (FuncCall, Args, etc.):
+        // Emit the source of children that are entirely before the fragment,
+        // and recurse into the child that contains the fragment.
+        // This preserves structural context like #list[...$frag$...].
+        _ => {
+            let mut child_offset = offset;
+            for child in node.children() {
+                let child_end = child_offset + child.len();
+                if child_end <= frag_start {
+                    // Child entirely before fragment: emit its source verbatim
+                    // (this includes function names, punctuation, args before the fragment)
+                    result.push_str(&source[child_offset..child_end]);
+                } else if child_offset < frag_start {
+                    // Child contains the fragment: recurse
+                    collect_scope_nodes(child, source, frag_start, child_offset, result);
+                }
+                // else: child at or after fragment, skip
+                child_offset = child_end;
+            }
+        }
     }
 }
 
@@ -654,5 +682,59 @@ mod tests {
         assert!(FragmentCompiler::compile_fragment_scoped(
             &mut world, "$a$", 0, 999, "#000000", None, None,
         ).is_err());
+    }
+
+    // --- Math inside function calls ---
+
+    #[test]
+    fn scoped_compile_math_in_list() {
+        let mut world = TipWorld::new();
+        let doc = "#list[$a + b$][$x^2$]";
+        let needle = "$a + b$";
+        let start = doc.find(needle).unwrap();
+        let end = start + needle.len();
+        let output = FragmentCompiler::compile_fragment_scoped(
+            &mut world, doc, start, end, "#000000", None, None,
+        ).expect("math in #list should compile");
+        assert!(output.svg.contains("<svg"));
+    }
+
+    #[test]
+    fn scoped_compile_math_in_nested_funcall() {
+        let mut world = TipWorld::new();
+        let doc = "#box[#text(red)[$alpha + beta$]]";
+        let needle = "$alpha + beta$";
+        let start = doc.find(needle).unwrap();
+        let end = start + needle.len();
+        let output = FragmentCompiler::compile_fragment_scoped(
+            &mut world, doc, start, end, "#000000", None, None,
+        ).expect("math in nested funcall should compile");
+        assert!(output.svg.contains("<svg"));
+    }
+
+    #[test]
+    fn scoped_compile_math_in_multiarg_list() {
+        let mut world = TipWorld::new();
+        let doc = "#list[\n  $lambda(mu, pi) = norm(pi(mu))_(\"op\")$ and\n][\n  $cal(L)(mu,pi) = -log lambda(mu,pi)$\n]";
+        let needle = "$cal(L)(mu,pi) = -log lambda(mu,pi)$";
+        let start = doc.find(needle).unwrap();
+        let end = start + needle.len();
+        let output = FragmentCompiler::compile_fragment_scoped(
+            &mut world, doc, start, end, "#000000", None, None,
+        ).expect("math in multi-arg list should compile");
+        assert!(output.svg.contains("<svg"));
+    }
+
+    #[test]
+    fn scoped_compile_math_in_enum() {
+        let mut world = TipWorld::new();
+        let doc = "#enum[first $a$][second $b$]";
+        let needle = "$b$";
+        let start = doc.find(needle).unwrap();
+        let end = start + needle.len();
+        let output = FragmentCompiler::compile_fragment_scoped(
+            &mut world, doc, start, end, "#000000", None, None,
+        ).expect("math in #enum should compile");
+        assert!(output.svg.contains("<svg"));
     }
 }

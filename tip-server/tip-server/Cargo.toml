@@ -1,8 +1,0 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/tip-core",
-    "crates/tip-protocol",
-    "crates/tip-server",
-    "testkit",
-]
