@@ -14,3 +14,20 @@ In list:
 ]
 
 After list: $bb + bb$
+
+#import "@preview/theorion:0.5.0": *
+#definition[
+  (quantification of "displacement")
+  Set
+  $
+    delta_(S)(v) = max_(s in S) frac(norm(pi(s)v-v), norm(v))
+  $
+  for $v in cal(H) without {0}$, set $delta_(mu)(v) = delta_(op("supp")(mu))(v)$.
+
+  Set
+  $
+    kappa(mu \; pi) = inf_(norm(v)=1) delta_(mu)(v).
+  $
+]
+
+
