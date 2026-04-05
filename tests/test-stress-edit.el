@@ -26,7 +26,7 @@
 
 (let ((base (file-name-directory load-file-name)))
   (setq tip-server-executable
-        (expand-file-name "../../tip-server/target/release/tip-server" base))
+        (expand-file-name "../tip-server/target/release/tip-server" base))
   (add-to-list 'load-path (expand-file-name ".." base))
   (load (expand-file-name "../tip.el" base)))
 
