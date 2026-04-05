@@ -247,9 +247,9 @@ Returns the path, or nil if Docker mode (handled separately)."
             (error
              (message "tip-server: %s" (error-message-string err))
              nil)))
-    (when tip--server-process
-      (tip-debug-msg "tip-server started (pid %d)"
-                     (process-id tip--server-process)))))
+    (if tip--server-process
+        (message "tip-server started (pid %d)" (process-id tip--server-process))
+      (message "tip-server failed to start"))))
 
 (defun tip--process-sentinel (proc event)
   "Handle tip-server process state changes."
