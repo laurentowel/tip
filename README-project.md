@@ -118,6 +118,7 @@ TIP works with files targeting [kodama](https://github.com/kokic/kodama)'s HTML 
 - [x] All import types (relative, @local, @preview)
 - [x] Math inside containers (#list, #box, #definition, #grid, etc.)
 - [x] Kodama compatibility
+- [ ] Live preview via eldoc (error display, idle refresh, clearing)
 - [ ] CeTZ diagram preview
 - [ ] Fletcher diagram preview
 - [ ] Baseline measurement refinement (font-metric-aware)
@@ -126,19 +127,22 @@ TIP works with files targeting [kodama](https://github.com/kokic/kodama)'s HTML 
 ## Project Layout
 
 ```
-tip-improve/
-├── tip/                    Emacs package
-│   ├── tip.el              Main package (MELPA-compliant)
-│   ├── preview-toggle.el   Generic overlay auto-toggle (reusable)
-│   └── tests/              Integration tests + sandbox
+tip-repo/
+├── tip.el                  Main package (MELPA-compliant)
+├── preview-toggle.el       Generic overlay auto-toggle (reusable)
+├── test-tip.el             ERT unit tests
+├── Makefile                Build entry point (make server, make docker)
+├── tests/                  Emacs integration tests + sandbox
 ├── tip-server/             Rust server
 │   ├── crates/
 │   │   ├── tip-protocol/   Messages + stdio transport
 │   │   ├── tip-core/       Typst World, compiler, scope extraction
 │   │   └── tip-server/     Binary entry point
-│   └── testkit/            Shared test utilities
-├── ref/                    Reference repos (typst, tinymist, kodama, etc.)
-└── legacy/                 Old Python-based implementation
+│   ├── testkit/            Shared test utilities
+│   └── Dockerfile          Docker build for tip-server
+├── CLAUDE.md               Developer guide (architecture, baseline deep-dive)
+├── DISTRIBUTION.md         Distribution plan (elpaca, MELPA, Docker)
+└── .ref/                   Reference repos (gitignored, for development)
 ```
 
 See [CLAUDE.md](CLAUDE.md) for full architecture, baseline alignment deep-dive, and development guide.
