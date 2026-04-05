@@ -1,0 +1,6 @@
+*.elc
+tests/emacs-sandbox/
+tests/*-results.txt
+tests/bench_*.typ
+tip-server/target/
+tip-server/test-output/
