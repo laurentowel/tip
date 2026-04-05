@@ -414,16 +414,32 @@ fn collect_scope_nodes(
             }
         }
 
-        // Content blocks: emit [ ], recurse
+        // Content blocks: check if they contain scope-defining nodes.
+        // If yes, emit [ ] to preserve scope. If no, just recurse transparently.
         SyntaxKind::ContentBlock => {
-            result.push_str("[\n");
-            let mut child_offset = offset;
-            for child in node.children() {
-                collect_scope_nodes(child, source, frag_start, child_offset, result);
-                child_offset += child.len();
-            }
-            if frag_start >= node_end {
-                result.push_str("]\n");
+            let has_scope_children = node.children().any(|child| {
+                matches!(child.kind(),
+                    SyntaxKind::LetBinding | SyntaxKind::SetRule |
+                    SyntaxKind::ShowRule | SyntaxKind::ModuleImport |
+                    SyntaxKind::ModuleInclude)
+            });
+            if has_scope_children {
+                result.push_str("[\n");
+                let mut child_offset = offset;
+                for child in node.children() {
+                    collect_scope_nodes(child, source, frag_start, child_offset, result);
+                    child_offset += child.len();
+                }
+                if frag_start >= node_end {
+                    result.push_str("]\n");
+                }
+            } else {
+                // No scope definitions — recurse transparently (no brackets)
+                let mut child_offset = offset;
+                for child in node.children() {
+                    collect_scope_nodes(child, source, frag_start, child_offset, result);
+                    child_offset += child.len();
+                }
             }
         }
 
@@ -463,7 +479,19 @@ fn compute_closing_delimiters(source: &str, frag_end: usize) -> String {
         if parent_end > frag_end {
             match parent.kind() {
                 SyntaxKind::CodeBlock => closers.push("}"),
-                SyntaxKind::ContentBlock => closers.push("]"),
+                SyntaxKind::ContentBlock => {
+                    // Only close content blocks that have scope-defining children
+                    // (matching the logic in collect_scope_nodes)
+                    let has_scope = parent.get().children().any(|child| {
+                        matches!(child.kind(),
+                            SyntaxKind::LetBinding | SyntaxKind::SetRule |
+                            SyntaxKind::ShowRule | SyntaxKind::ModuleImport |
+                            SyntaxKind::ModuleInclude)
+                    });
+                    if has_scope {
+                        closers.push("]");
+                    }
+                }
                 _ => {}
             }
         }
