@@ -1,6 +1,6 @@
 use typst::compile;
 use typst::layout::PagedDocument;
-use typst::syntax::{LinkedNode, SyntaxKind, Side};
+use typst::syntax::SyntaxKind;
 use typst_svg::svg;
 
 use crate::world::TipWorld;
@@ -298,7 +298,7 @@ fn build_scoped_source(
     preamble_override: Option<&str>,
 ) -> Result<String, String> {
     let root = typst::syntax::parse(document_source);
-    let skeleton = extract_scope_skeleton(&root, document_source, frag_start);
+    let (skeleton, closing) = extract_scope_skeleton(&root, document_source, frag_start);
     let content = &document_source[frag_start..frag_end];
     let is_inline = !is_display_math(content);
 
@@ -319,7 +319,6 @@ fn build_scoped_source(
     };
 
     let fragment = &document_source[frag_start..frag_end];
-    let closing = compute_closing_delimiters(document_source, frag_end);
 
     // bounded() is always included to prevent clipping.
     // Client preamble (colors, etc.) is additional.
@@ -327,22 +326,27 @@ fn build_scoped_source(
 
     // page_setup goes AFTER skeleton so it overrides any page settings
     // from show rules (e.g. kodama sets paper: "iso-b6", margin: 2em)
-    Ok(format!(
-        "{DEFAULT_RENDERING_PREAMBLE}{client_preamble}\n{skeleton}{page_setup}{fragment}{closing}\n"
-    ))
+    let source = format!(
+        "{DEFAULT_RENDERING_PREAMBLE}\n{client_preamble}\n{skeleton}\n{page_setup}\n{fragment}\n{closing}\n"
+    );
+    Ok(source)
 }
 
 /// Extract a "scope skeleton" from the document — only the statements that
 /// define scope (let, import, set, show) and the block structure around them,
 /// up to the target fragment position. All other content is discarded.
+///
+/// Returns (skeleton, closers) where closers are the delimiters needed to
+/// close blocks that the skeleton opened but the fragment sits inside.
 fn extract_scope_skeleton(
     root: &typst::syntax::SyntaxNode,
     source: &str,
     frag_start: usize,
-) -> String {
+) -> (String, String) {
     let mut result = String::new();
-    collect_scope_nodes(root, source, frag_start, 0, &mut result);
-    result
+    let mut closers: Vec<&str> = Vec::new();
+    collect_scope_nodes(root, source, frag_start, 0, &mut result, &mut closers);
+    (result, closers.into_iter().rev().collect::<Vec<_>>().join(""))
 }
 
 /// Recursively collect scope-defining nodes and structural ancestors
@@ -358,6 +362,7 @@ fn collect_scope_nodes(
     frag_start: usize,
     offset: usize,
     result: &mut String,
+    closers: &mut Vec<&str>,
 ) {
     let node_end = offset + node.len();
 
@@ -384,8 +389,6 @@ fn collect_scope_nodes(
                 result.push_str(&source[start..node_end]);
                 result.push('\n');
             }
-            // DON'T emit bare # — it was only needed for scope-defining statements,
-            // and those now include the # themselves via the offset-1 check above.
             _ => {}
         }
         return;
@@ -398,27 +401,23 @@ fn collect_scope_nodes(
         | SyntaxKind::Code => {
             let mut child_offset = offset;
             for child in node.children() {
-                collect_scope_nodes(child, source, frag_start, child_offset, result);
+                collect_scope_nodes(child, source, frag_start, child_offset, result, closers);
                 child_offset += child.len();
             }
         }
 
-        // Code blocks: emit { }, recurse
+        // Code blocks: emit {, track closer
         SyntaxKind::CodeBlock => {
             result.push_str("{\n");
+            closers.push("}");
             let mut child_offset = offset;
             for child in node.children() {
-                collect_scope_nodes(child, source, frag_start, child_offset, result);
+                collect_scope_nodes(child, source, frag_start, child_offset, result, closers);
                 child_offset += child.len();
-            }
-            // Don't close if fragment is inside (closing handled by compute_closing_delimiters)
-            if frag_start >= node_end {
-                result.push_str("}\n");
             }
         }
 
-        // Content blocks: check if they contain scope-defining nodes.
-        // If yes, emit [ ] to preserve scope. If no, just recurse transparently.
+        // Content blocks: only emit [ if they contain scope-defining children
         SyntaxKind::ContentBlock => {
             let has_scope_children = node.children().any(|child| {
                 matches!(child.kind(),
@@ -428,36 +427,22 @@ fn collect_scope_nodes(
             });
             if has_scope_children {
                 result.push_str("[\n");
-                let mut child_offset = offset;
-                for child in node.children() {
-                    collect_scope_nodes(child, source, frag_start, child_offset, result);
-                    child_offset += child.len();
-                }
-                if frag_start >= node_end {
-                    result.push_str("]\n");
-                }
-            } else {
-                // No scope definitions — recurse transparently (no brackets)
-                let mut child_offset = offset;
-                for child in node.children() {
-                    collect_scope_nodes(child, source, frag_start, child_offset, result);
-                    child_offset += child.len();
-                }
+                closers.push("]");
+            }
+            let mut child_offset = offset;
+            for child in node.children() {
+                collect_scope_nodes(child, source, frag_start, child_offset, result, closers);
+                child_offset += child.len();
             }
         }
 
-        // For ANY other node that contains the fragment (FuncCall, Args, Hash, etc.):
-        // DON'T emit the node's own syntax (no function names, no bullets).
-        // Just recurse into the child that contains the fragment.
-        // This strips layout containers (#list, #box, #definition, etc.)
-        // while preserving structural blocks (ContentBlock, CodeBlock).
+        // Any other container (FuncCall, Args, etc.): strip it, recurse transparently
         _ => {
             let mut child_offset = offset;
             for child in node.children() {
                 let child_end = child_offset + child.len();
                 if child_offset < frag_start && child_end > frag_start {
-                    // Child contains the fragment: recurse
-                    collect_scope_nodes(child, source, frag_start, child_offset, result);
+                    collect_scope_nodes(child, source, frag_start, child_offset, result, closers);
                 }
                 child_offset = child_end;
             }
@@ -466,43 +451,6 @@ fn collect_scope_nodes(
 }
 
 /// Append closing delimiters for any blocks that contain the fragment.
-fn compute_closing_delimiters(source: &str, frag_end: usize) -> String {
-    let root = typst::syntax::parse(source);
-    let linked = LinkedNode::new(&root);
-
-    let leaf = match linked.leaf_at(frag_end.saturating_sub(1), Side::Before) {
-        Some(l) => l,
-        None => return String::new(),
-    };
-
-    let mut closers = Vec::new();
-    let mut current = leaf;
-    while let Some(parent) = current.parent() {
-        let parent_end = parent.offset() + parent.get().len();
-        if parent_end > frag_end {
-            match parent.kind() {
-                SyntaxKind::CodeBlock => closers.push("}"),
-                SyntaxKind::ContentBlock => {
-                    // Only close content blocks that have scope-defining children
-                    // (matching the logic in collect_scope_nodes)
-                    let has_scope = parent.get().children().any(|child| {
-                        matches!(child.kind(),
-                            SyntaxKind::LetBinding | SyntaxKind::SetRule |
-                            SyntaxKind::ShowRule | SyntaxKind::ModuleImport |
-                            SyntaxKind::ModuleInclude)
-                    });
-                    if has_scope {
-                        closers.push("]");
-                    }
-                }
-                _ => {}
-            }
-        }
-        current = parent.clone();
-    }
-
-    closers.join("")
-}
 
 /// Build a Typst source document for a standalone fragment (no scope context).
 fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
@@ -612,7 +560,7 @@ mod tests {
         let doc = "#let x = 1\nSome text $x$";
         let root = typst::syntax::parse(doc);
         let frag_start = doc.find("$x$").unwrap();
-        let skel = extract_scope_skeleton(&root, doc, frag_start);
+        let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("let x = 1"), "skeleton: {skel}");
     }
 
@@ -621,7 +569,7 @@ mod tests {
         let doc = "#set text(fill: blue)\nText $a$";
         let root = typst::syntax::parse(doc);
         let frag_start = doc.find("$a$").unwrap();
-        let skel = extract_scope_skeleton(&root, doc, frag_start);
+        let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("set text(fill: blue)"), "skeleton: {skel}");
     }
 
@@ -630,7 +578,7 @@ mod tests {
         let doc = "#show math.equation: set text(fill: red)\n$a$";
         let root = typst::syntax::parse(doc);
         let frag_start = doc.find("$a$").unwrap();
-        let skel = extract_scope_skeleton(&root, doc, frag_start);
+        let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("show math.equation"), "skeleton: {skel}");
     }
 
@@ -639,7 +587,7 @@ mod tests {
         let doc = "#let x = 1\nHello world some text here\n$x$";
         let root = typst::syntax::parse(doc);
         let frag_start = doc.find("$x$").unwrap();
-        let skel = extract_scope_skeleton(&root, doc, frag_start);
+        let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("let x = 1"));
         assert!(!skel.contains("Hello world"), "should not contain text: {skel}");
     }
@@ -649,7 +597,7 @@ mod tests {
         let doc = "#{\n  let x = 1\n  $x$\n}";
         let root = typst::syntax::parse(doc);
         let frag_start = doc.find("$x$").unwrap();
-        let skel = extract_scope_skeleton(&root, doc, frag_start);
+        let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("let x = 1"), "skeleton: {skel}");
         assert!(skel.contains("{"), "should have block opener: {skel}");
     }
