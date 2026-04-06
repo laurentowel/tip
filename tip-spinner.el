@@ -2,26 +2,25 @@
 
 ;;; Commentary:
 ;; Shows a Typst "t" logo in the mode line of typst-ts-mode buffers.
-;; Spins when tip-server responds, velocity reflects fragment count.
-;; Uses tip-server-response-functions hook — no polling, no advice.
-;;
-;; Animation: nyan-mode style — a single run-at-time timer advances
-;; the frame and calls force-mode-line-update.  The :eval lighter
-;; picks up the new frame on redisplay.
+;; Teal (#239dad) when OK, vermillion (#cc3300) when errors exist.
+;; Spins on server response, duration proportional to fragment count.
 ;;
 ;; Usage: (add-hook 'typst-ts-mode-hook #'tip-spinner-mode)
 
 ;;; Code:
 
 (defvar tip-spinner--frames nil
-  "Vector of SVG strings for spinner animation frames.")
+  "Vector of SVG strings for normal (teal) spinner frames.")
+
+(defvar tip-spinner--error-frames nil
+  "Vector of SVG strings for error (vermillion) spinner frames.")
 
 (defvar tip-spinner--directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory where tip-spinner.el lives, captured at load time.")
 
 (defvar tip-spinner--index 0
-  "Current animation frame index (global, shared across buffers).")
+  "Current animation frame index.")
 
 (defvar tip-spinner--timer nil
   "Animation timer.  Nil when not spinning.")
@@ -29,26 +28,40 @@
 (defvar tip-spinner--remaining 0
   "Animation frames remaining before stopping.")
 
+(defvar-local tip-spinner--has-errors nil
+  "Buffer-local: non-nil if the last compilation had errors.")
+
+(defun tip-spinner--load-svg-files (pattern)
+  "Load SVG files matching PATTERN from the spinner/ directory."
+  (let* ((dir (expand-file-name "spinner" tip-spinner--directory))
+         (files (and (file-directory-p dir)
+                     (sort (directory-files dir t pattern) #'string<))))
+    (when files
+      (vconcat (mapcar (lambda (f)
+                         (with-temp-buffer
+                           (insert-file-contents f)
+                           (buffer-string)))
+                       files)))))
+
 (defun tip-spinner--load-frames ()
-  "Load spinner SVG frames from the spinner/ directory."
+  "Load both normal and error spinner frames."
   (unless tip-spinner--frames
-    (let* ((dir (expand-file-name "spinner" tip-spinner--directory))
-           (files (and (file-directory-p dir)
-                       (sort (directory-files dir t "^spinner-[0-9]+\\.svg$")
-                             #'string<))))
-      (when files
-        (setq tip-spinner--frames
-              (vconcat (mapcar (lambda (f)
-                                 (with-temp-buffer
-                                   (insert-file-contents f)
-                                   (buffer-string)))
-                               files))))))
+    (setq tip-spinner--frames
+          (tip-spinner--load-svg-files "^spinner-[0-9]+\\.svg$")))
+  (unless tip-spinner--error-frames
+    (setq tip-spinner--error-frames
+          (tip-spinner--load-svg-files "^error-[0-9]+\\.svg$")))
   tip-spinner--frames)
 
+(defun tip-spinner--current-frames ()
+  "Return the active frame set based on buffer error state."
+  (if tip-spinner--has-errors
+      (or tip-spinner--error-frames tip-spinner--frames)
+    tip-spinner--frames))
+
 (defun tip-spinner--image ()
-  "Return the current frame as a propertized string for mode-line.
-Only shows in typst-ts-mode buffers."
-  (let ((frames (tip-spinner--load-frames)))
+  "Return the current frame as a propertized string for mode-line."
+  (let ((frames (tip-spinner--current-frames)))
     (when frames
       (propertize " "
                   'display
@@ -66,7 +79,6 @@ Only shows in typst-ts-mode buffers."
         (cl-decf tip-spinner--remaining)
         (cl-incf tip-spinner--index)
         (force-mode-line-update t))
-    ;; Done — cancel timer, reset to frame 0
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
@@ -74,24 +86,26 @@ Only shows in typst-ts-mode buffers."
     (force-mode-line-update t)))
 
 (defun tip-spinner--on-response (result)
-  "Hook: spin based on how many fragments were in the response."
+  "Hook: spin on response, track errors per-buffer."
   (let* ((frags (alist-get 'fragments result))
          (n (if (vectorp frags) (length frags) 1))
-         ;; More fragments = more spin.  At least 1 full rotation (8 frames).
+         (has-err (and (vectorp frags)
+                       (seq-some (lambda (f) (alist-get 'error f)) frags)))
          (frames (max 8 (* n 2))))
-    ;; Cancel any existing animation, start fresh
+    ;; Update error state for the current buffer
+    (setq tip-spinner--has-errors has-err)
+    ;; Cancel previous, start fresh
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
     (setq tip-spinner--remaining frames)
-    ;; Fixed interval, more fragments = more frames (longer spin, same speed)
     (setq tip-spinner--timer
           (run-at-time 0 0.1 #'tip-spinner--tick))))
 
 ;;;###autoload
 (define-minor-mode tip-spinner-mode
   "Show a Typst logo in the mode line of typst-ts-mode buffers.
-Spins when tip-server responds.  Speed reflects fragment count."
+Teal when OK, vermillion when errors exist.  Spins on server response."
   :init-value nil
   :lighter (:eval (when (derived-mode-p 'typst-ts-mode)
                     (tip-spinner--image)))
@@ -104,11 +118,12 @@ Spins when tip-server responds.  Speed reflects fragment count."
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
     (setq tip-spinner--index 0)
+    (setq tip-spinner--has-errors nil)
     (force-mode-line-update t)))
 
 ;;;###autoload
 (defun tip-spinner-demo ()
-  "Spin the logo for a few seconds (simulates a 50-fragment response)."
+  "Spin the logo (simulates a 50-fragment response)."
   (interactive)
   (unless tip-spinner-mode (tip-spinner-mode 1))
   (tip-spinner--on-response '((fragments . [1 2 3 4 5 6 7 8 9 10
@@ -116,6 +131,14 @@ Spins when tip-server responds.  Speed reflects fragment count."
                                             21 22 23 24 25 26 27 28 29 30
                                             31 32 33 34 35 36 37 38 39 40
                                             41 42 43 44 45 46 47 48 49 50]))))
+
+;;;###autoload
+(defun tip-spinner-demo-error ()
+  "Spin the angry logo (simulates a response with errors)."
+  (interactive)
+  (unless tip-spinner-mode (tip-spinner-mode 1))
+  (tip-spinner--on-response
+   '((fragments . [((error . "unknown variable: foo"))]))))
 
 (provide 'tip-spinner)
 
