@@ -99,6 +99,21 @@ Adjust the number and re-evaluate until baselines align."
 (defvar tip--pending-callbacks (make-hash-table :test 'eql)
   "Maps request ID to callback function.")
 
+;;; * mode-line progress indicator
+
+(defvar-local tip--progress nil
+  "When non-nil, a string like \" [TIP: 50 frags...]\" shown in mode-line.")
+
+(defun tip--progress-set (n)
+  "Show that N fragments are being compiled."
+  (setq tip--progress (format " [TIP: %d frags...]" n))
+  (force-mode-line-update))
+
+(defun tip--progress-clear ()
+  "Clear the compilation progress indicator."
+  (setq tip--progress nil)
+  (force-mode-line-update))
+
 (defun tip--next-id ()
   "Return next request ID."
   (cl-incf tip--request-id))
@@ -430,22 +445,29 @@ This preamble adds color sync and font size matching."
    (if (use-region-p)
        (list (region-beginning) (region-end))
      (error "No region selected")))
-  (let ((buf (current-buffer))
-        (fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (preamble (tip--build-preamble)))
-    ;; Sync buffer content first
-    (tip--sync-buffer)
-    ;; Then request compilation of fragments
-    (tip--send-request
-     "compile_fragments"
-     `(("uri" . ,(buffer-file-name))
-       ("fragments" . ,(vconcat (tip-collect-fragment-locations beg end avoid-pos)))
-       ("color" . ,fg)
-       ("preamble" . ,preamble))
-     (lambda (result)
-       (with-current-buffer buf
-         (tip--apply-fragment-results
-          (alist-get 'fragments result)))))))
+  (let* ((buf (current-buffer))
+         (fg (tip--color-to-hex (face-attribute 'default :foreground)))
+         (preamble (tip--build-preamble))
+         (frag-locs (tip-collect-fragment-locations beg end avoid-pos))
+         (n (length frag-locs)))
+    (when (> n 0)
+      ;; Sync buffer content first
+      (tip--sync-buffer)
+      ;; Show progress for large batches
+      (when (> n 5)
+        (tip--progress-set n))
+      ;; Request compilation
+      (tip--send-request
+       "compile_fragments"
+       `(("uri" . ,(buffer-file-name))
+         ("fragments" . ,(vconcat frag-locs))
+         ("color" . ,fg)
+         ("preamble" . ,preamble))
+       (lambda (result)
+         (with-current-buffer buf
+           (tip--progress-clear)
+           (tip--apply-fragment-results
+            (alist-get 'fragments result))))))))
 
 (defun tip--apply-fragment-results (fragment-results)
   "Apply compiled SVG results as overlays.
@@ -743,7 +765,7 @@ Replaces colors in cached SVGs instantly — no server round-trip."
   "A minor mode for inline preview of Typst math.
 Automatically renders visible fragments and enables live preview."
   :init-value nil
-  :lighter " TIP"
+  :lighter (" TIP" tip--progress)
   :global nil
   (if tip-mode
       (progn
