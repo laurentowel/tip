@@ -94,8 +94,8 @@
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
-    ;; Always spin exactly 2 full rotations (16 frames)
-    (setq tip-spinner--remaining 16)
+    ;; One full rotation (8 frames)
+    (setq tip-spinner--remaining 8)
     (setq tip-spinner--timer
           (run-at-time 0 0.1 #'tip-spinner--tick))))
 
@@ -129,10 +129,11 @@ Teal when OK, vermillion when errors exist.  Spins on server response."
 
 ;;;###autoload
 (defun tip-spinner-demo ()
-  "Spin the logo (simulates a 50-fragment response)."
+  "Spin the logo for 3 seconds then disable."
   (interactive)
   (unless tip-spinner-mode (tip-spinner-mode 1))
-  (tip-spinner--on-response '((fragments . [((svg . "ok"))]))))
+  (tip-spinner--on-response '((fragments . [((svg . "ok"))])))
+  (run-with-timer 3 nil (lambda () (when tip-spinner-mode (tip-spinner-mode -1)))))
 
 ;;;###autoload
 (defun tip-spinner-demo-error ()
