@@ -29,7 +29,7 @@
 (setq tip-enable-debug nil)
 
 (defvar test--log-file
-  (expand-file-name "test-edit-cycle-results.txt"
+  (expand-file-name "10-edit-cycle-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 (defvar test--errors 0)

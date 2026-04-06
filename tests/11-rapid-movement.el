@@ -28,7 +28,7 @@
 (setq tip-enable-debug nil)
 
 (defvar test--log-file
-  (expand-file-name "test-rapid-results.txt"
+  (expand-file-name "11-rapid-movement-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 (defvar test--errors 0)

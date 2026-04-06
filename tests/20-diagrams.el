@@ -145,7 +145,7 @@
 
 ;; Write results
 (let ((results-file (expand-file-name
-                     "test-diagrams-results.txt"
+                     "20-diagrams-results.txt"
                      (file-name-directory (or load-file-name ".")))))
   (with-temp-file results-file
     (dolist (line (nreverse test--results))

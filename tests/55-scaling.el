@@ -8,7 +8,7 @@
 (setq create-lockfiles nil make-backup-files nil auto-save-default nil)
 
 (defvar test--log-file
-  (expand-file-name "test-scaling-results.txt"
+  (expand-file-name "55-scaling-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 

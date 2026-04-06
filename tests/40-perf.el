@@ -4,7 +4,7 @@
 ;; Run with (non-batch, needs display for real rendering):
 ;;   emacs -Q --init-directory /workspace/tip-improve/tip-server/test-output/emacs-sandbox -l /workspace/tip-improve/tip-server/test-output/perf-test.el
 ;;
-;; Results logged to perf-results.txt in the same directory.
+;; Results logged to 40-perf-results.txt in the same directory.
 ;; Emacs exits automatically when done.
 
 ;;; Code:
@@ -36,7 +36,7 @@
 
 ;; Log file
 (defvar perf--log-file
-  (expand-file-name "perf-results.txt" (file-name-directory load-file-name)))
+  (expand-file-name "40-perf-results.txt" (file-name-directory load-file-name)))
 
 (defvar perf--log-lines nil)
 

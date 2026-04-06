@@ -28,7 +28,7 @@
 (setq tip-enable-debug nil)
 
 (defvar test--log-file
-  (expand-file-name "test-childframe-results.txt"
+  (expand-file-name "04-childframe-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 (defvar test--errors 0)

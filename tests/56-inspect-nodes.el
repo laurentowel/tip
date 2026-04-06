@@ -26,7 +26,7 @@
 
 (let* ((root (treesit-buffer-root-node 'typst))
        (calls (nreverse (walk-tree root nil))))
-  (with-temp-file (expand-file-name "inspect-nodes-results.txt"
+  (with-temp-file (expand-file-name "56-inspect-nodes-results.txt"
                                     (file-name-directory load-file-name))
     (insert (format "Found %d call nodes:\n" (length calls)))
     (dolist (c calls)

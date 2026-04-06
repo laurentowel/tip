@@ -22,7 +22,7 @@
 (setq tip-enable-debug t)
 
 (defvar test--log-file
-  (expand-file-name "test-c-b-results.txt" (file-name-directory load-file-name)))
+  (expand-file-name "01-cursor-into-overlay-results.txt" (file-name-directory load-file-name)))
 (defvar test--lines nil)
 
 (defun test--log (fmt &rest args)

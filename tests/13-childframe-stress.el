@@ -25,7 +25,7 @@
 (setq tip-childframe-position 'at-point)
 
 (defvar test--log-file
-  (expand-file-name "test-childframe-stress-results.txt"
+  (expand-file-name "13-childframe-stress-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 (defvar test--errors 0)

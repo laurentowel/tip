@@ -24,7 +24,7 @@
 (setq tip-enable-debug nil)
 
 (defvar test--log-file
-  (expand-file-name "test-bugs-results.txt"
+  (expand-file-name "03-bugs-results.txt"
                     (file-name-directory load-file-name)))
 (defvar test--lines nil)
 (defvar test--errors 0)
