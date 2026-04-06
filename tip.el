@@ -440,12 +440,15 @@ height_pt, and depth_pt keys."
   (seq-doseq (frag fragment-results)
     (let* ((byte-start (alist-get 'start frag))
            (byte-end (alist-get 'end frag))
-           ;; Convert byte offsets back to Emacs positions
            (frag-beg (byte-to-position (1+ byte-start)))
            (frag-end (byte-to-position (1+ byte-end)))
            (svg-data (alist-get 'svg frag))
            (height-pt (alist-get 'height_pt frag))
-           (depth-pt (alist-get 'depth_pt frag)))
+           (depth-pt (alist-get 'depth_pt frag))
+           (err (alist-get 'error frag)))
+      ;; Always show errors in echo area
+      (when err
+        (message "TIP [%d..%d]: %s" byte-start byte-end err))
       (when (and frag-beg frag-end (> (length svg-data) 0))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
@@ -567,21 +570,21 @@ Errors are shown both in the childframe and echoed to the message area."
   (let* ((err (alist-get 'error result))
          (frags (alist-get 'fragments result))
          (frag (and frags (> (length frags) 0) (aref frags 0)))
+         (frag-err (and frag (alist-get 'error frag)))
          (svg (and frag (alist-get 'svg frag)))
          (h (and frag (alist-get 'height_pt frag))))
     (cond
-     ;; Explicit error response
+     ;; Explicit error on the response
      (err
       (tip-childframe-show-text err 'error)
       (message "TIP: %s" err))
+     ;; Per-fragment error from the server
+     (frag-err
+      (tip-childframe-show-text frag-err 'error)
+      (message "TIP: %s" frag-err))
      ;; Fragment with valid SVG
      ((and svg (> (length svg) 0) h (> h 0))
       (tip-childframe-show svg))
-     ;; Fragment compiled but produced empty SVG — likely a compilation error
-     ;; that the server caught and returned as empty result
-     ((and frag (or (null svg) (equal svg "")))
-      (tip-childframe-show-text "Compilation produced no output" 'warning)
-      (message "TIP: compilation produced no output"))
      (t (tip-childframe-hide)))))
 
 (defun tip-live--compile-partial ()

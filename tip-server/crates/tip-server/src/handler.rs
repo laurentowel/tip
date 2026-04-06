@@ -63,6 +63,7 @@ impl Handler {
                     svg: String::new(),
                     height_pt: 0.0,
                     depth_pt: 0.0,
+                    error: Some("invalid fragment range".into()),
                 });
                 continue;
             }
@@ -83,16 +84,17 @@ impl Handler {
                         svg: output.svg,
                         height_pt: output.height_pt,
                         depth_pt: output.depth_pt,
+                        error: None,
                     });
                 }
                 Err(err) => {
-                    eprintln!("compile error for fragment {}..{}: {}", frag_loc.start, frag_loc.end, err);
                     results.push(FragmentResult {
                         start: frag_loc.start,
                         end: frag_loc.end,
                         svg: String::new(),
                         height_pt: 0.0,
                         depth_pt: 0.0,
+                        error: Some(err),
                     });
                 }
             }
@@ -127,6 +129,7 @@ impl Handler {
                     svg: output.svg,
                     height_pt: output.height_pt,
                     depth_pt: output.depth_pt,
+                    error: None,
                 },
             },
             Err(err) => ResponseResult::Error { error: err },

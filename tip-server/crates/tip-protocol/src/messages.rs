@@ -15,6 +15,9 @@ pub struct FragmentResult {
     pub svg: String,
     pub height_pt: f64,
     pub depth_pt: f64,
+    /// Compilation error message, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // --- Requests ---
@@ -158,6 +161,7 @@ mod tests {
                     svg: "<svg></svg>".into(),
                     height_pt: 12.5,
                     depth_pt: 2.3,
+                    error: None,
                 }],
             },
         };
