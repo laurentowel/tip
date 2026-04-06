@@ -53,6 +53,13 @@ Set to nil to disable the indicator."
   :type '(choice string (const nil))
   :group 'tip)
 
+(defcustom tip-diagram-functions
+  '("cetz.canvas" "canvas" "diagram" "comm-diag" "fletcher.diagram")
+  "List of function names recognized as diagram calls for preview.
+These are previewed as block elements (centered, no baseline alignment)."
+  :type '(repeat string)
+  :group 'tip)
+
 (defcustom tip-scale 1.0
   "Scaling factor for inline preview images.
 At 1.0, math is sized to match the buffer's text size.
@@ -306,13 +313,21 @@ CALLBACK is called with the result alist when response arrives."
 
 ;;; * fragment collection
 
+(defun tip--diagram-node-p (node)
+  "Return non-nil if NODE is a function call matching `tip-diagram-functions'."
+  (when (and node (string-match-p "call" (symbol-name (treesit-node-type node))))
+    (let* ((callee (treesit-node-child-by-field-name node "callee"))
+           (name (and callee (treesit-node-text callee t))))
+      (and name (member name tip-diagram-functions)))))
+
 (defun tip-collect-fragment-locations (beg end &optional avoid-pos)
-  "Collect math fragment byte positions in region BEG..END.
+  "Collect math and diagram fragment byte positions in region BEG..END.
 Returns a list of alists with start/end keys.
 Skips fragment containing AVOID-POS if given.
-Filters out nested math — only keeps outermost fragments."
+Filters out nested math — only keeps outermost fragments.
+Diagrams (matching `tip-diagram-functions') are included as fragments."
   (let (ranges fragments)
-    ;; Collect candidate ranges
+    ;; Collect math ranges
     (dolist (pair (treesit-query-range 'typst "((math) @math)"))
       (when (and
              (>= (car pair) beg)
@@ -321,6 +336,12 @@ Filters out nested math — only keeps outermost fragments."
                  (not (and (>= avoid-pos (car pair))
                            (<= avoid-pos (cdr pair))))))
         (push pair ranges)))
+    ;; Collect diagram ranges by walking the tree
+    (when tip-diagram-functions
+      (let ((root (treesit-buffer-root-node 'typst)))
+        (when root
+          (setq ranges (nconc ranges
+                              (tip--collect-diagram-ranges root beg end avoid-pos))))))
     ;; Filter out nested: skip any range contained within another
     (setq ranges (nreverse ranges))
     (let (outer)
@@ -337,6 +358,25 @@ Filters out nested math — only keeps outermost fragments."
                 ("end" . ,(1- (position-bytes (cdr pair)))))
               fragments)))
     (nreverse fragments)))
+
+(defun tip--collect-diagram-ranges (node beg end avoid-pos)
+  "Recursively find diagram function calls under NODE.
+Returns a list of (BEG . END) ranges."
+  (let ((node-start (treesit-node-start node))
+        (node-end (treesit-node-end node))
+        (result nil))
+    (when (and (<= node-start end) (>= node-end beg))
+      (if (tip--diagram-node-p node)
+          (let ((start (max beg (1- node-start)))
+                (dend (min end node-end)))
+            (when (or (null avoid-pos)
+                      (not (and (>= avoid-pos start) (<= avoid-pos dend))))
+              (push (cons start dend) result)))
+        (dotimes (i (treesit-node-child-count node))
+          (setq result (nconc result
+                              (tip--collect-diagram-ranges
+                               (treesit-node-child node i) beg end avoid-pos))))))
+    result))
 
 ;;; * preamble (theme sync)
 
@@ -414,13 +454,17 @@ height_pt, and depth_pt keys."
             (delete-overlay ov)))
         ;; Detect single-line display math for indicator
         (let* ((frag-text (buffer-substring-no-properties frag-beg frag-end))
+               (is-diagram (eq (aref frag-text 0) ?#))
                (is-single-line-display
-                (and (>= (length frag-text) 3)
+                (and (not is-diagram)
+                     (>= (length frag-text) 3)
                      (eq (aref frag-text 0) ?$)
                      (memq (aref frag-text 1) '(?\s ?\t))
                      (not (string-match-p "\n" (substring frag-text 1 -1)))))
-               (is-display (or is-single-line-display
-                              (string-match-p "\n" (substring frag-text 1 -1))))
+               (is-display (or is-diagram
+                              is-single-line-display
+                              (and (not is-diagram)
+                                   (string-match-p "\n" (substring frag-text 1 -1)))))
                (img-spec (tip--make-image-spec svg-data height-pt depth-pt is-display))
                (display img-spec)
                (ov (make-overlay frag-beg frag-end)))
@@ -494,15 +538,21 @@ Otherwise use baseline alignment for inline math."
 ;;; * fragment detection
 
 (defun tip--get-bounds-of-math-at-point (x)
-  "Return (BEG . END) of math fragment at position X, or nil."
-  (let* ((ranges (treesit-query-range 'typst "((math) @math)"))
-         (valid-ranges
-          (cl-remove-if-not
-           (lambda (range)
-             (and (<= (car range) x) (< x (cdr range))))
-           ranges)))
-    (when valid-ranges
-      (car (sort valid-ranges :lessp #'< :key #'car)))))
+  "Return (BEG . END) of math or diagram fragment at position X, or nil."
+  (or
+   ;; Check math ranges
+   (let* ((ranges (treesit-query-range 'typst "((math) @math)"))
+          (valid (cl-remove-if-not
+                  (lambda (r) (and (<= (car r) x) (< x (cdr r))))
+                  ranges)))
+     (when valid (car (sort valid :lessp #'< :key #'car))))
+   ;; Check diagram ranges (walk tree upward from point)
+   (let ((node (treesit-node-at x 'typst)))
+     (while (and node (not (tip--diagram-node-p node)))
+       (setq node (treesit-node-parent node)))
+     (when node
+       (cons (1- (treesit-node-start node)) ;; include #
+             (treesit-node-end node))))))
 
 ;;; * live preview with eldoc
 

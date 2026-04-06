@@ -75,8 +75,9 @@ impl FragmentCompiler {
         }
 
         let content = &document_source[frag_start..frag_end];
-        let is_multiline = is_multiline_math(content);
-        let is_inline = !is_display_math(content);
+        let is_math = content.starts_with('$');
+        let is_multiline = is_math && is_multiline_math(content);
+        let is_inline = is_math && !is_display_math(content);
 
         let source = build_scoped_source(document_source, frag_start, frag_end, color, is_multiline, page_setup, preamble)?;
         compile_source(world, &source, is_inline)
