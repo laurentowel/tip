@@ -734,6 +734,7 @@ Automatically renders visible fragments and enables live preview."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'tip-edit-commit)
     (define-key map (kbd "C-c C-k") #'tip-edit-abort)
+    (define-key map (kbd "C-c '") #'tip-edit-commit)
     map)
   "Keymap for `tip-edit-mode'.")
 
