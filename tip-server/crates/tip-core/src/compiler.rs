@@ -306,15 +306,15 @@ fn build_scoped_source(
         Some(custom) => format!("{custom}\n"),
         None if is_multiline => {
             // Multi-line display: wide page
-            "#set text(size: 11pt)\n#set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm), header: none, footer: none)\n".into()
+            "#show math.equation: set text(size: 11pt)\n#set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm), header: none, footer: none)\n".into()
         }
         None if is_inline => {
             // Inline: generous margins for baseline crop hack
-            "#set text(size: 11pt)\n#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n".into()
+            "#show math.equation: set text(size: 11pt)\n#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n".into()
         }
         None => {
             // Single-line display: auto width, normal margins
-            "#set text(size: 11pt)\n#set page(height: auto, width: auto, margin: 0.2cm, fill: none, header: none, footer: none)\n".into()
+            "#show math.equation: set text(size: 11pt)\n#set page(height: auto, width: auto, margin: 0.2cm, fill: none, header: none, footer: none)\n".into()
         }
     };
 
