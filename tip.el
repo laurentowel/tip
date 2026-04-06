@@ -977,12 +977,18 @@ Called from `after-change-functions'."
              (if tip-use-docker
                  (format "docker:%s" tip-docker-image)
                (if exe
-                   (format "%s (%s)"
-                           (abbreviate-file-name exe)
-                           (format-time-string
-                            "%Y-%m-%d %H:%M"
-                            (file-attribute-modification-time
-                             (file-attributes exe))))
+                   (let* ((mtime (file-attribute-modification-time
+                                  (file-attributes exe)))
+                          (ago (- (float-time) (float-time mtime)))
+                          (ago-str (cond
+                                    ((< ago 60) (format "%ds ago" (round ago)))
+                                    ((< ago 3600) (format "%dm ago" (round (/ ago 60))))
+                                    ((< ago 86400) (format "%dh ago" (round (/ ago 3600))))
+                                    (t (format "%dd ago" (round (/ ago 86400)))))))
+                     (format "%s (built %s, %s)"
+                             (abbreviate-file-name exe)
+                             (format-time-string "%Y-%m-%d %H:%M" mtime)
+                             ago-str))
                  "not found"))
              (if (and alive tip--request-id)
                  (format "%d requests sent" tip--request-id)
