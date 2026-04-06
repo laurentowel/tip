@@ -88,21 +88,38 @@ Used in corner mode to keep childframe away from frame borders."
 
 ;;; * positioning
 
-(defun tip-childframe--at-point-position (width height)
-  "Compute (X . Y) position below the cursor.
-Falls back to above cursor if no room below."
-  (let* ((pos (window-absolute-pixel-position))
+(defun tip-childframe--point-position ()
+  "Return (X . Y) pixel position of point relative to the native frame.
+Uses the same technique as eldoc-box for accurate positioning."
+  (let* ((pos (pos-visible-in-window-p (point) nil t))
          (x (or (car pos) 0))
-         (y (or (cdr pos) 0))
+         (y (or (cadr pos) 0))
+         (edges (window-edges nil nil nil t))
+         (en (frame-char-width)))
+    (cons (+ x (car edges) en)
+          (+ y (cadr edges)))))
+
+(defun tip-childframe--at-point-position (width height)
+  "Compute (X . Y) to place childframe at bottom-right of cursor.
+The upper-left of the childframe anchors to the bottom-right of the cursor.
+Clamps to keep the childframe inside the frame."
+  (let* ((pt (tip-childframe--point-position))
+         (x (car pt))
+         (y (cdr pt))
          (em (frame-char-height))
          (frame-w (frame-inner-width))
-         (frame-h (frame-inner-height)))
-    (cons (if (> (+ x width 16) frame-w)
+         (frame-h (frame-inner-height))
+         ;; Anchor: bottom-right of cursor = (x, y + em)
+         (cx x)
+         (cy (+ y em)))
+    ;; Clamp: keep childframe inside frame
+    (cons (if (> (+ cx width) frame-w)
               (max 0 (- frame-w width 16))
-            x)
-          (if (> (+ y em height 16) frame-h)
-              (max 0 (- y height 4))
-            (+ y em 4)))))
+            cx)
+          (if (> (+ cy height) frame-h)
+              ;; No room below: place above cursor
+              (max 0 (- y height))
+            cy))))
 
 (defun tip-childframe--corner-position (width height)
   "Compute (X . Y) position at the configured corner.
