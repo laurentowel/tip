@@ -477,10 +477,7 @@ height_pt, and depth_pt keys."
           (overlay-put ov 'tip 'tip)
           (overlay-put ov 'face 'tip-error-face)))
       (when (and frag-beg frag-end (> (length svg-data) 0)
-                 (> (* height-pt (or (and (string-match "width=\"\\([0-9.]+\\)" svg-data)
-                                          (string-to-number (match-string 1 svg-data)))
-                                     0))
-                    1.0))
+                 (> height-pt 0.01))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
           (when (eq (overlay-get ov 'tip) 'tip)
@@ -594,14 +591,17 @@ Otherwise use baseline alignment for inline math."
 
 (defun tip--get-bounds-of-math-at-point (x)
   "Return (BEG . END) of math or diagram fragment at position X, or nil.
-Uses local tree-sitter node walk — O(depth) not O(buffer)."
+Uses local tree-sitter node walk — O(depth) not O(buffer).
+Half-open interval: returns bounds only if BEG <= X < END."
   (let ((node (treesit-node-at x 'typst)))
     (or
      ;; Check if we're inside a math node (walk up)
      (let ((n node))
        (while (and n (not (equal "math" (treesit-node-type n))))
          (setq n (treesit-node-parent n)))
-       (when n
+       (when (and n
+                  (<= (treesit-node-start n) x)
+                  (< x (treesit-node-end n)))
          (cons (treesit-node-start n) (treesit-node-end n))))
      ;; Check diagram ranges (walk up for call node)
      (let ((n node) (found nil))
@@ -617,8 +617,10 @@ Uses local tree-sitter node walk — O(depth) not O(buffer)."
                (setq found n)
              (setq n (treesit-node-parent n)))))
        (when found
-         (cons (1- (treesit-node-start found)) ;; include #
-               (treesit-node-end found)))))))
+         (let ((beg (1- (treesit-node-start found)))
+               (end (treesit-node-end found)))
+           (when (and (<= beg x) (< x end))
+             (cons beg end))))))))
 
 ;;; * live preview (childframe-based, via tip-childframe.el)
 
