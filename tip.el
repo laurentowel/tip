@@ -101,18 +101,24 @@ Adjust the number and re-evaluate until baselines align."
 
 ;;; * mode-line progress indicator
 
+(declare-function tip-spinner-start "tip-spinner")
+(declare-function tip-spinner-stop "tip-spinner")
+(declare-function tip-spinner--image "tip-spinner")
+
 (defvar-local tip--progress nil
-  "When non-nil, a string like \" [TIP: 50 frags...]\" shown in mode-line.")
+  "When non-nil, spinner is active — shown in mode-line via :eval lighter.")
 
 (defun tip--progress-set (n)
-  "Show that N fragments are being compiled."
-  (setq tip--progress (format " [TIP: %d frags...]" n))
-  (force-mode-line-update))
+  "Show spinning logo for N fragments being compiled."
+  (setq tip--progress t)
+  (when (require 'tip-spinner nil t)
+    (tip-spinner-start)))
 
 (defun tip--progress-clear ()
-  "Clear the compilation progress indicator."
+  "Clear the compilation spinner."
   (setq tip--progress nil)
-  (force-mode-line-update))
+  (when (require 'tip-spinner nil t)
+    (tip-spinner-stop)))
 
 (defun tip--next-id ()
   "Return next request ID."
@@ -765,7 +771,11 @@ Replaces colors in cached SVGs instantly — no server round-trip."
   "A minor mode for inline preview of Typst math.
 Automatically renders visible fragments and enables live preview."
   :init-value nil
-  :lighter (:eval (concat " TIP" (or tip--progress "")))
+  :lighter (:eval (concat " TIP"
+                          (when tip--progress
+                            (or (and (fboundp 'tip-spinner--image)
+                                     (tip-spinner--image))
+                                " [...]"))))
   :global nil
   (if tip-mode
       (progn
