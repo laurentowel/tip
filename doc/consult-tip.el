@@ -45,14 +45,27 @@ Wider images (display math, diagrams) are scaled down to fit."
                       (overlays-in beg end))))
     (when ov
       (let ((img (car-safe (overlay-get ov 'display))))
-        ;; Compact copy: constrain height to line, constrain width for display math
+        ;; Compact copy for minibuffer display
         (when (and img (eq (car img) 'image))
-          (list 'image
-                :type 'svg
-                :data (plist-get (cdr img) :data)
-                :height (round (* consult-tip-image-height (frame-char-height)))
-                :max-width consult-tip-image-max-width
-                :ascent 'center))))))
+          (let* ((data (plist-get (cdr img) :data))
+                 (line-h (round (* consult-tip-image-height (frame-char-height))))
+                 ;; Parse SVG dimensions to detect wide display math
+                 (svg-w (and (string-match "width=\"\\([0-9.]+\\)" data)
+                             (string-to-number (match-string 1 data))))
+                 (svg-h (and (string-match "height=\"\\([0-9.]+\\)" data)
+                             (string-to-number (match-string 1 data))))
+                 ;; Wide SVGs (display math): scale to max-width, preserve ratio
+                 ;; Narrow SVGs (inline math): scale to line height
+                 (wide-p (and svg-w svg-h (> svg-w (* svg-h 3)))))
+            (if wide-p
+                ;; Display math: constrain width, let height follow
+                (list 'image :type 'svg :data data
+                      :max-width consult-tip-image-max-width
+                      :ascent 'center)
+              ;; Inline math: constrain height to line
+              (list 'image :type 'svg :data data
+                    :height line-h
+                    :ascent 'center))))))))
 
 (defun consult-tip--candidates ()
   "Collect fragments as `consult-location' candidates."
