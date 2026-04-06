@@ -25,10 +25,16 @@
 (require 'consult)
 (require 'tip)
 
-(defcustom consult-tip-image-height 1.0
+(defcustom consult-tip-image-height 1.2
   "Height of rendered SVG in candidates, in units of frame-char-height.
 Smaller values make candidates more compact."
   :type 'float
+  :group 'tip)
+
+(defcustom consult-tip-image-max-width 300
+  "Maximum pixel width of rendered SVG in candidates.
+Wider images (display math, diagrams) are scaled down to fit."
+  :type 'integer
   :group 'tip)
 
 (defun consult-tip--get-svg-image (beg end)
@@ -39,14 +45,14 @@ Smaller values make candidates more compact."
                       (overlays-in beg end))))
     (when ov
       (let ((img (car-safe (overlay-get ov 'display))))
-        ;; Return a copy with compact height for minibuffer display
+        ;; Compact copy: constrain height to line, constrain width for display math
         (when (and img (eq (car img) 'image))
-          (append (list 'image)
-                  (list :type 'svg
-                        :data (plist-get (cdr img) :data)
-                        :height (round (* consult-tip-image-height
-                                          (frame-char-height)))
-                        :ascent 'center)))))))
+          (list 'image
+                :type 'svg
+                :data (plist-get (cdr img) :data)
+                :height (round (* consult-tip-image-height (frame-char-height)))
+                :max-width consult-tip-image-max-width
+                :ascent 'center))))))
 
 (defun consult-tip--candidates ()
   "Collect fragments as `consult-location' candidates."
