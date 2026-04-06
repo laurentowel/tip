@@ -550,6 +550,24 @@ Otherwise use baseline alignment for inline math."
   (interactive)
   (tip-send-region (point-min) (point-max)))
 
+;;;###autoload
+(defun tip-copy-svg-at-point ()
+  "Copy the SVG data of the tip overlay at point to the kill ring."
+  (interactive)
+  (let ((ov (seq-find (lambda (ov)
+                        (and (eq (overlay-get ov 'tip) 'tip)
+                             (overlay-get ov 'display)))
+                      (append (overlays-at (point))
+                              (overlays-in (point) (min (1+ (point)) (point-max)))))))
+    (if ov
+        (let ((svg (plist-get (cdr (car-safe (overlay-get ov 'display))) :data)))
+          (if svg
+              (progn
+                (kill-new svg)
+                (message "SVG copied (%d bytes)" (length svg)))
+            (message "Overlay has no SVG data")))
+      (message "No tip overlay at point"))))
+
 ;;; * cursor and overlay management (delegates to preview-toggle)
 
 ;;;###autoload
