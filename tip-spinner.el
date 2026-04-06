@@ -67,13 +67,26 @@ Loaded lazily from spinner/*.svg files.")
   (setq tip-spinner--index 0)
   (force-mode-line-update))
 
+(defvar tip-spinner--demo-cookie nil
+  "Mode-line entry added by the demo, removed on stop.")
+
 ;;;###autoload
 (defun tip-spinner-demo ()
   "Show the spinning Typst logo in the mode line for 5 seconds."
   (interactive)
   (tip-spinner--load-frames)
+  (unless tip-spinner--demo-cookie
+    (setq tip-spinner--demo-cookie
+          '(:eval (or (and (fboundp 'tip-spinner--image) (tip-spinner--image)) "")))
+    (push tip-spinner--demo-cookie mode-line-format))
   (tip-spinner-start)
-  (run-with-timer 5 nil #'tip-spinner-stop)
+  (run-with-timer 5 nil
+                  (lambda ()
+                    (tip-spinner-stop)
+                    (setq mode-line-format
+                          (delq tip-spinner--demo-cookie mode-line-format))
+                    (setq tip-spinner--demo-cookie nil)
+                    (force-mode-line-update)))
   (message "Spinning for 5 seconds..."))
 
 (provide 'tip-spinner)
