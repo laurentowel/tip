@@ -84,10 +84,9 @@ Only shows in typst-ts-mode buffers."
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
     (setq tip-spinner--remaining frames)
-    ;; Faster spin for more fragments: base 0.1s, min 0.05s for big batches
-    (let ((interval (max 0.05 (/ 0.8 (float (max 1 n))))))
-      (setq tip-spinner--timer
-            (run-at-time 0 interval #'tip-spinner--tick)))))
+    ;; Fixed interval, more fragments = more frames (longer spin, same speed)
+    (setq tip-spinner--timer
+          (run-at-time 0 0.1 #'tip-spinner--tick))))
 
 ;;;###autoload
 (define-minor-mode tip-spinner-mode
