@@ -31,7 +31,7 @@
   '((t :inherit default))
   "Face for the childframe body.")
 
-(defcustom tip-childframe-position 'at-point
+(defcustom tip-childframe-position 'corner
   "Where to display the childframe.
 `at-point' follows the cursor. `corner' stays at the upper-right."
   :type '(choice (const :tag "Follow cursor" at-point)

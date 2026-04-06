@@ -562,14 +562,17 @@ Otherwise use baseline alignment for inline math."
   "Idle timer for live preview.")
 
 (defun tip-live--handle-result (result)
-  "Handle compilation result — show SVG or error in childframe."
+  "Handle compilation result — show SVG or error in childframe.
+Errors are shown both in the childframe and echoed to the message area."
   (let* ((err (alist-get 'error result))
          (frags (alist-get 'fragments result))
          (frag (and frags (> (length frags) 0) (aref frags 0)))
          (svg (and frag (alist-get 'svg frag)))
          (h (and frag (alist-get 'height_pt frag))))
     (cond
-     (err (tip-childframe-show-text err 'error))
+     (err
+      (tip-childframe-show-text err 'error)
+      (message "TIP: %s" err))
      ((and svg (> (length svg) 0) h (> h 0))
       (tip-childframe-show svg))
      (t (tip-childframe-hide)))))
