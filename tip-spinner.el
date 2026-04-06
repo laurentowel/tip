@@ -99,20 +99,30 @@
     (setq tip-spinner--timer
           (run-at-time 0 0.1 #'tip-spinner--tick))))
 
+(defvar-local tip-spinner--mode-cookie nil
+  "Mode-line entry injected by tip-spinner-mode.")
+
 ;;;###autoload
 (define-minor-mode tip-spinner-mode
-  "Show a Typst logo in the mode line of typst-ts-mode buffers.
+  "Show a Typst logo in the mode line.
 Teal when OK, vermillion when errors exist.  Spins on server response."
   :init-value nil
-  :lighter (:eval (tip-spinner--image))
+  :lighter ""
   (if tip-spinner-mode
       (progn
         (tip-spinner--load-frames)
+        (unless tip-spinner--mode-cookie
+          (setq tip-spinner--mode-cookie
+                '(:eval (tip-spinner--image)))
+          (push tip-spinner--mode-cookie mode-line-format))
         (add-hook 'tip-server-response-functions #'tip-spinner--on-response))
     (remove-hook 'tip-server-response-functions #'tip-spinner--on-response)
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
+    (when tip-spinner--mode-cookie
+      (setq mode-line-format (delq tip-spinner--mode-cookie mode-line-format))
+      (setq tip-spinner--mode-cookie nil))
     (setq tip-spinner--index 0)
     (setq tip-spinner--has-errors nil)
     (force-mode-line-update t)))
