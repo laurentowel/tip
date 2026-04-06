@@ -935,6 +935,41 @@ Called from `after-change-functions'."
     (setq tip--server-process nil)
     (message "tip-server shut down")))
 
+;;;###autoload
+(defun tip-restart-server ()
+  "Restart tip-server (shutdown then start fresh)."
+  (interactive)
+  (tip-shutdown)
+  (tip-ensure t)
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when tip-mode
+        (tip-render-all)))))
+
+;;;###autoload
+(defun tip-server-info ()
+  "Show tip-server status: binary path, modification time, PID."
+  (interactive)
+  (let ((exe (unless tip-use-docker (tip--find-server)))
+        (alive (and tip--server-process (process-live-p tip--server-process))))
+    (message "tip-server: %s | binary: %s | %s"
+             (if alive
+                 (format "running (pid %d)" (process-id tip--server-process))
+               "not running")
+             (if tip-use-docker
+                 (format "docker:%s" tip-docker-image)
+               (if exe
+                   (format "%s (%s)"
+                           (abbreviate-file-name exe)
+                           (format-time-string
+                            "%Y-%m-%d %H:%M"
+                            (file-attribute-modification-time
+                             (file-attributes exe))))
+                 "not found"))
+             (if (and alive tip--request-id)
+                 (format "%d requests sent" tip--request-id)
+               ""))))
+
 ;;; * indirect edit (C-c ')
 
 (defvar-local tip-edit--source-buffer nil
