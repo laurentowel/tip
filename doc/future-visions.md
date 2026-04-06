@@ -52,7 +52,21 @@ A dedicated Typst editor built on a Rust game engine framework (bevy, iced, egui
 
 **Pragmatic middle ground**: Build the WYSIWYG renderer as a **preview pane** alongside an existing text editor (Emacs, Neovim, VS Code). Click on the preview to jump to source. Edit in the text editor, see changes in the preview. This is what tinymist already does, but with tighter integration.
 
-## 4. Relationship Between These Visions
+## 4. Reusable Elisp Abstractions
+
+preview-toggle.el proved that extracting a generic framework from TIP-specific code makes both the framework and TIP cleaner. Other patterns in TIP that could be extracted when a second consumer appears:
+
+**subprocess-rpc.el** — The most valuable. `tip--process-filter` (response buffering, partial line handling), `tip--send-request` (id generation, callback dispatch via hash table), `tip-ensure` (lifecycle management). This is a generic "stdio JSON-RPC child process" pattern. Any Emacs package talking to a long-running subprocess via JSON over stdio does exactly this — LSP clients, formatters, linters. ~100 lines, subtle edge cases (partial output chunks, EOF handling, error recovery).
+
+**theme-aware-overlays.el** — Store rendering parameters on overlays (`tip-fg`, `tip-bg`), string-replace cached display data on theme change. Any package rendering colored images as overlays would want this. The key insight: recolor is 30x faster than re-render.
+
+**fragment-collect.el** — Query tree-sitter → filter by region → exclude nested → convert to byte offsets. The nesting filter (keep only outermost) is generic. A LaTeX preview would do the same with `\(...\)` and `\[...\]`.
+
+**stale-overlay-cleanup.el** — Delete zero-width overlays in `after-change-functions`. Every overlay-based preview system has this problem (text deleted under an overlay leaves a zero-width ghost).
+
+Principle: don't extract until there's a second user. Premature abstraction is worse than duplication.
+
+## 5. Relationship Between These Visions
 
 ```
 Current TIP (per-fragment, Emacs overlays)
