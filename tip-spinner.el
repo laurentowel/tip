@@ -104,8 +104,7 @@
   "Show a Typst logo in the mode line of typst-ts-mode buffers.
 Teal when OK, vermillion when errors exist.  Spins on server response."
   :init-value nil
-  :lighter (:eval (when (derived-mode-p 'typst-ts-mode)
-                    (tip-spinner--image)))
+  :lighter (:eval (tip-spinner--image))
   (if tip-spinner-mode
       (progn
         (tip-spinner--load-frames)
