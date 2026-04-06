@@ -315,10 +315,12 @@ CALLBACK is called with the result alist when response arrives."
 
 (defun tip--diagram-node-p (node)
   "Return non-nil if NODE is a function call matching `tip-diagram-functions'."
-  (when (and node (string-match-p "call" (symbol-name (treesit-node-type node))))
-    (let* ((callee (treesit-node-child-by-field-name node "callee"))
-           (name (and callee (treesit-node-text callee t))))
-      (and name (member name tip-diagram-functions)))))
+  (when-let* ((node)
+              (ntype (treesit-node-type node))
+              ((string-match-p "call" (if (symbolp ntype) (symbol-name ntype) ntype)))
+              (callee (treesit-node-child-by-field-name node "callee"))
+              (name (treesit-node-text callee t)))
+    (member name tip-diagram-functions)))
 
 (defun tip-collect-fragment-locations (beg end &optional avoid-pos)
   "Collect math and diagram fragment byte positions in region BEG..END.
