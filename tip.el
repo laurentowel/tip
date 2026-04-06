@@ -99,27 +99,6 @@ Adjust the number and re-evaluate until baselines align."
 (defvar tip--pending-callbacks (make-hash-table :test 'eql)
   "Maps request ID to callback function.")
 
-;;; * mode-line progress indicator
-
-(declare-function tip-spinner-start "tip-spinner")
-(declare-function tip-spinner-stop "tip-spinner")
-(declare-function tip-spinner--image "tip-spinner")
-
-(defvar-local tip--progress nil
-  "When non-nil, spinner is active — shown in mode-line via :eval lighter.")
-
-(defun tip--progress-set (n)
-  "Show spinning logo for N fragments being compiled."
-  (setq tip--progress t)
-  (when (require 'tip-spinner nil t)
-    (tip-spinner-start)))
-
-(defun tip--progress-clear ()
-  "Clear the compilation spinner."
-  (setq tip--progress nil)
-  (when (require 'tip-spinner nil t)
-    (tip-spinner-stop)))
-
 (defun tip--next-id ()
   "Return next request ID."
   (cl-incf tip--request-id))
@@ -457,12 +436,7 @@ This preamble adds color sync and font size matching."
          (frag-locs (tip-collect-fragment-locations beg end avoid-pos))
          (n (length frag-locs)))
     (when (> n 0)
-      ;; Sync buffer content first
       (tip--sync-buffer)
-      ;; Show progress for large batches
-      (when (> n 5)
-        (tip--progress-set n))
-      ;; Request compilation
       (tip--send-request
        "compile_fragments"
        `(("uri" . ,(buffer-file-name))
@@ -471,7 +445,6 @@ This preamble adds color sync and font size matching."
          ("preamble" . ,preamble))
        (lambda (result)
          (with-current-buffer buf
-           (tip--progress-clear)
            (tip--apply-fragment-results
             (alist-get 'fragments result))))))))
 
@@ -771,11 +744,7 @@ Replaces colors in cached SVGs instantly — no server round-trip."
   "A minor mode for inline preview of Typst math.
 Automatically renders visible fragments and enables live preview."
   :init-value nil
-  :lighter (:eval (concat " TIP"
-                          (when tip--progress
-                            (or (and (fboundp 'tip-spinner--image)
-                                     (tip-spinner--image))
-                                " [...]"))))
+  :lighter " TIP"
   :global nil
   (if tip-mode
       (progn
