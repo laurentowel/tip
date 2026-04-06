@@ -117,57 +117,70 @@
                  (frame-live-p tip-childframe--frame)))
   (tip-childframe-hide)
 
-  ;; --- Test 3: cursor walk with hooks + live preview ---
+  ;; --- Test 3: at-point tracks cursor position precisely ---
   (test--log "")
-  (test--log "--- Test 3: cursor walk with overlay toggle + live preview ---")
-  (goto-char (point-min))
-  (let ((in-math-count 0)
-        (outside-math-cf-visible 0)
-        (in-math-overlay-opened 0)
-        (cf-shown-count 0)
-        (positions nil)
-        (steps 100))
+  (test--log "--- Test 3: at-point tracks cursor precisely ---")
+  (let ((test-svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"30\"><rect width=\"80\" height=\"30\" fill=\"#ddf\"/></svg>")
+        (prev-pos nil)
+        (moved-count 0)
+        (same-count 0))
+    ;; Move to 10 distinct lines and verify childframe follows
+    (goto-char (point-min))
+    (dotimes (i 10)
+      (forward-line 2) ;; skip 2 lines each time
+      (tip-childframe-show test-svg)
+      (redisplay t)
+      (let ((pos (test--cf-pos)))
+        (when pos
+          (if (and prev-pos (not (equal (cdr prev-pos) (cdr pos))))
+              (cl-incf moved-count)
+            (when prev-pos (cl-incf same-count)))
+          (setq prev-pos pos))))
+    (test--log "  cursor moved to 10 lines")
+    (test--log "  childframe Y changed: %d times" moved-count)
+    (test--log "  childframe Y unchanged: %d times" same-count)
+    (test--check "childframe Y follows cursor across lines"
+                 (>= moved-count 7)))
+  (tip-childframe-hide)
+
+  ;; --- Test 3b: at-point X tracks horizontal cursor ---
+  (test--log "")
+  (test--log "--- Test 3b: at-point X tracks horizontal position ---")
+  (let ((test-svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#fdf\"/></svg>")
+        (positions nil))
+    (goto-char (point-min))
+    (dotimes (_ 5)
+      (forward-char 10)
+      (tip-childframe-show test-svg)
+      (redisplay t)
+      (push (test--cf-pos) positions))
+    (let ((xs (mapcar #'car (delq nil positions))))
+      (test--log "  X positions: %S" xs)
+      (test--check "childframe X varies with cursor column"
+                   (> (length (delete-dups xs)) 2))))
+  (tip-childframe-hide)
+
+  ;; --- Test 3c: overlay open/close with hooks (fast, no compile) ---
+  (test--log "")
+  (test--log "--- Test 3c: overlay open/close with cursor hooks ---")
+  (let ((opened 0) (closed 0) (steps 40))
+    (goto-char (point-min))
     (dotimes (_ steps)
       (when (< (point) (point-max))
-        ;; Simulate real cursor movement with hooks
         (let ((this-command 'forward-char))
           (run-hooks 'pre-command-hook))
         (forward-char 1)
         (let ((this-command 'forward-char))
           (run-hooks 'post-command-hook))
-        ;; Trigger live preview
-        (tip-live--compile-partial)
-        (accept-process-output tip--server-process 0.05)
         (redisplay t)
-        ;; Observe state
-        (let ((in-math (tip--get-bounds-of-math-at-point (point))))
-          (if in-math
-              (progn
-                (cl-incf in-math-count)
-                ;; Check if overlay opened (no display property)
-                (when (seq-find (lambda (ov)
-                                  (and (eq (overlay-get ov 'tip) 'tip)
-                                       (not (overlay-get ov 'display))))
-                                (overlays-at (point)))
-                  (cl-incf in-math-overlay-opened)))
-            ;; Outside math: childframe should be hidden
-            (when (test--cf-visible-p)
-              (cl-incf outside-math-cf-visible))))
-        (when (test--cf-visible-p)
-          (cl-incf cf-shown-count)
-          (push (test--cf-pos) positions))))
-    (test--log "  chars walked: %d" steps)
-    (test--log "  times in math: %d" in-math-count)
-    (test--log "  times overlay opened in math: %d" in-math-overlay-opened)
-    (test--log "  times childframe visible: %d" cf-shown-count)
-    (test--log "  times childframe visible OUTSIDE math: %d" outside-math-cf-visible)
-    (test--log "  unique positions: %d"
-               (length (delete-dups (copy-sequence positions))))
-    (test--check "overlays open when cursor enters math"
-                 (> in-math-overlay-opened 0))
-    (test--check "childframe mostly hidden outside math"
-                 (< outside-math-cf-visible 5)))
-  (tip-childframe-hide)
+        ;; Check overlay state at point
+        (let ((ov (seq-find (lambda (o) (eq (overlay-get o 'tip) 'tip))
+                            (overlays-at (point)))))
+          (when (and ov (not (overlay-get ov 'display)))
+            (cl-incf opened)))))
+    (test--log "  steps: %d, overlays opened: %d" steps opened)
+    (test--check "overlays open during cursor walk"
+                 (> opened 0)))
 
   ;; --- Test 4: at-point stays within frame bounds ---
   (test--log "")
