@@ -16,6 +16,10 @@
 (defvar tip-spinner--frames nil
   "Vector of SVG strings for spinner animation frames.")
 
+(defvar tip-spinner--directory
+  (file-name-directory (or load-file-name buffer-file-name))
+  "Directory where tip-spinner.el lives, captured at load time.")
+
 (defvar tip-spinner--index 0
   "Current animation frame index (global, shared across buffers).")
 
@@ -28,10 +32,7 @@
 (defun tip-spinner--load-frames ()
   "Load spinner SVG frames from the spinner/ directory."
   (unless tip-spinner--frames
-    (let* ((dir (expand-file-name "spinner"
-                                   (file-name-directory
-                                    (or load-file-name buffer-file-name
-                                        (locate-library "tip-spinner")))))
+    (let* ((dir (expand-file-name "spinner" tip-spinner--directory))
            (files (and (file-directory-p dir)
                        (sort (directory-files dir t "^spinner-[0-9]+\\.svg$")
                              #'string<))))
@@ -48,7 +49,7 @@
   "Return the current frame as a propertized string for mode-line.
 Only shows in typst-ts-mode buffers."
   (let ((frames (tip-spinner--load-frames)))
-    (when (and frames (derived-mode-p 'typst-ts-mode))
+    (when frames
       (propertize " "
                   'display
                   (list 'image
@@ -93,7 +94,8 @@ Only shows in typst-ts-mode buffers."
   "Show a Typst logo in the mode line of typst-ts-mode buffers.
 Spins when tip-server responds.  Speed reflects fragment count."
   :init-value nil
-  :lighter (:eval (tip-spinner--image))
+  :lighter (:eval (when (derived-mode-p 'typst-ts-mode)
+                    (tip-spinner--image)))
   (if tip-spinner-mode
       (progn
         (tip-spinner--load-frames)
