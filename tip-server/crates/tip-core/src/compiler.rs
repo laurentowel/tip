@@ -35,6 +35,8 @@ pub struct FragmentOutput {
     pub height_pt: f64,
     /// Depth below the baseline in points (for ascent calculation).
     pub depth_pt: f64,
+    /// Ink width in points (actual content, no margins).
+    pub width_pt: f64,
 }
 
 /// Compiles math fragments from a Typst document to SVG.
@@ -126,15 +128,16 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
     let page_height = page.frame.height().to_pt();
     let page_width = page.frame.width().to_pt();
 
+    let ink = find_ink_extent(&page.frame, 0.0, 0.0);
+    let pad = 0.5;
+
     if is_inline {
         // INLINE MATH: crop SVG to ink bounds, compute baseline for ascent.
         let baseline_y = find_baseline_depth(&page.frame, 0.0)
             .unwrap_or(27.5); // 20pt margin + ~7.5pt font ascent
 
-        let (ink_top, ink_bottom) = find_ink_extent(&page.frame, 0.0);
-        let pad = 0.5;
-        let crop_top = (ink_top - pad).max(0.0);
-        let crop_bottom = (ink_bottom + pad).min(page_height);
+        let crop_top = (ink.min_y - pad).max(0.0);
+        let crop_bottom = (ink.max_y + pad).min(page_height);
         let cropped_height = crop_bottom - crop_top;
         let baseline_in_crop = baseline_y - crop_top;
         let depth_pt = (cropped_height - baseline_in_crop).max(0.0);
@@ -147,57 +150,84 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
             svg: cropped_svg,
             height_pt: cropped_height,
             depth_pt,
+            width_pt: ink.width() + pad * 2.0,
         })
     } else {
-        // BLOCK/DISPLAY MATH: use as-is, no cropping needed.
-        // Typst handles display layout correctly with standard margins.
+        // BLOCK/DISPLAY MATH: keep full page for in-buffer centering,
+        // but report ink width so clients can crop for compact display.
         Ok(FragmentOutput {
             svg: svg_string,
             height_pt: page_height,
-            depth_pt: 0.0, // block math doesn't need baseline alignment
+            depth_pt: 0.0,
+            width_pt: ink.width() + pad * 2.0,
         })
     }
 }
 
-/// Find the vertical extent of all rendered content (ink bounds).
-/// Returns (min_y, max_y) in page coordinates.
-fn find_ink_extent(frame: &typst::layout::Frame, y_offset: f64) -> (f64, f64) {
+/// Ink bounds of all rendered content.
+struct InkBounds {
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+}
+
+impl InkBounds {
+    fn empty() -> Self {
+        InkBounds { min_x: f64::MAX, max_x: f64::MIN, min_y: f64::MAX, max_y: f64::MIN }
+    }
+    fn is_empty(&self) -> bool { self.min_y > self.max_y }
+    fn width(&self) -> f64 { (self.max_x - self.min_x).max(0.0) }
+    fn height(&self) -> f64 { (self.max_y - self.min_y).max(0.0) }
+}
+
+/// Find the ink extent of all rendered content in page coordinates.
+fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -> InkBounds {
     use typst::layout::FrameItem;
 
-    let mut min_y = f64::MAX;
-    let mut max_y = f64::MIN;
+    let mut bounds = InkBounds::empty();
 
     for (pos, item) in frame.items() {
+        let item_x = x_offset + pos.x.to_pt();
         let item_y = y_offset + pos.y.to_pt();
         match item {
             FrameItem::Text(text) => {
-                // Text is positioned at baseline. Ascend above, descend below.
                 let font_size = text.size.to_pt();
-                // Approximate: ascent ~80% of font size, descent ~20%
                 let ascent = font_size * 0.8;
                 let descent = font_size * 0.25;
-                min_y = min_y.min(item_y - ascent);
-                max_y = max_y.max(item_y + descent);
+                // Approximate text width from glyph advances
+                let text_width: f64 = text.glyphs.iter()
+                    .map(|g| g.x_advance.at(text.size).to_pt())
+                    .sum();
+                bounds.min_x = bounds.min_x.min(item_x);
+                bounds.max_x = bounds.max_x.max(item_x + text_width);
+                bounds.min_y = bounds.min_y.min(item_y - ascent);
+                bounds.max_y = bounds.max_y.max(item_y + descent);
             }
             FrameItem::Group(group) => {
-                let (child_min, child_max) =
-                    find_ink_extent(&group.frame, item_y);
-                min_y = min_y.min(child_min);
-                max_y = max_y.max(child_max);
+                let child = find_ink_extent(&group.frame, item_x, item_y);
+                bounds.min_x = bounds.min_x.min(child.min_x);
+                bounds.max_x = bounds.max_x.max(child.max_x);
+                bounds.min_y = bounds.min_y.min(child.min_y);
+                bounds.max_y = bounds.max_y.max(child.max_y);
             }
             FrameItem::Shape(_, _) => {
-                // Shapes (fraction bars, etc.) — use position + small extent
-                min_y = min_y.min(item_y - 0.5);
-                max_y = max_y.max(item_y + 0.5);
+                bounds.min_x = bounds.min_x.min(item_x - 0.5);
+                bounds.max_x = bounds.max_x.max(item_x + 0.5);
+                bounds.min_y = bounds.min_y.min(item_y - 0.5);
+                bounds.max_y = bounds.max_y.max(item_y + 0.5);
             }
             _ => {}
         }
     }
 
-    if min_y > max_y {
-        (0.0, frame.height().to_pt())
+    if bounds.is_empty() {
+        InkBounds {
+            min_x: 0.0, max_x: frame.width().to_pt(),
+            min_y: 0.0, max_y: frame.height().to_pt(),
+        }
     } else {
-        (min_y, max_y)
+        bounds
     }
 }
 

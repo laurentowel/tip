@@ -15,6 +15,9 @@ pub struct FragmentResult {
     pub svg: String,
     pub height_pt: f64,
     pub depth_pt: f64,
+    /// Ink width in points (content only, no margins).
+    #[serde(default)]
+    pub width_pt: f64,
     /// Compilation error message, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

@@ -463,6 +463,7 @@ height_pt, and depth_pt keys."
            (svg-data (alist-get 'svg frag))
            (height-pt (alist-get 'height_pt frag))
            (depth-pt (alist-get 'depth_pt frag))
+           (width-pt (alist-get 'width_pt frag))
            (err (alist-get 'error frag)))
       ;; Error fragment: highlight with error face, log to echo area
       (when (and err frag-beg frag-end (= (length svg-data) 0))
@@ -500,6 +501,7 @@ height_pt, and depth_pt keys."
           (overlay-put ov 'view-text nil)
           (overlay-put ov 'tip-height-pt height-pt)
           (overlay-put ov 'tip-depth-pt depth-pt)
+          (overlay-put ov 'tip-width-pt (or width-pt 0))
           (overlay-put ov 'tip-fg (tip--color-to-hex
                                     (face-attribute 'default :foreground)))
           (overlay-put ov 'tip-bg (tip--color-to-hex

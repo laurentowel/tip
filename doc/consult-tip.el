@@ -38,31 +38,35 @@ Wider images (display math, diagrams) are scaled down to fit."
   :group 'tip)
 
 (defun consult-tip--get-svg-image (beg end)
-  "Get a compact SVG image spec from a tip overlay in BEG..END, or nil."
+  "Get a compact SVG image spec from a tip overlay in BEG..END, or nil.
+Uses tip-width-pt (ink width) to scale display math to actual content size."
   (let ((ov (seq-find (lambda (ov)
                         (and (eq (overlay-get ov 'tip) 'tip)
                              (overlay-get ov 'display)))
                       (overlays-in beg end))))
     (when ov
-      (let ((img (car-safe (overlay-get ov 'display))))
-        ;; Compact copy for minibuffer display
+      (let ((img (car-safe (overlay-get ov 'display)))
+            (ink-w (or (overlay-get ov 'tip-width-pt) 0))
+            (ink-h (or (overlay-get ov 'tip-height-pt) 0)))
         (when (and img (eq (car img) 'image))
           (let* ((data (plist-get (cdr img) :data))
                  (line-h (round (* consult-tip-image-height (frame-char-height))))
-                 ;; Parse SVG dimensions to detect wide display math
-                 (svg-w (and (string-match "width=\"\\([0-9.]+\\)" data)
-                             (string-to-number (match-string 1 data))))
-                 (svg-h (and (string-match "height=\"\\([0-9.]+\\)" data)
-                             (string-to-number (match-string 1 data))))
-                 ;; Wide SVGs (display math): scale to max-width, preserve ratio
-                 ;; Narrow SVGs (inline math): scale to line height
-                 (wide-p (and svg-w svg-h (> svg-w (* svg-h 3)))))
-            (if wide-p
-                ;; Display math: constrain width, let height follow
-                (list 'image :type 'svg :data data
-                      :max-width consult-tip-image-max-width
-                      :ascent 'center)
-              ;; Inline math: constrain height to line
+                 ;; Display math: ink much narrower than SVG page width
+                 ;; Use ink width to compute a proportional pixel width
+                 (display-p (and (> ink-w 0) (> ink-h 0)
+                                 ;; SVG page is wider than 3× ink width → display math
+                                 (let ((svg-w (and (string-match "width=\"\\([0-9.]+\\)" data)
+                                                   (string-to-number (match-string 1 data)))))
+                                   (and svg-w (> svg-w (* ink-w 2)))))))
+            (if display-p
+                ;; Display math: scale based on ink dimensions, capped
+                (let ((scale (min (/ (float consult-tip-image-max-width) ink-w)
+                                  (/ (float line-h) ink-h))))
+                  (list 'image :type 'svg :data data
+                        :scale scale
+                        :max-width consult-tip-image-max-width
+                        :ascent 'center))
+              ;; Inline math: constrain to line height
               (list 'image :type 'svg :data data
                     :height line-h
                     :ascent 'center))))))))
