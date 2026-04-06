@@ -5,7 +5,7 @@
 
 ;;; Commentary:
 ;; Navigate math/diagram fragments via consult with:
-;; - Live preview: jumps to fragment as you browse candidates
+;; - Live preview: jumps to fragment as you browse (consult--location-state)
 ;; - Rendered math: candidates show SVG overlays in the minibuffer
 ;; - Content search: narrow by typing fragment source text
 ;;
@@ -28,9 +28,14 @@
       (car-safe (overlay-get ov 'display)))))
 
 (defun consult-tip--candidates ()
-  "Collect fragments as candidates with rendered math in display."
+  "Collect fragments as `consult-location' candidates with rendered math."
+  (consult--forbid-minibuffer)
   (let ((ranges (treesit-query-range 'typst "((math) @math)"))
-        (candidates nil))
+        (candidates nil)
+        (idx 0)
+        (width (length (number-to-string (line-number-at-pos
+                                          (point-max)
+                                          consult-line-numbers-widen)))))
     ;; Add diagram ranges
     (when tip-diagram-functions
       (let ((root (treesit-buffer-root-node 'typst)))
@@ -39,7 +44,7 @@
                 (append ranges
                         (tip--collect-diagram-ranges
                          root (point-min) (point-max) nil))))))
-    ;; Filter nested
+    ;; Filter nested (keep outermost only)
     (let ((outer nil))
       (dolist (r ranges)
         (unless (cl-some (lambda (o)
@@ -49,62 +54,32 @@
                          ranges)
           (push r outer)))
       (setq ranges (sort (nreverse outer) (lambda (a b) (< (car a) (car b))))))
-    ;; Build candidates
-    (dolist (r ranges)
-      (let* ((beg (car r))
-             (end (cdr r))
-             (source (buffer-substring-no-properties beg (min (+ beg 60) end)))
-             (source-flat (replace-regexp-in-string "[\n\t ]+" " " source))
-             (truncated (if (> (- end beg) 60)
-                            (concat source-flat "...")
-                          source-flat))
-             (line (line-number-at-pos beg))
-             (img (consult-tip--get-svg-image beg end))
-             ;; Build display: line number + rendered math (or source text)
-             (rendered (if img
-                          (propertize " " 'display img)
-                        ""))
-             (display (concat (propertize (format "%4d " line)
-                                         'face 'consult-line-number)
-                              rendered
-                              (unless img truncated))))
-        (push (propertize (or display truncated)
-                          'consult-tip--pos beg
-                          ;; Hidden searchable text for filtering
-                          'consult-tip--source truncated)
-              candidates)))
+    ;; Build candidates using consult's location protocol
+    (save-excursion
+      (dolist (r ranges)
+        (let* ((beg (car r))
+               (end (cdr r))
+               (line (line-number-at-pos beg consult-line-numbers-widen))
+               (marker (copy-marker beg))
+               (source (buffer-substring-no-properties beg (min (+ beg 60) end)))
+               (source-flat (replace-regexp-in-string "[\n\t ]+" " " source))
+               (truncated (if (> (- end beg) 60)
+                              (concat source-flat "...")
+                            source-flat))
+               (img (consult-tip--get-svg-image beg end))
+               ;; Display: line number + rendered SVG or source text
+               (rendered (if img
+                             (concat " " (propertize " " 'display img) " ")
+                           ""))
+               (display (concat rendered truncated))
+               ;; Build consult-location candidate
+               (cand (consult--location-candidate
+                      display marker line idx)))
+          (cl-incf idx)
+          (push cand candidates))))
+    (unless candidates
+      (user-error "No fragments found"))
     (nreverse candidates)))
-
-(defun consult-tip--state ()
-  "State function for live preview: jump to fragment on selection."
-  (let ((saved-pos (point))
-        (saved-window-start (window-start)))
-    (lambda (action cand)
-      (pcase action
-        ('preview
-         (when cand
-           (let ((pos (get-text-property 0 'consult-tip--pos cand)))
-             (when pos
-               (goto-char pos)
-               (recenter)))))
-        ('return
-         (when cand
-           (let ((pos (get-text-property 0 'consult-tip--pos cand)))
-             (when pos (goto-char pos)))))
-        ('exit
-         ;; Restore on abort
-         (unless cand
-           (goto-char saved-pos)
-           (set-window-start nil saved-window-start)))))))
-
-(defun consult-tip--match (input candidates)
-  "Filter CANDIDATES by INPUT against their source text."
-  (let ((pattern (regexp-quote input)))
-    (seq-filter (lambda (c)
-                  (let ((source (get-text-property 0 'consult-tip--source c)))
-                    (or (null source)
-                        (string-match-p pattern source))))
-                candidates)))
 
 ;;;###autoload
 (defun consult-tip-fragment ()
@@ -114,19 +89,18 @@ jumping to fragments as you browse."
   (interactive)
   (unless (derived-mode-p 'typst-ts-mode)
     (user-error "Not in a typst-ts-mode buffer"))
-  (let ((candidates (consult-tip--candidates)))
-    (unless candidates
-      (user-error "No fragments found"))
-    (consult--read
-     candidates
-     :prompt "Fragment: "
-     :sort nil
-     :require-match t
-     :category 'tip-fragment
-     :state (consult-tip--state)
-     :lookup (lambda (selected cands &rest _)
-               (when-let* ((match (car (member selected cands))))
-                 match)))))
+  (consult--read
+   (consult--slow-operation "Collecting fragments..."
+     (consult-tip--candidates))
+   :prompt "Fragment: "
+   :annotate (consult--line-fontify)
+   :category 'consult-location
+   :sort nil
+   :require-match t
+   :lookup #'consult--lookup-location
+   :history '(:input consult--line-history)
+   :add-history (thing-at-point 'symbol)
+   :state (consult--location-state (consult-tip--candidates))))
 
 (provide 'consult-tip)
 
