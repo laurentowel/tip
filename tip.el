@@ -446,10 +446,16 @@ height_pt, and depth_pt keys."
            (height-pt (alist-get 'height_pt frag))
            (depth-pt (alist-get 'depth_pt frag))
            (err (alist-get 'error frag)))
-      ;; Show errors as temporary inline overlay + echo area
-      (when (and err frag-beg frag-end)
+      ;; Error fragment: highlight with error face, log to echo area
+      (when (and err frag-beg frag-end (= (length svg-data) 0))
         (message "TIP: %s" err)
-        (tip--show-inline-error frag-beg frag-end err))
+        ;; Clear any existing overlay here first
+        (dolist (ov (overlays-in frag-beg frag-end))
+          (when (eq (overlay-get ov 'tip) 'tip)
+            (delete-overlay ov)))
+        (let ((ov (make-overlay frag-beg frag-end)))
+          (overlay-put ov 'tip 'tip)
+          (overlay-put ov 'face 'tip-error-face)))
       (when (and frag-beg frag-end (> (length svg-data) 0))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
@@ -475,6 +481,10 @@ height_pt, and depth_pt keys."
           (overlay-put ov 'view-text nil)
           (overlay-put ov 'tip-height-pt height-pt)
           (overlay-put ov 'tip-depth-pt depth-pt)
+          (overlay-put ov 'tip-fg (tip--color-to-hex
+                                    (face-attribute 'default :foreground)))
+          (overlay-put ov 'tip-bg (tip--color-to-hex
+                                    (face-attribute 'default :background)))
           (overlay-put ov 'display display)
           (when (and is-single-line-display tip-display-indicator)
             (overlay-put ov 'before-string tip-display-indicator)))))))
@@ -550,12 +560,22 @@ Otherwise use baseline alignment for inline math."
                   ranges)))
      (when valid (car (sort valid :lessp #'< :key #'car))))
    ;; Check diagram ranges (walk tree upward from point)
-   (let ((node (treesit-node-at x 'typst)))
-     (while (and node (not (tip--diagram-node-p node)))
-       (setq node (treesit-node-parent node)))
-     (when node
-       (cons (1- (treesit-node-start node)) ;; include #
-             (treesit-node-end node))))))
+   (let ((node (treesit-node-at x 'typst))
+         (found nil))
+     (while (and node (not found))
+       (if (tip--diagram-node-p node)
+           (setq found node)
+         (setq node (treesit-node-parent node))))
+     ;; If at # prefix, the call node is a sibling — check x+1
+     (when (and (not found) (< x (point-max)) (eq (char-after x) ?#))
+       (setq node (treesit-node-at (1+ x) 'typst))
+       (while (and node (not found))
+         (if (tip--diagram-node-p node)
+             (setq found node)
+           (setq node (treesit-node-parent node)))))
+     (when found
+       (cons (1- (treesit-node-start found)) ;; include #
+             (treesit-node-end found))))))
 
 ;;; * live preview (childframe-based, via tip-childframe.el)
 
@@ -635,6 +655,50 @@ Works in both normal typst-ts-mode and tip-edit buffers."
   (tip-childframe-hide)
   (setq tip-live--content-cache ""))
 
+;;; * theme change tracking
+
+(defun tip--recolor-overlays ()
+  "Update SVG colors in all tip overlays to match current theme.
+Does string replacement on cached SVG data — no server round-trip."
+  (let ((new-fg (tip--color-to-hex (face-attribute 'default :foreground)))
+        (new-bg (tip--color-to-hex (face-attribute 'default :background))))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (eq (overlay-get ov 'tip) 'tip)
+        (let ((old-fg (overlay-get ov 'tip-fg))
+              (old-bg (overlay-get ov 'tip-bg))
+              (disp (overlay-get ov 'display)))
+          (when (and old-fg old-bg disp (not (string= old-fg new-fg)))
+            (let ((svg (plist-get (cdr (car-safe disp)) :data)))
+              (when svg
+                (let ((new-svg (string-replace old-bg new-bg
+                                               (string-replace old-fg new-fg svg))))
+                  (setcar (cdr (plist-member (cdar disp) :data)) new-svg)
+                  (overlay-put ov 'tip-fg new-fg)
+                  (overlay-put ov 'tip-bg new-bg))))))))))
+
+(defun tip--on-theme-change (&rest _)
+  "Update all tip buffers after a theme change.
+Uses fast SVG color substitution (no recompilation).
+Invalidates live preview cache so childframe updates."
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when tip-mode
+        (tip--recolor-overlays)
+        (setq tip-live--content-cache "")))))
+
+;;;###autoload
+(define-minor-mode tip-follow-theme-mode
+  "Automatically update tip overlays when the Emacs theme changes.
+Replaces colors in cached SVGs instantly — no server round-trip."
+  :init-value nil
+  :lighter ""
+  (if tip-follow-theme-mode
+      (progn
+        (add-hook 'enable-theme-functions #'tip--on-theme-change)
+        (add-hook 'disable-theme-functions #'tip--on-theme-change))
+    (remove-hook 'enable-theme-functions #'tip--on-theme-change)
+    (remove-hook 'disable-theme-functions #'tip--on-theme-change)))
+
 ;;; * the minor mode
 
 ;;;###autoload
@@ -660,6 +724,8 @@ Automatically renders visible fragments and enables live preview."
         (tip-edit-setup-keys)
         ;; Clean up stale overlays on buffer changes
         (add-hook 'after-change-functions #'tip--cleanup-stale-overlays nil t)
+        ;; Track theme changes
+        (tip-follow-theme-mode 1)
         ;; Render visible fragments after a short delay (server needs to start)
         (run-with-timer 0.5 nil
                         (lambda ()
@@ -669,8 +735,31 @@ Automatically renders visible fragments and enables live preview."
                                 (tip-send-nbd)))))))
     ;; Teardown
     (tip-live-teardown)
+    (tip-follow-theme-mode -1)
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
     (preview-toggle-mode -1)))
+
+;;; * auto-compile minor mode
+
+(defvar-local tip-auto--timer nil
+  "Idle timer for auto-compiling visible fragments.")
+
+;;;###autoload
+(define-minor-mode tip-auto-mode
+  "Automatically compile visible unrendered fragments on idle.
+Useful after theme changes clear off-screen overlays, or for
+keeping previews up to date as you scroll through a large file."
+  :init-value nil
+  :lighter " TIP-auto"
+  (if tip-auto-mode
+      (setq tip-auto--timer
+            (run-with-idle-timer 0.5 t
+                                 (lambda ()
+                                   (when (and tip-mode (eq (current-buffer) (window-buffer)))
+                                     (tip-send-nbd)))))
+    (when tip-auto--timer
+      (cancel-timer tip-auto--timer)
+      (setq tip-auto--timer nil))))
 
 ;;; * avy-style jump to fragment
 
@@ -772,45 +861,21 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
 ;;; * inline error display
 
 (defface tip-error-face
-  '((t :foreground "#ff4444" :slant italic :height 0.85))
-  "Face for inline compilation error messages."
+  '((((background light)) :background "#fff3cd")
+    (((background dark))  :background "#1a2744"))
+  "Face for fragments that failed to compile.
+Light yellow on light backgrounds, deep blue on dark."
   :group 'tip)
-
-(defun tip--show-inline-error (beg end err)
-  "Show ERR as a temporary overlay after the fragment at BEG..END.
-Auto-clears after 5 seconds or when the fragment is edited."
-  ;; Clear any existing error overlay here
-  (tip--clear-inline-errors beg end)
-  (let ((ov (make-overlay end end)))
-    (overlay-put ov 'tip-error t)
-    (overlay-put ov 'after-string
-                 (propertize (format " ← %s" (truncate-string-to-width err 60))
-                             'face 'tip-error-face))
-    ;; Auto-clear after 5 seconds
-    (run-with-timer 5 nil
-                    (lambda ()
-                      (when (overlay-buffer ov)
-                        (delete-overlay ov))))))
-
-(defun tip--clear-inline-errors (beg end)
-  "Remove tip error overlays in region BEG..END."
-  (dolist (ov (overlays-in beg (min (1+ end) (point-max))))
-    (when (overlay-get ov 'tip-error)
-      (delete-overlay ov))))
 
 ;;; * stale overlay cleanup
 
-(defun tip--cleanup-stale-overlays (beg end _len)
-  "Remove stale tip and error overlays near the change region.
+(defun tip--cleanup-stale-overlays (_beg _end _len)
+  "Remove zero-width tip overlays left behind after text deletion.
 Called from `after-change-functions'."
-  ;; Remove zero-width tip overlays
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
       (when (>= (overlay-start ov) (overlay-end ov))
-        (delete-overlay ov))))
-  ;; Clear inline errors near the edit
-  (tip--clear-inline-errors (max (point-min) (1- beg))
-                            (min (point-max) (1+ end))))
+        (delete-overlay ov)))))
 
 ;;; * cleanup
 

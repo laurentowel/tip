@@ -54,10 +54,11 @@ Called with two arguments (BEG END).  Should async create overlay.")
            (funcall preview-toggle-region-at-point-fn (point)))))
 
 (defun preview-toggle-open-at-point ()
-  "Reveal the source text by removing the overlay's display property."
+  "Reveal the source text by removing the overlay's display and face properties."
   (let ((ov (preview-toggle--overlay-at (point))))
     (when (and ov (not (memq this-command preview-toggle-ignored-commands)))
-      (overlay-put ov 'display nil))))
+      (overlay-put ov 'display nil)
+      (overlay-put ov 'face nil))))
 
 (defun preview-toggle--close-at-marker ()
   "Recompile the region at the saved marker position."

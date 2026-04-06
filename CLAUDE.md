@@ -356,6 +356,7 @@ See [DISTRIBUTION.md](DISTRIBUTION.md) for the full plan. Summary:
 - **Zero warnings**: Never tolerate warnings from `cargo` or `typst compile`. Fix immediately.
 - **No hardcoded presentation**: Page margin, width, height strategy come from Emacs via `page_setup` protocol field. Rust provides defaults but client can override.
 - **Modular**: tip-core stays transport-agnostic. preview-toggle.el is reusable for future LaTeX preview.
+- **No DWIM (Do What I Mean)**: Avoid implicit automatic behavior that the user didn't ask for. Compilation only happens when the user triggers it (explicit commands, or preview-toggle on cursor leave which is a direct consequence of user movement). No background idle-timer auto-compilation, no guessing intent. Every action should be traceable to a user gesture. This keeps behavior predictable and debuggable.
 
 ## User Preferences
 
