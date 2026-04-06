@@ -416,14 +416,11 @@ Returns a list of (BEG . END) ranges."
         "#000000"))))
 
 (defun tip--build-preamble ()
-  "Build a Typst preamble string that syncs Emacs theme colors and text size.
-The server always includes bounded() for anti-clipping.
-This preamble adds color sync and font size matching."
+  "Build a Typst preamble that syncs Emacs theme colors.
+Text size comes from the document itself (via scope skeleton)."
   (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (bg (tip--color-to-hex (face-attribute 'default :background)))
-        (font-pt (tip--font-size-pt)))
+        (bg (tip--color-to-hex (face-attribute 'default :background))))
     (concat
-     (format "#set text(size: %spt)\n" font-pt)
      (format "#show math.equation: set text(rgb(\"%s\"))\n" fg)
      (format "#set page(fill: rgb(\"%s\"))\n" bg))))
 
