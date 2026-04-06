@@ -304,17 +304,24 @@ fn build_scoped_source(
 
     let page_setup = match page_setup_override {
         Some(custom) => format!("{custom}\n"),
-        None if is_multiline => {
-            // Multi-line display: wide page
-            "#show math.equation: set text(size: 11pt)\n#set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm), header: none, footer: none)\n".into()
-        }
-        None if is_inline => {
-            // Inline: generous margins for baseline crop hack
-            "#show math.equation: set text(size: 11pt)\n#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n".into()
-        }
         None => {
-            // Single-line display: auto width, normal margins
-            "#show math.equation: set text(size: 11pt)\n#set page(height: auto, width: auto, margin: 0.2cm, fill: none, header: none, footer: none)\n".into()
+            // HTML-targeting documents forbid setting text size
+            let targets_html = skeleton.contains("html.elem")
+                || skeleton.contains("html.frame")
+                || skeleton.contains("html.figure");
+            let size_rule = if targets_html {
+                ""
+            } else {
+                "#show math.equation: set text(size: 11pt)\n"
+            };
+            let page = if is_multiline {
+                "#set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm), header: none, footer: none)\n"
+            } else if is_inline {
+                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
+            } else {
+                "#set page(height: auto, width: auto, margin: 0.2cm, fill: none, header: none, footer: none)\n"
+            };
+            format!("{size_rule}{page}")
         }
     };
 
