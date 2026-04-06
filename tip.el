@@ -446,9 +446,12 @@ height_pt, and depth_pt keys."
            (height-pt (alist-get 'height_pt frag))
            (depth-pt (alist-get 'depth_pt frag))
            (err (alist-get 'error frag)))
-      ;; Always show errors in echo area
+      ;; Always show errors in echo area (use minibuffer-message to avoid
+      ;; being overwritten by post-command messages)
       (when err
-        (message "TIP [%d..%d]: %s" byte-start byte-end err))
+        (let ((msg (format "TIP error: %s" err)))
+          (minibuffer-message "%s" msg)
+          (message "%s" msg)))
       (when (and frag-beg frag-end (> (length svg-data) 0))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
