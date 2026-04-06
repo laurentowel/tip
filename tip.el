@@ -262,6 +262,10 @@ Returns the path, or nil if Docker mode (handled separately)."
     (setq tip--server-process nil)
     (message "tip-server exited: %s" (string-trim event))))
 
+(defvar tip-server-response-functions nil
+  "Hook run after each tip-server response is processed.
+Called with one argument: the result alist.")
+
 (defun tip--process-filter (_proc output)
   "Handle output from tip-server.  Parse newline-delimited JSON responses."
   (setq tip--response-buffer (concat tip--response-buffer output))
@@ -279,7 +283,8 @@ Returns the path, or nil if Docker mode (handled separately)."
               (remhash id tip--pending-callbacks)
               (tip-debug-msg "tip-server response id=%s" id)
               (when callback
-                (funcall callback result)))
+                (funcall callback result))
+              (run-hook-with-args 'tip-server-response-functions result))
           (error
            (tip-debug-msg "tip-server parse error: %S for line: %s" err line)))))))
 
