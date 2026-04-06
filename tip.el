@@ -765,7 +765,7 @@ Replaces colors in cached SVGs instantly — no server round-trip."
   "A minor mode for inline preview of Typst math.
 Automatically renders visible fragments and enables live preview."
   :init-value nil
-  :lighter (" TIP" tip--progress)
+  :lighter (:eval (concat " TIP" (or tip--progress "")))
   :global nil
   (if tip-mode
       (progn
