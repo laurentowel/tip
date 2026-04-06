@@ -67,6 +67,15 @@ Loaded lazily from spinner/*.svg files.")
   (setq tip-spinner--index 0)
   (force-mode-line-update))
 
+;;;###autoload
+(defun tip-spinner-demo ()
+  "Show the spinning Typst logo in the mode line for 5 seconds."
+  (interactive)
+  (tip-spinner--load-frames)
+  (tip-spinner-start)
+  (run-with-timer 5 nil #'tip-spinner-stop)
+  (message "Spinning for 5 seconds..."))
+
 (provide 'tip-spinner)
 
 ;;; tip-spinner.el ends here
