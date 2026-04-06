@@ -82,7 +82,7 @@
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
-    (setq tip-spinner--index 0)
+    ;; Keep current rotation angle — don't reset index
     (force-mode-line-update t)))
 
 (defun tip-spinner--on-response (result)
@@ -94,8 +94,8 @@
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
-    ;; One full rotation (8 frames)
-    (setq tip-spinner--remaining 8)
+    ;; 3/4 rotation (6 frames)
+    (setq tip-spinner--remaining 6)
     (setq tip-spinner--timer
           (run-at-time 0 0.1 #'tip-spinner--tick))))
 
