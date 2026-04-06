@@ -31,11 +31,15 @@
   '((t :inherit default))
   "Face for the childframe body.")
 
-(defcustom tip-childframe-position 'corner
+(defcustom tip-childframe-position 'top-right
   "Where to display the childframe.
-`at-point' follows the cursor. `corner' stays at the upper-right."
+`at-point' follows the cursor.
+`top-right', `top-left', `bottom-right', `bottom-left' pin to a corner."
   :type '(choice (const :tag "Follow cursor" at-point)
-                 (const :tag "Window corner" corner))
+                 (const :tag "Top-right corner" top-right)
+                 (const :tag "Top-left corner" top-left)
+                 (const :tag "Bottom-right corner" bottom-right)
+                 (const :tag "Bottom-left corner" bottom-left))
   :group 'tip-childframe)
 
 (defcustom tip-childframe-max-pixel-width 600
@@ -46,6 +50,14 @@
 (defcustom tip-childframe-max-pixel-height 400
   "Maximum height of the childframe in pixels."
   :type 'integer
+  :group 'tip-childframe)
+
+(defcustom tip-childframe-offset '(16 16 16)
+  "Pixel offset from edges: (LEFT RIGHT TOP).
+Used in corner mode to keep childframe away from frame borders."
+  :type '(list (integer :tag "Left")
+               (integer :tag "Right")
+               (integer :tag "Top"))
   :group 'tip-childframe)
 
 (defvar tip-childframe--frame nil
@@ -77,34 +89,39 @@
 ;;; * positioning
 
 (defun tip-childframe--at-point-position (width height)
-  "Compute (X . Y) position for childframe below cursor."
+  "Compute (X . Y) position below the cursor.
+Falls back to above cursor if no room below."
   (let* ((pos (window-absolute-pixel-position))
          (x (or (car pos) 0))
          (y (or (cdr pos) 0))
-         (line-h (default-line-height))
-         (frame-w (frame-pixel-width))
-         (frame-h (frame-pixel-height)))
-    ;; Place below cursor, shift left if would overflow right edge
-    (cons (min x (max 0 (- frame-w width 10)))
-          ;; Place below cursor, or above if no room below
-          (if (< (+ y line-h height 10) frame-h)
-              (+ y line-h 4)
-            (max 0 (- y height 4))))))
+         (em (frame-char-height))
+         (frame-w (frame-inner-width))
+         (frame-h (frame-inner-height)))
+    (cons (if (> (+ x width 16) frame-w)
+              (max 0 (- frame-w width 16))
+            x)
+          (if (> (+ y em height 16) frame-h)
+              (max 0 (- y height 4))
+            (+ y em 4)))))
 
-(defun tip-childframe--corner-position (width _height)
-  "Compute (X . Y) position for childframe at upper-right corner."
-  (let* ((edges (window-absolute-pixel-edges))
-         (right (nth 2 edges))
-         (top (nth 1 edges)))
-    (cons (max 0 (- right width 10))
-          (+ top 10))))
+(defun tip-childframe--corner-position (width height)
+  "Compute (X . Y) position at the configured corner.
+Respects `tip-childframe-offset' for padding from edges."
+  (pcase-let ((`(,off-l ,off-r ,off-t) tip-childframe-offset))
+    (let ((frame-w (frame-outer-width))
+          (frame-h (frame-outer-height)))
+      (pcase tip-childframe-position
+        ('top-right    (cons (- frame-w width off-r) off-t))
+        ('top-left     (cons off-l off-t))
+        ('bottom-right (cons (- frame-w width off-r) (- frame-h height off-t)))
+        ('bottom-left  (cons off-l (- frame-h height off-t)))
+        (_             (cons (- frame-w width off-r) off-t))))))
 
 (defun tip-childframe--position (width height)
   "Compute position based on `tip-childframe-position'."
-  (pcase tip-childframe-position
-    ('at-point (tip-childframe--at-point-position width height))
-    ('corner (tip-childframe--corner-position width height))
-    (_ (tip-childframe--at-point-position width height))))
+  (if (eq tip-childframe-position 'at-point)
+      (tip-childframe--at-point-position width height)
+    (tip-childframe--corner-position width height)))
 
 ;;; * frame management
 

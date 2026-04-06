@@ -163,17 +163,42 @@
                  (and (numberp (car pos-at)) (numberp (cdr pos-at)))))
   (tip-childframe-hide)
 
-  ;; corner
-  (setq tip-childframe-position 'corner)
-  (tip-childframe-show "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"30\"><rect width=\"50\" height=\"30\" fill=\"#fdd\"/></svg>")
+  ;; all corner modes
+  (let ((test-svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"30\"><rect width=\"50\" height=\"30\" fill=\"#fdd\"/></svg>"))
+    (dolist (mode '(top-right top-left bottom-right bottom-left))
+      (setq tip-childframe-position mode)
+      (tip-childframe-show test-svg)
+      (redisplay t)
+      (sleep-for 0.2)
+      (let ((pos (frame-position tip-childframe--frame)))
+        (test--log "  %s position: %S" mode pos)
+        (test--check (format "%s has valid position" mode)
+                     (and (numberp (car pos)) (numberp (cdr pos))
+                          (>= (car pos) 0) (>= (cdr pos) 0))))
+      (tip-childframe-hide)))
+  (setq tip-childframe-position 'top-right) ;; restore default
+
+  ;; at-point follows cursor
+  (test--log "")
+  (test--log "--- Test 7b: at-point follows cursor ---")
+  (setq tip-childframe-position 'at-point)
+  (goto-char (point-min))
+  (tip-childframe-show "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"30\"><rect width=\"50\" height=\"30\" fill=\"#ddf\"/></svg>")
   (redisplay t)
   (sleep-for 0.2)
-  (let ((pos-corner (frame-position tip-childframe--frame)))
-    (test--log "  corner position: %S" pos-corner)
-    (test--check "corner has valid position"
-                 (and (numberp (car pos-corner)) (numberp (cdr pos-corner)))))
+  (let ((pos1 (cons (car (frame-position tip-childframe--frame))
+                     (cdr (frame-position tip-childframe--frame)))))
+    (goto-char (point-max))
+    (tip-childframe-show "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"50\" height=\"30\"><rect width=\"50\" height=\"30\" fill=\"#ddf\"/></svg>")
+    (redisplay t)
+    (sleep-for 0.2)
+    (let ((pos2 (frame-position tip-childframe--frame)))
+      (test--log "  pos at point-min: %S" pos1)
+      (test--log "  pos at point-max: %S" pos2)
+      (test--check "at-point position changes with cursor"
+                   (not (equal pos1 pos2)))))
   (tip-childframe-hide)
-  (setq tip-childframe-position 'at-point) ;; restore default
+  (setq tip-childframe-position 'top-right)
 
   ;; --- Test 8: cleanup ---
   (test--log "")
