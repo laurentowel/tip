@@ -123,7 +123,7 @@ Teal when OK, vermillion when errors exist.  Spins on server response."
   "Spin the logo (simulates a 50-fragment response)."
   (interactive)
   (unless tip-spinner-mode (tip-spinner-mode 1))
-  (tip-spinner--on-response '((fragments . [1]))))
+  (tip-spinner--on-response '((fragments . [((svg . "ok"))]))))
 
 ;;;###autoload
 (defun tip-spinner-demo-error ()
