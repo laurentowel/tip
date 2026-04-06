@@ -178,7 +178,6 @@ impl InkBounds {
     }
     fn is_empty(&self) -> bool { self.min_y > self.max_y }
     fn width(&self) -> f64 { (self.max_x - self.min_x).max(0.0) }
-    fn height(&self) -> f64 { (self.max_y - self.min_y).max(0.0) }
 }
 
 /// Find the ink extent of all rendered content in page coordinates.
