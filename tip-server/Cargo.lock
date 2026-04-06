@@ -2304,6 +2304,7 @@ dependencies = [
  "tip-protocol",
  "typst",
  "typst-kit",
+ "typst-library",
  "typst-svg",
  "typst-utils",
 ]

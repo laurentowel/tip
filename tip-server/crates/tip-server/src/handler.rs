@@ -40,18 +40,23 @@ impl Handler {
         if let Some(parent) = Path::new(&params.uri).parent() {
             let root = Self::find_project_root(parent).unwrap_or_else(|| parent.to_path_buf());
             self.world.set_root(root);
+            // Set main file vpath so relative imports resolve correctly
+            self.world.set_main_path(&params.uri);
         }
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
     }
 
     /// Walk up from `dir` looking for a project root marker.
-    /// Returns the first directory containing typst.toml or .git.
+    /// Checks: typst.toml, Kodama.toml, .git (in priority order).
     fn find_project_root(dir: &Path) -> Option<PathBuf> {
+        let markers = ["typst.toml", "Kodama.toml", ".git"];
         let mut current = dir;
         loop {
-            if current.join("typst.toml").exists() || current.join(".git").exists() {
-                return Some(current.to_path_buf());
+            for marker in &markers {
+                if current.join(marker).exists() {
+                    return Some(current.to_path_buf());
+                }
             }
             match current.parent() {
                 Some(parent) if parent != current => current = parent,

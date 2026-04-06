@@ -8,6 +8,7 @@ use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
+use typst_library::Feature;
 use typst_kit::download::{Downloader, ProgressSink};
 use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
 use typst_kit::package::PackageStorage;
@@ -64,6 +65,25 @@ impl TipWorld {
     /// Set the project root for resolving imports.
     pub fn set_root(&mut self, root: PathBuf) {
         self.root = Some(root);
+    }
+
+    /// Set the main file's virtual path to match a real file URI.
+    /// This ensures relative imports in the scope skeleton resolve correctly
+    /// (e.g., `#import "../_lib/kodama.typ"` from a file in a subdirectory).
+    pub fn set_main_path(&mut self, file_uri: &str) {
+        if let Some(root) = &self.root {
+            if let Ok(relative) = Path::new(file_uri).strip_prefix(root) {
+                let vpath = VirtualPath::new(relative);
+                let new_id = FileId::new_fake(vpath);
+                // Move existing source to new ID
+                let mut sources = self.sources.lock().unwrap();
+                if let Some(source) = sources.remove(&self.main) {
+                    let new_source = Source::new(new_id, source.text().to_string());
+                    sources.insert(new_id, new_source);
+                }
+                self.main = new_id;
+            }
+        }
     }
 
     /// Get the main FileId.
@@ -139,7 +159,8 @@ impl TipWorldBuilder {
     }
 
     pub fn build(self) -> TipWorld {
-        let library = Library::builder().build();
+        let features = [Feature::Html].into_iter().collect();
+        let library = Library::builder().with_features(features).build();
 
         let discovered: Fonts =
             FontSearcher::new().search_with(self.font_dirs.iter().map(|p| p.as_path()));

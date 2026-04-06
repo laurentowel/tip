@@ -326,11 +326,15 @@ Skips fragment containing AVOID-POS if given.
 Filters out nested math — only keeps outermost fragments.
 Diagrams (matching `tip-diagram-functions') are included as fragments."
   (let (ranges fragments)
-    ;; Collect math ranges
+    ;; Collect math ranges (skip empty: $$ or $ $)
     (dolist (pair (treesit-query-range 'typst "((math) @math)"))
       (when (and
              (>= (car pair) beg)
              (<= (cdr pair) end)
+             (> (- (cdr pair) (car pair)) 2) ;; skip $$ (length 2)
+             (not (string-blank-p
+                   (buffer-substring-no-properties
+                    (1+ (car pair)) (1- (cdr pair))))) ;; skip $ $
              (or (null avoid-pos)
                  (not (and (>= avoid-pos (car pair))
                            (<= avoid-pos (cdr pair))))))

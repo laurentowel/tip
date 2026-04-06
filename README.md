@@ -73,26 +73,31 @@ The compilation approach: for each math fragment, tip-server builds a synthetic 
 
 **Diagram calls inside `#let` are skipped.** If you write `#let canvas(..args) = cetz.canvas(..args)`, the `cetz.canvas` in the definition body is not treated as a renderable fragment — only actual invocations like `#canvas(...)` in the document body are previewed.
 
-**Project root detection.** tip-server walks up from the file's directory to find `.git` or `typst.toml` as the project root. This is needed for relative imports like `#import "../_lib/kodama.typ"`. If no marker is found, the file's parent directory is used.
+**Project root detection.** tip-server walks up from the file's directory to find `typst.toml`, `Kodama.toml`, or `.git` as the project root (checked in that order). The main file's virtual path is set relative to this root, so relative imports like `#import "../_lib/kodama.typ"` resolve correctly even from subdirectories. If no marker is found, the file's parent directory is used.
 
 **Nested math filtering.** Tree-sitter returns all math nodes including nested ones (e.g., `$a + #text[$b$]$` returns both outer and inner). TIP filters to only compile outermost fragments. Math inside diagram calls (e.g., `node((0,0), $A$)`) is part of the diagram, not a separate fragment.
 
-## Kodama Compatibility
+**Empty math skipped.** `$$` and `$ $` (empty or whitespace-only math) are never sent to the server.
 
-TIP works with [Kodama](https://github.com/AliasQli/kodama) knowledge forest files that target HTML export. When a `Kodama.toml` is detected in a parent directory, `tip-kodama-mode` activates automatically (shown as `TIP-kodama` in the mode line).
+## HTML-Targeting Documents and Kodama Compatibility
 
-Kodama files use `html.elem`, `html.frame`, and wrapper patterns like:
-```typst
-#let canvas(..args) = html.elem("div", attrs: (style: "text-align: center"))[
-  #html.frame(cetz.canvas(..args))
-]
-```
-In paged mode (what TIP uses for compilation), `html.elem` is a no-op. TIP correctly:
-- Skips diagram calls inside `#let` bindings (the wrapper definition)
-- Previews the wrapper call `#canvas(...)` when invoked in the document body
-- Overrides kodama's page layout via `page_setup` (emitted after the scope skeleton)
+TIP supports Typst documents targeting HTML export (`html.elem`, `html.frame`, etc.). This required several non-obvious design choices:
 
-To use kodama compatibility, ensure `tip-kodama.el` is on your load-path:
+### tip-server side
+
+- **HTML feature enabled.** The Typst `Library` is built with `Feature::Html` so `html.elem`, `html.frame`, etc. are defined. Without this, any scope skeleton containing `html.*` references (common in kodama files) would fail with "unknown variable: html". In paged export mode these are no-ops but must still parse.
+- **Kodama.toml as root marker.** `find_project_root` checks for `Kodama.toml` alongside `typst.toml` and `.git`. This is critical: kodama projects have files in `trees/references/` that import `../_lib/kodama.typ` — the root must be above `trees/` for relative imports to resolve.
+- **Main file vpath.** The synthetic compilation document uses a fake `FileId` whose virtual path matches the real file's position relative to root. Without this, relative imports in the scope skeleton resolve against `/tip-main.typ` (root dir) instead of the actual file's subdirectory.
+
+### tip.el side
+
+- **`#let` body filtering.** Diagram calls inside `#let` bindings are skipped — they're function definitions, not rendered content. This prevents false positives from patterns like `#let canvas(..args) = html.elem(...)[cetz.canvas(..args)]` where both `canvas(..args)` (pattern) and `cetz.canvas(..args)` (body) would otherwise match `tip-diagram-functions`.
+- **Wrapper call detection.** The user-defined `#canvas(...)` wrapper IS detected as a diagram (its name matches `tip-diagram-functions`). In paged mode, `html.elem` is a no-op, so the wrapper simply calls through to `cetz.canvas` and produces the expected output.
+
+### tip-kodama.el
+
+Separate file for kodama-specific integration. `tip-kodama-mode` auto-enables when `Kodama.toml` is found in a parent directory (shown as `TIP-kodama` in the mode line). Currently notifies the user; future work: custom preamble, html-aware page setup.
+
 ```elisp
 (require 'tip-kodama) ;; or autoloaded via tip-mode
 ```
@@ -110,6 +115,15 @@ cd tip-server && cargo build --release
 ```
 
 You can audit the full dependency tree with `cargo tree`.
+
+**Network monitoring**: To verify what tip-server does on the network, run it in a no-network sandbox:
+```bash
+unshare --net tip-server   # blocks all network — works if packages are cached
+```
+Or monitor connections with strace:
+```bash
+strace -f -e trace=network tip-server 2>/tmp/tip-net.log
+```
 
 ## Acknowledgements
 
