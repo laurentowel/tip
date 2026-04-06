@@ -446,9 +446,10 @@ height_pt, and depth_pt keys."
            (height-pt (alist-get 'height_pt frag))
            (depth-pt (alist-get 'depth_pt frag))
            (err (alist-get 'error frag)))
-      ;; Always show errors
-      (when err
-        (display-warning 'tip (format "%s" err) :error))
+      ;; Show errors as temporary inline overlay + echo area
+      (when (and err frag-beg frag-end)
+        (message "TIP: %s" err)
+        (tip--show-inline-error frag-beg frag-end err))
       (when (and frag-beg frag-end (> (length svg-data) 0))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
@@ -768,15 +769,48 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
       (dolist (lov label-ovs)
         (delete-overlay lov)))))
 
+;;; * inline error display
+
+(defface tip-error-face
+  '((t :foreground "#ff4444" :slant italic :height 0.85))
+  "Face for inline compilation error messages."
+  :group 'tip)
+
+(defun tip--show-inline-error (beg end err)
+  "Show ERR as a temporary overlay after the fragment at BEG..END.
+Auto-clears after 5 seconds or when the fragment is edited."
+  ;; Clear any existing error overlay here
+  (tip--clear-inline-errors beg end)
+  (let ((ov (make-overlay end end)))
+    (overlay-put ov 'tip-error t)
+    (overlay-put ov 'after-string
+                 (propertize (format " ← %s" (truncate-string-to-width err 60))
+                             'face 'tip-error-face))
+    ;; Auto-clear after 5 seconds
+    (run-with-timer 5 nil
+                    (lambda ()
+                      (when (overlay-buffer ov)
+                        (delete-overlay ov))))))
+
+(defun tip--clear-inline-errors (beg end)
+  "Remove tip error overlays in region BEG..END."
+  (dolist (ov (overlays-in beg (min (1+ end) (point-max))))
+    (when (overlay-get ov 'tip-error)
+      (delete-overlay ov))))
+
 ;;; * stale overlay cleanup
 
-(defun tip--cleanup-stale-overlays (_beg _end _len)
-  "Remove tip overlays that cover zero-width or deleted regions.
+(defun tip--cleanup-stale-overlays (beg end _len)
+  "Remove stale tip and error overlays near the change region.
 Called from `after-change-functions'."
+  ;; Remove zero-width tip overlays
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
       (when (>= (overlay-start ov) (overlay-end ov))
-        (delete-overlay ov)))))
+        (delete-overlay ov))))
+  ;; Clear inline errors near the edit
+  (tip--clear-inline-errors (max (point-min) (1- beg))
+                            (min (point-max) (1+ end))))
 
 ;;; * cleanup
 
