@@ -970,6 +970,18 @@ Called from `after-change-functions'."
         (tip-render-all)))))
 
 ;;;###autoload
+(defun tip-restart ()
+  "Full reset: restart server, clear all overlays, re-enable tip-mode."
+  (interactive)
+  (tip-shutdown)
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when tip-mode
+        (tip-mode -1))))
+  (tip-ensure t)
+  (tip-mode 1))
+
+;;;###autoload
 (defun tip-server-info ()
   "Show tip-server status: binary path, modification time, PID."
   (interactive)
