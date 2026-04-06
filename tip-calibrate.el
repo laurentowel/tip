@@ -42,6 +42,14 @@
     (insert " ")
     (put-text-property beg (point) 'display `(space :align-to (,px)))))
 
+(defun tip-calibrate--bar ()
+  "Insert a full-height 1-pixel separator bar (valign technique)."
+  (let ((beg (point)))
+    (insert " ")
+    (let ((ov (make-overlay beg (point))))
+      (overlay-put ov 'display '(space :width (1)))
+      (overlay-put ov 'face '(:inverse-video t)))))
+
 (defun tip-calibrate--insert-grid (svg-a h-a d-a svg-fx h-fx d-fx)
   "Insert calibration grid with overlays."
   (let* ((inhibit-read-only t)
@@ -53,35 +61,44 @@
     (insert (format "Current: tip-scale=%.2f  tip-baseline-offset=%.1f\n\n"
                     tip-scale tip-baseline-offset))
     ;; Header row
-    (insert "scale\\offset")
+    (insert (propertize "scale\\offset" 'face 'bold))
     (dotimes (j (length tip-calibrate-offsets))
       (tip-calibrate--align-to (+ label-px (* j col-px)))
-      (insert (format "%.1f" (nth j tip-calibrate-offsets))))
+      (tip-calibrate--bar)
+      (insert (format " %.1f" (nth j tip-calibrate-offsets))))
     (insert "\n")
+    ;; Horizontal rule
+    (let ((total-px (+ label-px (* (length tip-calibrate-offsets) col-px))))
+      (let ((beg (point)))
+        (insert " ")
+        (put-text-property beg (point) 'display
+                           `(space :width (,total-px) :height (1)))
+        (put-text-property beg (point) 'face '(:strike-through t)))
+      (insert "\n"))
     ;; Grid rows
     (dolist (sc tip-calibrate-scales)
-      (let ((current-row-p nil))
-        (insert (format "%.2f" sc))
-        (dotimes (j (length tip-calibrate-offsets))
-          (let ((off (nth j tip-calibrate-offsets)))
-            (tip-calibrate--align-to (+ label-px (* j col-px)))
-            ;; Mark current settings
-            (when (and (= sc tip-scale) (= off tip-baseline-offset))
-              (setq current-row-p t)
-              (insert (propertize "*" 'face 'bold)))
-            ;; "a" then rendered $a$
-            (insert "a")
-            (let ((beg (point)))
-              (insert "$a$")
-              (overlay-put
-               (make-overlay beg (point))
-               'display (tip-calibrate--make-spec svg-a h-a d-a sc off)))
-            (insert " f(x)")
-            (let ((beg (point)))
-              (insert "$f(x)$")
-              (overlay-put
-               (make-overlay beg (point))
-               'display (tip-calibrate--make-spec svg-fx h-fx d-fx sc off))))))
+      (insert (format "%.2f" sc))
+      (dotimes (j (length tip-calibrate-offsets))
+        (let ((off (nth j tip-calibrate-offsets)))
+          (tip-calibrate--align-to (+ label-px (* j col-px)))
+          (tip-calibrate--bar)
+          (insert " ")
+          ;; Mark current settings
+          (when (and (= sc tip-scale) (= off tip-baseline-offset))
+            (insert (propertize ">" 'face '(:foreground "red"))))
+          ;; "a" then rendered $a$
+          (insert "a")
+          (let ((beg (point)))
+            (insert "$a$")
+            (overlay-put
+             (make-overlay beg (point))
+             'display (tip-calibrate--make-spec svg-a h-a d-a sc off)))
+          (insert " f(x)")
+          (let ((beg (point)))
+            (insert "$f(x)$")
+            (overlay-put
+             (make-overlay beg (point))
+             'display (tip-calibrate--make-spec svg-fx h-fx d-fx sc off)))))
       (insert "\n"))
     ;; Footer
     (insert (format "\n  M-x tip-calibrate-apply %.2f %.1f\n"
