@@ -587,31 +587,32 @@ Otherwise use baseline alignment for inline math."
 ;;; * fragment detection
 
 (defun tip--get-bounds-of-math-at-point (x)
-  "Return (BEG . END) of math or diagram fragment at position X, or nil."
-  (or
-   ;; Check math ranges
-   (let* ((ranges (treesit-query-range 'typst "((math) @math)"))
-          (valid (cl-remove-if-not
-                  (lambda (r) (and (<= (car r) x) (< x (cdr r))))
-                  ranges)))
-     (when valid (car (sort valid :lessp #'< :key #'car))))
-   ;; Check diagram ranges (walk tree upward from point)
-   (let ((node (treesit-node-at x 'typst))
-         (found nil))
-     (while (and node (not found))
-       (if (tip--diagram-node-p node)
-           (setq found node)
-         (setq node (treesit-node-parent node))))
-     ;; If at # prefix, the call node is a sibling — check x+1
-     (when (and (not found) (< x (point-max)) (eq (char-after x) ?#))
-       (setq node (treesit-node-at (1+ x) 'typst))
-       (while (and node (not found))
-         (if (tip--diagram-node-p node)
-             (setq found node)
-           (setq node (treesit-node-parent node)))))
-     (when found
-       (cons (1- (treesit-node-start found)) ;; include #
-             (treesit-node-end found))))))
+  "Return (BEG . END) of math or diagram fragment at position X, or nil.
+Uses local tree-sitter node walk — O(depth) not O(buffer)."
+  (let ((node (treesit-node-at x 'typst)))
+    (or
+     ;; Check if we're inside a math node (walk up)
+     (let ((n node))
+       (while (and n (not (equal "math" (treesit-node-type n))))
+         (setq n (treesit-node-parent n)))
+       (when n
+         (cons (treesit-node-start n) (treesit-node-end n))))
+     ;; Check diagram ranges (walk up for call node)
+     (let ((n node) (found nil))
+       (while (and n (not found))
+         (if (tip--diagram-node-p n)
+             (setq found n)
+           (setq n (treesit-node-parent n))))
+       ;; If at # prefix, the call node is a sibling — check x+1
+       (when (and (not found) (< x (point-max)) (eq (char-after x) ?#))
+         (setq n (treesit-node-at (1+ x) 'typst))
+         (while (and n (not found))
+           (if (tip--diagram-node-p n)
+               (setq found n)
+             (setq n (treesit-node-parent n)))))
+       (when found
+         (cons (1- (treesit-node-start found)) ;; include #
+               (treesit-node-end found)))))))
 
 ;;; * live preview (childframe-based, via tip-childframe.el)
 
