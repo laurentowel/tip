@@ -67,27 +67,47 @@ Loaded lazily from spinner/*.svg files.")
   (setq tip-spinner--index 0)
   (force-mode-line-update))
 
-(defvar tip-spinner--demo-cookie nil
-  "Mode-line entry added by the demo, removed on stop.")
+(defvar-local tip-spinner--mode-cookie nil
+  "Mode-line entry added by tip-spinner-mode.")
+
+;;;###autoload
+(define-minor-mode tip-spinner-mode
+  "Persistent spinning Typst logo in the mode line."
+  :init-value nil
+  :lighter ""
+  (if tip-spinner-mode
+      (progn
+        (tip-spinner--load-frames)
+        (unless tip-spinner--mode-cookie
+          (setq tip-spinner--mode-cookie
+                '(:eval (or (and (fboundp 'tip-spinner--image)
+                                 (tip-spinner--image))
+                            "")))
+          (push tip-spinner--mode-cookie mode-line-format))
+        (tip-spinner-start))
+    (tip-spinner-stop)
+    (when tip-spinner--mode-cookie
+      (setq mode-line-format
+            (delq tip-spinner--mode-cookie mode-line-format))
+      (setq tip-spinner--mode-cookie nil))))
 
 ;;;###autoload
 (defun tip-spinner-demo ()
-  "Show the spinning Typst logo in the mode line for 5 seconds."
+  "Spin the Typst logo for 5 seconds."
   (interactive)
-  (tip-spinner--load-frames)
-  (unless tip-spinner--demo-cookie
-    (setq tip-spinner--demo-cookie
-          '(:eval (or (and (fboundp 'tip-spinner--image) (tip-spinner--image)) "")))
-    (push tip-spinner--demo-cookie mode-line-format))
-  (tip-spinner-start)
+  (tip-spinner-mode 1)
   (run-with-timer 5 nil
                   (lambda ()
-                    (tip-spinner-stop)
-                    (setq mode-line-format
-                          (delq tip-spinner--demo-cookie mode-line-format))
-                    (setq tip-spinner--demo-cookie nil)
-                    (force-mode-line-update)))
+                    (when tip-spinner-mode
+                      (tip-spinner-mode -1))))
   (message "Spinning for 5 seconds..."))
+
+;;;###autoload
+(defun tip-spinner-setup ()
+  "Enable tip-spinner-mode in typst-ts-mode buffers.
+Add to your config: (add-hook \\='typst-ts-mode-hook #\\='tip-spinner-setup)"
+  (when (derived-mode-p 'typst-ts-mode)
+    (tip-spinner-mode 1)))
 
 (provide 'tip-spinner)
 
