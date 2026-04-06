@@ -791,38 +791,63 @@ Like `org-edit-special' (C-c ').  Shows live preview while editing.
       (pop-to-buffer edit-buf)
       (message "Edit fragment. C-c C-c to commit, C-c C-k to abort."))))
 
-(defun tip-edit--update-preview (edit-buf result)
-  "Update EDIT-BUF header line with compiled preview from RESULT."
-  (when (buffer-live-p edit-buf)
-    (let* ((frags (alist-get 'fragments result))
-           (f (and frags (> (length frags) 0) (aref frags 0)))
-           (svg (and f (alist-get 'svg f)))
-           (h (and f (alist-get 'height_pt f))))
-      (when (and svg (> (length svg) 0) h (> h 0))
-        (with-current-buffer edit-buf
-          (setq header-line-format
-                (propertize " preview"
-                            'display
-                            (list 'image
-                                  :type 'svg
-                                  :data svg
-                                  :height '(2.0 . em)
-                                  :ascent 'center))))))))
+(defun tip-edit--update-preview (_edit-buf result)
+  "Show compiled preview in a side *tip-preview* buffer."
+  (let* ((frags (alist-get 'fragments result))
+         (f (and frags (> (length frags) 0) (aref frags 0)))
+         (svg (and f (alist-get 'svg f)))
+         (h (and f (alist-get 'height_pt f))))
+    (when (and svg (> (length svg) 0) h (> h 0))
+      (let ((preview-buf (get-buffer-create "*tip-preview*")))
+        (with-current-buffer preview-buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert-image
+             (list 'image
+                   :type 'svg
+                   :data svg
+                   :max-width (window-body-width nil t)
+                   :ascent 'center))
+            (insert "\n"))
+          (setq buffer-read-only t))
+        ;; Show in side window if not already visible
+        (unless (get-buffer-window preview-buf)
+          (display-buffer preview-buf
+                          '(display-buffer-in-side-window
+                            (side . bottom)
+                            (window-height . 0.3))))))))
+
+(defvar-local tip-edit--content-cache nil
+  "Cache of last compiled content in edit buffer.")
 
 (defun tip-edit--live-preview ()
-  "Compile current edit buffer content and show preview in header line."
+  "Compile edit buffer content and show preview in side window.
+Splices current edit text into source buffer before compiling."
   (let ((edit-buf (current-buffer))
         (src-buf tip-edit--source-buffer)
-        (ov tip-edit--source-overlay))
-    (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov))
+        (ov tip-edit--source-overlay)
+        (new-text (buffer-substring-no-properties (point-min) (point-max))))
+    ;; Skip if content unchanged
+    (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
+               (not (equal new-text tip-edit--content-cache)))
+      (setq tip-edit--content-cache new-text)
       (let ((beg (overlay-start ov))
             (end (overlay-end ov)))
         (with-current-buffer src-buf
           (tip-ensure)
-          (tip--sync-buffer)
-          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-                (byte-start (1- (position-bytes beg)))
-                (byte-end (1- (position-bytes end))))
+          ;; Splice edit text into source buffer content for sync
+          (let* ((full-text (buffer-substring-no-properties (point-min) (point-max)))
+                 (before (substring full-text 0 (1- beg)))
+                 (after (substring full-text (1- end)))
+                 (spliced (concat before new-text after))
+                 (fg (tip--color-to-hex (face-attribute 'default :foreground)))
+                 (byte-start (string-bytes before))
+                 (byte-end (+ byte-start (string-bytes new-text))))
+            ;; Sync the spliced content
+            (tip--send-request "sync"
+                               `(("uri" . ,(buffer-file-name))
+                                 ("content" . ,spliced)))
+            ;; Compile the fragment at the new position
             (tip--send-request
              "compile_fragments"
              `(("uri" . ,(buffer-file-name))
@@ -871,6 +896,13 @@ Like `org-edit-special' (C-c ').  Shows live preview while editing.
   "Clean up edit buffer state."
   (when tip-edit--preview-timer
     (cancel-timer tip-edit--preview-timer))
+  ;; Kill preview window
+  (when-let* ((preview-buf (get-buffer "*tip-preview*"))
+              (win (get-buffer-window preview-buf)))
+    (delete-window win))
+  (when-let* ((preview-buf (get-buffer "*tip-preview*")))
+    (kill-buffer preview-buf))
+  ;; Kill edit buffer
   (let ((buf (current-buffer)))
     (quit-window t)
     (when (buffer-live-p buf)
