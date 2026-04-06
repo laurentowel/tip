@@ -60,6 +60,12 @@ Used in corner mode to keep childframe away from frame borders."
                (integer :tag "Top"))
   :group 'tip-childframe)
 
+(defcustom tip-childframe-scale 1.5
+  "Scale factor for SVG display in the childframe.
+Values > 1.0 make the live preview larger than inline overlays."
+  :type 'float
+  :group 'tip-childframe)
+
 (defvar tip-childframe--frame nil
   "The childframe for preview.")
 
@@ -71,7 +77,7 @@ Used in corner mode to keep childframe away from frame borders."
     (no-focus-on-map . t)
     (min-width . 0)
     (min-height . 0)
-    (internal-border-width . 1)
+    (internal-border-width . 0)
     (left-fringe . 0)
     (right-fringe . 0)
     (vertical-scroll-bars . nil)
@@ -195,17 +201,21 @@ Respects `tip-childframe-offset' for padding from edges."
 ;;; * public API
 
 (defun tip-childframe-show (svg-data)
-  "Show SVG-DATA in a childframe near the cursor."
+  "Show SVG-DATA in a childframe near the cursor, scaled by `tip-childframe-scale'."
   (let* ((buf (tip-childframe--ensure-buffer))
+         (scale (or tip-childframe-scale 1.0))
+         (scaled-max-w (round (* tip-childframe-max-pixel-width scale)))
+         (scaled-max-h (round (* tip-childframe-max-pixel-height scale)))
          (img (list 'image
                     :type 'svg
                     :data svg-data
-                    :max-width tip-childframe-max-pixel-width
-                    :max-height tip-childframe-max-pixel-height
+                    :max-width scaled-max-w
+                    :max-height scaled-max-h
+                    :scale scale
                     :ascent 'center))
          (size (image-size img t))
-         (w (min tip-childframe-max-pixel-width (+ (car size) 8)))
-         (h (min tip-childframe-max-pixel-height (+ (cdr size) 8))))
+         (w (min scaled-max-w (+ (car size) 4)))
+         (h (min scaled-max-h (+ (cdr size) 4))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)

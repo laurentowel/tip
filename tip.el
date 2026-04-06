@@ -713,11 +713,18 @@ Works in both normal typst-ts-mode and tip-edit buffers."
       (setq tip-live--content-cache "")))))
 
 ;;;###autoload
+(defun tip-live--on-buffer-change (&rest _)
+  "Hide childframe when switching away from a tip-mode buffer."
+  (unless (and (eq major-mode 'typst-ts-mode)
+               (bound-and-true-p tip-mode))
+    (tip-childframe-hide)))
+
 (defun tip-live-setup ()
   "Enable live preview for math fragments via childframe."
   (interactive)
   (setq tip-live--timer
-        (run-with-idle-timer 0.3 t #'tip-live--compile-partial)))
+        (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
+  (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change))
 
 ;;;###autoload
 (defun tip-live-teardown ()
@@ -726,6 +733,7 @@ Works in both normal typst-ts-mode and tip-edit buffers."
   (when tip-live--timer
     (cancel-timer tip-live--timer)
     (setq tip-live--timer nil))
+  (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
   (tip-childframe-hide)
   (setq tip-live--content-cache ""))
 
