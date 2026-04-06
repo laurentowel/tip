@@ -6,3 +6,6 @@ members = [
     "crates/tip-server",
     "testkit",
 ]
+
+[workspace.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
