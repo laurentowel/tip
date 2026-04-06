@@ -38,6 +38,8 @@ But it **breaks baseline consistency**. `bounded()` changes the coordinate syste
 
 Typst's `Frame` struct has a `baseline` field, but it's only set on inner content frames, not page frames. Calling `frame.has_baseline()` on the compiled page returns `false` for math output. Walking the frame tree to find `has_baseline()` returns `None` for all frames in our compiled output.
 
+> **Remark (future direction):** The baseline field IS set on math equation frames when the **full document** is compiled — not on the page frame, but on the inner `Group` frames that contain each equation. This means compiling the entire document once and walking the frame tree could give exact baselines without any heuristics. See the "Future: Full-Document Compilation" section at the end of this essay.
+
 ### Attempt 4: First text item y-position
 
 Text items in the SVG frame are positioned at their baseline y-coordinate. Using the first text item's y-position as the baseline works for simple expressions. But with `bounded()` active, the coordinate origin shifts per expression, making the y-positions incomparable across different fragments.
@@ -242,6 +244,68 @@ Although `bounded()` breaks baseline consistency, it IS included in the default 
 ```
 
 It's available for future use (e.g., measuring glyph bounds for special purposes) but is NOT applied to the math fragment during compilation. The anti-clipping is handled by generous margins + SVG cropping instead.
+
+## Future: Full-Document Compilation
+
+The current approach compiles each math fragment in isolation via a synthetic document. This works but requires scope skeleton extraction, closing delimiter tracking, and baseline heuristics. There is a fundamentally better approach that we haven't implemented yet.
+
+### The Idea
+
+Compile the **full document** once as a `PagedDocument`. The resulting frame tree contains every math equation as a nested content frame. These inner frames have:
+
+- `frame.baseline()` — the **exact** baseline position, set by the math layout engine
+- `frame.width()` / `frame.height()` — exact bounding box
+- Position within the page — where the equation sits in the document
+
+Instead of building N synthetic documents and estimating baselines, we:
+
+1. Compile the full document once (comemo caches intermediate results)
+2. Walk the frame tree to find all math equation frames
+3. For each math frame, read `baseline()` and bounds directly
+4. Render each frame to SVG individually
+
+### Why This Would Be Better
+
+| Aspect | Current (per-fragment) | Full-document |
+|--------|----------------------|---------------|
+| Compilations | N synthetic docs | 1 real doc |
+| Baselines | Heuristic (largest text item) | Exact from layout engine |
+| Scope | Skeleton extraction + closers | Natural (it's the real doc) |
+| Correctness | Approximation | Exact |
+| Complexity | High (skeleton bugs, delimiter issues) | Lower (no synthetic docs) |
+
+### Challenges
+
+**Source-to-frame mapping.** The frame tree is spatial (page coordinates), not indexed by source byte range. Mapping each math frame back to its `$...$` in the source requires source mapping infrastructure. Tinymist does this for click-to-jump (`source_mapping`, `jump_from_click`). The typst crate likely has the primitives but they may not be in the published API.
+
+**Per-frame SVG export.** `typst_svg::svg()` renders an entire page. We'd need to render individual frames. Options:
+- `typst_svg` may expose frame-level rendering
+- We could create a single-page document containing just one frame and render that
+- We could render the full page and crop per-equation (similar to current SVG cropping but with exact coordinates)
+
+**Page boundaries.** A long document spans multiple pages. Math equations on different pages have different frame coordinates. The frame tree walker needs to iterate all pages.
+
+**Incremental updates.** When the user edits one fragment, recompiling the entire document is more expensive than recompiling one synthetic doc. However, comemo should make this fast — only the changed region and its dependents get recomputed.
+
+### Research Pointers
+
+| What | Where |
+|------|-------|
+| Tinymist source mapping | `.ref/tinymist-ref/crates/tinymist-query/src/` |
+| Tinymist click-to-jump | `.ref/tinymist-ref/crates/tinymist-query/src/jump/` |
+| Typst Frame struct | `typst::layout::Frame` (published crate) |
+| Frame.baseline() | Returns `Abs` if set, used by inner math frames |
+| typst-svg per-page rendering | `typst_svg::svg()` takes a `&Page` |
+
+### Migration Path
+
+This doesn't need to be all-or-nothing. A hybrid approach:
+
+1. **Phase 1 (current):** Per-fragment synthetic compilation with heuristic baselines. Works today.
+2. **Phase 2:** Compile full document, use frame tree for baseline/bounds, but still render per-fragment SVGs via cropping. Gets exact baselines without changing the SVG rendering pipeline.
+3. **Phase 3:** Per-frame SVG rendering. Eliminates SVG cropping entirely.
+
+Phase 2 is the sweet spot — exact baselines with minimal architecture change.
 
 ## Files
 
