@@ -668,6 +668,8 @@ Automatically renders visible fragments and enables live preview."
         (preview-toggle-mode 1)
         ;; Live preview via eldoc
         (tip-live-setup)
+        ;; C-c ' to edit fragment in indirect buffer
+        (tip-edit-setup-keys)
         ;; Render visible fragments after a short delay (server needs to start)
         (run-with-timer 0.5 nil
                         (lambda ()
@@ -718,6 +720,166 @@ Automatically renders visible fragments and enables live preview."
       (delete-process tip--server-process))
     (setq tip--server-process nil)
     (message "tip-server shut down")))
+
+;;; * indirect edit (C-c ')
+
+(defvar-local tip-edit--source-buffer nil
+  "The source buffer this edit buffer is linked to.")
+(defvar-local tip-edit--source-overlay nil
+  "Overlay in the source buffer marking the edited region.")
+(defvar-local tip-edit--preview-timer nil
+  "Idle timer for live preview in edit buffer.")
+
+(defvar tip-edit-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'tip-edit-commit)
+    (define-key map (kbd "C-c C-k") #'tip-edit-abort)
+    map)
+  "Keymap for `tip-edit-mode'.")
+
+(define-minor-mode tip-edit-mode
+  "Minor mode active in tip indirect edit buffers.
+\\[tip-edit-commit] to save changes back, \\[tip-edit-abort] to cancel."
+  :lighter " TIP-Edit"
+  :keymap tip-edit-mode-map)
+
+;;;###autoload
+(defun tip-edit ()
+  "Open an indirect edit buffer for the math/diagram at point.
+Like `org-edit-special' (C-c ').  Shows live preview while editing.
+\\[tip-edit-commit] saves back, \\[tip-edit-abort] cancels."
+  (interactive)
+  (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+    (unless bounds
+      (user-error "No math or diagram at point"))
+    (let* ((beg (car bounds))
+           (end (cdr bounds))
+           (text (buffer-substring-no-properties beg end))
+           (src-buf (current-buffer))
+           ;; Create overlay on source to mark region
+           (ov (make-overlay beg end))
+           ;; Create edit buffer
+           (edit-buf (generate-new-buffer
+                      (format "*tip-edit:%s*"
+                              (truncate-string-to-width
+                               (string-trim text) 30)))))
+      ;; Mark source region
+      (overlay-put ov 'face 'highlight)
+      (overlay-put ov 'tip-edit t)
+      (overlay-put ov 'modification-hooks
+                   (list (lambda (&rest _)
+                           (user-error "Region being edited in %s" edit-buf))))
+      ;; Set up edit buffer
+      (with-current-buffer edit-buf
+        (insert text)
+        (goto-char (point-min))
+        ;; Use typst-ts-mode if available for syntax highlighting
+        (when (fboundp 'typst-ts-mode)
+          (condition-case nil (typst-ts-mode) (error nil)))
+        (tip-edit-mode 1)
+        (setq-local tip-edit--source-buffer src-buf)
+        (setq-local tip-edit--source-overlay ov)
+        ;; Live preview: compile on idle and show in eldoc/header
+        (setq-local tip-edit--preview-timer
+                    (run-with-idle-timer
+                     0.3 t
+                     (lambda ()
+                       (when (and (buffer-live-p edit-buf)
+                                  (eq (current-buffer) edit-buf))
+                         (tip-edit--live-preview))))))
+      ;; Display edit buffer
+      (pop-to-buffer edit-buf)
+      (message "Edit fragment. C-c C-c to commit, C-c C-k to abort."))))
+
+(defun tip-edit--update-preview (edit-buf result)
+  "Update EDIT-BUF header line with compiled preview from RESULT."
+  (when (buffer-live-p edit-buf)
+    (let* ((frags (alist-get 'fragments result))
+           (f (and frags (> (length frags) 0) (aref frags 0)))
+           (svg (and f (alist-get 'svg f)))
+           (h (and f (alist-get 'height_pt f))))
+      (when (and svg (> (length svg) 0) h (> h 0))
+        (with-current-buffer edit-buf
+          (setq header-line-format
+                (propertize " preview"
+                            'display
+                            (list 'image
+                                  :type 'svg
+                                  :data svg
+                                  :height '(2.0 . em)
+                                  :ascent 'center))))))))
+
+(defun tip-edit--live-preview ()
+  "Compile current edit buffer content and show preview in header line."
+  (let ((edit-buf (current-buffer))
+        (src-buf tip-edit--source-buffer)
+        (ov tip-edit--source-overlay))
+    (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov))
+      (let ((beg (overlay-start ov))
+            (end (overlay-end ov)))
+        (with-current-buffer src-buf
+          (tip-ensure)
+          (tip--sync-buffer)
+          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+                (byte-start (1- (position-bytes beg)))
+                (byte-end (1- (position-bytes end))))
+            (tip--send-request
+             "compile_fragments"
+             `(("uri" . ,(buffer-file-name))
+               ("fragments" . ,(vector `(("start" . ,byte-start)
+                                          ("end" . ,byte-end))))
+               ("color" . ,fg)
+               ("preamble" . ,(tip--build-preamble)))
+             (lambda (result)
+               (tip-edit--update-preview edit-buf result)))))))))
+
+
+(defun tip-edit-commit ()
+  "Write edit buffer contents back to source and close."
+  (interactive)
+  (unless (and tip-edit--source-buffer tip-edit--source-overlay)
+    (user-error "Not in a tip edit buffer"))
+  (let* ((new-text (buffer-substring-no-properties (point-min) (point-max)))
+         (src-buf tip-edit--source-buffer)
+         (ov tip-edit--source-overlay)
+         (beg (overlay-start ov))
+         (end (overlay-end ov)))
+    ;; Replace in source buffer
+    (with-current-buffer src-buf
+      (save-excursion
+        (delete-overlay ov)
+        (goto-char beg)
+        (delete-region beg end)
+        (insert new-text)))
+    ;; Cleanup
+    (tip-edit--cleanup)
+    (pop-to-buffer src-buf)
+    (message "Fragment updated.")))
+
+(defun tip-edit-abort ()
+  "Cancel editing and discard changes."
+  (interactive)
+  (let ((src-buf tip-edit--source-buffer))
+    (when tip-edit--source-overlay
+      (delete-overlay tip-edit--source-overlay))
+    (tip-edit--cleanup)
+    (when (buffer-live-p src-buf)
+      (pop-to-buffer src-buf))
+    (message "Edit cancelled.")))
+
+(defun tip-edit--cleanup ()
+  "Clean up edit buffer state."
+  (when tip-edit--preview-timer
+    (cancel-timer tip-edit--preview-timer))
+  (let ((buf (current-buffer)))
+    (quit-window t)
+    (when (buffer-live-p buf)
+      (kill-buffer buf))))
+
+;; Bind C-c ' in tip-mode
+(defun tip-edit-setup-keys ()
+  "Set up keybindings for tip-edit."
+  (local-set-key (kbd "C-c '") #'tip-edit))
 
 (provide 'tip)
 
