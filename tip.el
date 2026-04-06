@@ -417,7 +417,8 @@ Returns a list of (BEG . END) ranges."
 
 (defun tip--build-preamble ()
   "Build a Typst preamble that syncs Emacs theme colors.
-Text size comes from the document itself (via scope skeleton)."
+Text size override is sent separately via page_setup (after skeleton)
+so it takes precedence over document-level #set text rules."
   (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
         (bg (tip--color-to-hex (face-attribute 'default :background))))
     (concat
