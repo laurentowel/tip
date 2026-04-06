@@ -220,6 +220,22 @@ for found in &results {
 | Scope skeleton bugs (html, delimiters) | **Eliminated** |
 | `DEFAULT_RENDERING_PREAMBLE` | Possibly eliminated (bounded() may not be needed) |
 
+## The Hybrid: Full-Doc Baselines + Per-Fragment Rendering
+
+The font-size tension (full-doc renders at document size, but Emacs wants uniform sizing) has a clean resolution: **ascent is a ratio, not an absolute quantity.**
+
+`ascent = (height - depth) / height` is scale-invariant. A fraction compiled at 14pt and at 11pt has different absolute dimensions but the same ascent percentage — the baseline sits at the same relative position.
+
+The hybrid approach:
+
+1. **Full-doc compile** → walk frame tree → for each math frame, compute `ascent_ratio = baseline / height` from `frame.baseline()` and `frame.height()`. These are exact.
+2. **Per-fragment compile** at fixed 11pt → get SVGs at uniform size (current approach, with scope skeletons).
+3. **Apply** the exact ascent ratio from step 1 to the image spec from step 2.
+
+Step 1 runs once per buffer sync. Step 2 runs per fragment as today. The per-fragment approach handles font size control and page setup. The full-doc approach provides exact baselines. Each does what it's good at.
+
+This is an incremental improvement over the current approach — no architecture rewrite, just an additional compilation pass for baseline data.
+
 ## What Remains Unchanged
 
 - The protocol: still JSON over stdio with `sync` + `compile_fragments`
