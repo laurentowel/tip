@@ -668,6 +668,79 @@ Automatically renders visible fragments and enables live preview."
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
     (preview-toggle-mode -1)))
 
+;;; * avy-style jump to fragment
+
+(defcustom tip-jump-keys "asdfjkl;ghqweruioptyzxcvbnm"
+  "Characters used for avy-style jump labels, in priority order.
+Home row first for qwerty ergonomics."
+  :type 'string
+  :group 'tip)
+
+;;;###autoload
+(defun tip-jump ()
+  "Jump to a math/diagram fragment using avy-style labels.
+Displays a short label on each visible fragment, then reads a key
+to jump to the corresponding fragment and open it."
+  (interactive)
+  (let* ((ovs (seq-filter
+               (lambda (ov)
+                 (and (eq (overlay-get ov 'tip) 'tip)
+                      (overlay-get ov 'display)
+                      ;; Only visible overlays
+                      (let ((start (overlay-start ov)))
+                        (and (>= start (window-start))
+                             (<= start (window-end))))))
+               (overlays-in (point-min) (point-max))))
+         (n (length ovs))
+         (keys tip-jump-keys)
+         (labels nil)
+         (label-ovs nil))
+    (when (= n 0)
+      (user-error "No visible fragments to jump to"))
+    ;; Generate labels
+    (if (<= n (length keys))
+        ;; Single-char labels
+        (dotimes (i n)
+          (push (string (aref keys i)) labels))
+      ;; Two-char labels for large counts
+      (let ((nkeys (length keys)))
+        (dotimes (i n)
+          (push (format "%c%c"
+                        (aref keys (/ i nkeys))
+                        (aref keys (% i nkeys)))
+                labels))))
+    (setq labels (nreverse labels))
+    ;; Show labels on overlays
+    (unwind-protect
+        (progn
+          (cl-loop for ov in ovs
+                   for label in labels
+                   do (let ((label-ov (make-overlay (overlay-start ov)
+                                                     (1+ (overlay-start ov)))))
+                        (overlay-put label-ov 'display
+                                     (propertize (format " %s " label)
+                                                 'face '(:background "#ff6600"
+                                                         :foreground "white"
+                                                         :weight bold)))
+                        (overlay-put label-ov 'priority 100)
+                        (overlay-put label-ov 'tip-jump t)
+                        (push label-ov label-ovs)))
+          (redisplay t)
+          ;; Read key(s)
+          (let* ((key-len (length (car labels)))
+                 (input (string (read-char (format "Jump (%d fragments):" n))))
+                 (input (if (> key-len 1)
+                            (concat input (string (read-char)))
+                          input))
+                 (idx (cl-position input labels :test #'equal)))
+            (when idx
+              (let ((target-ov (nth idx ovs)))
+                (goto-char (overlay-start target-ov))
+                (preview-toggle-open-at-point)))))
+      ;; Always clean up label overlays
+      (dolist (lov label-ovs)
+        (delete-overlay lov)))))
+
 ;;; * stale overlay cleanup
 
 (defun tip--cleanup-stale-overlays (_beg _end _len)
@@ -869,8 +942,9 @@ Reuses the shared `tip-live--show-preview' / `tip-live--handle-result'."
 
 ;; Bind C-c ' in tip-mode
 (defun tip-edit-setup-keys ()
-  "Set up keybindings for tip-edit."
-  (local-set-key (kbd "C-c '") #'tip-edit))
+  "Set up keybindings for tip-edit and tip-jump."
+  (local-set-key (kbd "C-c '") #'tip-edit)
+  (local-set-key (kbd "C-c j") #'tip-jump))
 
 (provide 'tip)
 
