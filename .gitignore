@@ -6,3 +6,5 @@ tip-server/target/
 tip-server/test-output/
 .ref/
 .claude/
+*.#*
+#*#
