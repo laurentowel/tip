@@ -12,11 +12,29 @@
 
 (require 'tip)
 
-(defvar tip-calibrate-scales '(0.90 0.95 1.00 1.05 1.10)
-  "Scale values for calibration rows.")
+(defcustom tip-calibrate-scale-params '(:min 0.85 :max 1.15 :step 0.05)
+  "Range for tip-scale in the calibration grid.
+Plist with :min, :max, :step."
+  :type '(plist :key-type keyword :value-type float)
+  :group 'tip)
 
-(defvar tip-calibrate-offsets '(-3.0 -2.5 -2.0 -1.5 -1.0 -0.5 0.0)
-  "Baseline offset values for calibration columns.")
+(defcustom tip-calibrate-offset-params '(:min -5.0 :max -1.5 :step 0.5)
+  "Range for tip-baseline-offset in the calibration grid.
+Plist with :min, :max, :step."
+  :type '(plist :key-type keyword :value-type float)
+  :group 'tip)
+
+(defun tip-calibrate--range (params)
+  "Generate a list of values from PARAMS plist (:min :max :step)."
+  (let ((min (plist-get params :min))
+        (max (plist-get params :max))
+        (step (plist-get params :step))
+        (result nil))
+    (let ((v min))
+      (while (<= v (+ max 1e-9))
+        (push (/ (round (* v 100)) 100.0) result)
+        (setq v (+ v step))))
+    (nreverse result)))
 
 (defvar tip-calibrate--col-width 120
   "Pixel width per column.")
@@ -53,7 +71,9 @@
 (defun tip-calibrate--insert-grid (svg-a h-a d-a svg-fx h-fx d-fx)
   "Insert calibration grid with overlays."
   (let* ((inhibit-read-only t)
-         (label-px 100)  ;; pixel width for row label
+         (scales (tip-calibrate--range tip-calibrate-scale-params))
+         (offsets (tip-calibrate--range tip-calibrate-offset-params))
+         (label-px 100)
          (col-px tip-calibrate--col-width))
     (erase-buffer)
     ;; Title
@@ -62,13 +82,13 @@
                     tip-scale tip-baseline-offset))
     ;; Header row
     (insert (propertize "scale\\offset" 'face 'bold))
-    (dotimes (j (length tip-calibrate-offsets))
+    (dotimes (j (length offsets))
       (tip-calibrate--align-to (+ label-px (* j col-px)))
       (tip-calibrate--bar)
-      (insert (format " %.1f" (nth j tip-calibrate-offsets))))
+      (insert (format " %.1f" (nth j offsets))))
     (insert "\n")
     ;; Horizontal rule
-    (let ((total-px (+ label-px (* (length tip-calibrate-offsets) col-px))))
+    (let ((total-px (+ label-px (* (length offsets) col-px))))
       (let ((beg (point)))
         (insert " ")
         (put-text-property beg (point) 'display
@@ -76,10 +96,10 @@
         (put-text-property beg (point) 'face '(:strike-through t)))
       (insert "\n"))
     ;; Grid rows
-    (dolist (sc tip-calibrate-scales)
+    (dolist (sc scales)
       (insert (format "%.2f" sc))
-      (dotimes (j (length tip-calibrate-offsets))
-        (let ((off (nth j tip-calibrate-offsets)))
+      (dotimes (j (length offsets))
+        (let ((off (nth j offsets)))
           (tip-calibrate--align-to (+ label-px (* j col-px)))
           (tip-calibrate--bar)
           (insert " ")
