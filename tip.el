@@ -317,9 +317,9 @@ CALLBACK is called with the result alist when response arrives."
   "Return non-nil if NODE is a function call matching `tip-diagram-functions'."
   (when-let* ((node)
               (ntype (treesit-node-type node))
-              ((string-match-p "call" (if (symbolp ntype) (symbol-name ntype) ntype)))
-              (callee (treesit-node-child-by-field-name node "callee"))
-              (name (treesit-node-text callee t)))
+              ((equal "call" (if (symbolp ntype) (symbol-name ntype) ntype)))
+              (first-child (treesit-node-child node 0))
+              (name (treesit-node-text first-child t)))
     (member name tip-diagram-functions)))
 
 (defun tip-collect-fragment-locations (beg end &optional avoid-pos)
