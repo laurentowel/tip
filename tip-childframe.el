@@ -66,6 +66,13 @@ Values > 1.0 make the live preview larger than inline overlays."
   :type 'float
   :group 'tip-childframe)
 
+(defcustom tip-childframe-allow-overflow nil
+  "If non-nil, allow the childframe to extend outside the Emacs frame.
+Uses an undecorated top-level frame instead of a child frame.
+Useful for large equations that don't fit inside the Emacs window."
+  :type 'boolean
+  :group 'tip-childframe)
+
 (defvar tip-childframe--frame nil
   "The childframe for preview.")
 
@@ -129,16 +136,22 @@ Clamps to keep the childframe inside the frame."
 
 (defun tip-childframe--corner-position (width height)
   "Compute (X . Y) position at the configured corner.
-Respects `tip-childframe-offset' for padding from edges."
+Respects `tip-childframe-offset' for padding from edges.
+In overflow mode, returns screen-absolute coordinates."
   (pcase-let ((`(,off-l ,off-r ,off-t) tip-childframe-offset))
-    (let ((frame-w (frame-outer-width))
-          (frame-h (frame-outer-height)))
+    (let* ((frame-w (frame-outer-width))
+           (frame-h (frame-outer-height))
+           ;; In overflow mode, offset by parent frame's screen position
+           (frame-x (if tip-childframe-allow-overflow
+                        (car (frame-position)) 0))
+           (frame-y (if tip-childframe-allow-overflow
+                        (cdr (frame-position)) 0)))
       (pcase tip-childframe-position
-        ('top-right    (cons (- frame-w width off-r) off-t))
-        ('top-left     (cons off-l off-t))
-        ('bottom-right (cons (- frame-w width off-r) (- frame-h height off-t)))
-        ('bottom-left  (cons off-l (- frame-h height off-t)))
-        (_             (cons (- frame-w width off-r) off-t))))))
+        ('top-right    (cons (+ frame-x (- frame-w width off-r)) (+ frame-y off-t)))
+        ('top-left     (cons (+ frame-x off-l) (+ frame-y off-t)))
+        ('bottom-right (cons (+ frame-x (- frame-w width off-r)) (+ frame-y (- frame-h height off-t))))
+        ('bottom-left  (cons (+ frame-x off-l) (+ frame-y (- frame-h height off-t))))
+        (_             (cons (+ frame-x (- frame-w width off-r)) (+ frame-y off-t)))))))
 
 (defun tip-childframe--position (width height)
   "Compute position based on `tip-childframe-position'."
@@ -165,22 +178,31 @@ Respects `tip-childframe-offset' for padding from edges."
 (defun tip-childframe--get-frame (buf)
   "Return the childframe displaying BUF, creating if needed."
   (let* ((params (append tip-childframe--frame-parameters
-                         `((parent-frame . ,(selected-frame))
-                           (default-minibuffer-frame . ,(selected-frame))
-                           (minibuffer . ,(minibuffer-window)))))
+                         (if tip-childframe-allow-overflow
+                             ;; Top-level undecorated frame — can overflow
+                             `((parent-frame . nil)
+                               (z-group . above)
+                               (default-minibuffer-frame . ,(selected-frame))
+                               (minibuffer . ,(minibuffer-window)))
+                           ;; Normal child frame — clipped to parent
+                           `((parent-frame . ,(selected-frame))
+                             (default-minibuffer-frame . ,(selected-frame))
+                             (minibuffer . ,(minibuffer-window))))))
          window frame)
     (if (and tip-childframe--frame
              (frame-live-p tip-childframe--frame))
         (progn
           (setq frame tip-childframe--frame)
           (setq window (frame-selected-window frame))
-          (set-frame-parameter frame 'parent-frame (selected-frame)))
+          (unless tip-childframe-allow-overflow
+            (set-frame-parameter frame 'parent-frame (selected-frame))))
       ;; Create new frame
       (setq window (display-buffer-in-child-frame
                     buf `((child-frame-parameters . ,params))))
       (setq frame (window-frame window))
       (set-window-dedicated-p window t)
-      (redirect-frame-focus frame (frame-parent frame)))
+      (when (frame-parent frame)
+        (redirect-frame-focus frame (frame-parent frame))))
     ;; Style
     (set-face-attribute 'internal-border frame
                         :inherit 'tip-childframe-border)
@@ -214,8 +236,12 @@ Respects `tip-childframe-offset' for padding from edges."
                     :scale scale
                     :ascent 'center))
          (size (image-size img t))
-         (w (min scaled-max-w (+ (car size) 4)))
-         (h (min scaled-max-h (+ (cdr size) 4))))
+         (w (if tip-childframe-allow-overflow
+                 (+ (car size) 4)
+               (min scaled-max-w (+ (car size) 4))))
+         (h (if tip-childframe-allow-overflow
+                 (+ (cdr size) 4)
+               (min scaled-max-h (+ (cdr size) 4)))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
