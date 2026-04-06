@@ -88,17 +88,14 @@
 (defun tip-spinner--on-response (result)
   "Hook: spin on response, track errors per-buffer."
   (let* ((frags (alist-get 'fragments result))
-         (n (if (vectorp frags) (length frags) 1))
          (has-err (and (vectorp frags)
-                       (seq-some (lambda (f) (alist-get 'error f)) frags)))
-         (frames (max 8 (* n 2))))
-    ;; Update error state for the current buffer
+                       (seq-some (lambda (f) (alist-get 'error f)) frags))))
     (setq tip-spinner--has-errors has-err)
-    ;; Cancel previous, start fresh
     (when tip-spinner--timer
       (cancel-timer tip-spinner--timer)
       (setq tip-spinner--timer nil))
-    (setq tip-spinner--remaining frames)
+    ;; Always spin exactly 2 full rotations (16 frames)
+    (setq tip-spinner--remaining 16)
     (setq tip-spinner--timer
           (run-at-time 0 0.1 #'tip-spinner--tick))))
 
@@ -126,11 +123,7 @@ Teal when OK, vermillion when errors exist.  Spins on server response."
   "Spin the logo (simulates a 50-fragment response)."
   (interactive)
   (unless tip-spinner-mode (tip-spinner-mode 1))
-  (tip-spinner--on-response '((fragments . [1 2 3 4 5 6 7 8 9 10
-                                            11 12 13 14 15 16 17 18 19 20
-                                            21 22 23 24 25 26 27 28 29 30
-                                            31 32 33 34 35 36 37 38 39 40
-                                            41 42 43 44 45 46 47 48 49 50]))))
+  (tip-spinner--on-response '((fragments . [1]))))
 
 ;;;###autoload
 (defun tip-spinner-demo-error ()
