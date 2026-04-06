@@ -130,11 +130,17 @@ height_em = svg_height_pt / emacs_font_pt * tip_scale
 ```
 `tip-scale` defaults to 1.0. `emacs_font_pt` is read from `(face-attribute 'default :height)` divided by 10.
 
-The preamble sent to the server includes `#set text(size: Xpt)` matching the Emacs font size, so the Typst rendering matches the surrounding text scale.
+The preamble colors are emitted AFTER the skeleton so they override document-level color rules.
+
+**Text size**: Fragments render at fixed 11pt (Typst default) regardless of document font size. `tip-scale` is the single user knob to match Emacs display. Exception: HTML-targeting documents (detected by `html.elem`/`html.frame`/`html.figure` in the skeleton) skip the text size override because Typst forbids setting font size in html export mode.
 
 ## Scope-Aware Compilation
 
-**Approach**: Parse document AST, walk tree collecting only scope-defining nodes (LetBinding, SetRule, ShowRule, ModuleImport, CodeBlock openers/closers, ContentBlock openers/closers). Skip all content (text, other math). Append the target fragment + closing delimiters. This produces a minimal document that compiles just the fragment with its full scope context.
+**Approach**: Parse document AST, walk tree collecting only scope-defining nodes (LetBinding, SetRule, ShowRule, ModuleImport, CodeBlock openers/closers, ContentBlock openers/closers). Skip all content (text, other math). The skeleton itself tracks what it opens ({ and [) and returns matching closers — no separate delimiter counting.
+
+**Generated source order**: `DEFAULT_PREAMBLE → skeleton → client_preamble (colors) → page_setup (size + page) → fragment → closers`
+
+The client preamble and page_setup go AFTER the skeleton so they override document-level rules.
 
 **Handles**: deep mode nesting (math→code→markup→math...), variable shadowing, closures, conditional lets, show rule transforms, nested `#import` from relative files + `@local/` packages + `@preview/` packages.
 
@@ -149,9 +155,13 @@ Extracted into a generic reusable framework. See `tip/PREVIEW-TOGGLE.md` for flo
 - Inside → outside: close overlay (recompile, show image)
 - Fragment → fragment: close old, open new
 
-**Boundary detection pitfall**: `tip--get-bounds-of-math-at-point` must use strict `< x (cdr range)` (not `<=`) for the end bound. The position at `(cdr range)` is AFTER the closing `$`, which is outside the fragment. Using `<=` causes the pre-command hook to incorrectly mark cursor as "inside math" when it's at the boundary.
+**Boundary detection pitfall**: `tip--get-bounds-of-math-at-point` enforces strict half-open `start <= x < end`. The function uses `treesit-node-at` + parent walk (O(depth), not O(buffer)) but `treesit-node-at` at position `(cdr range)` still returns the closing `$` node whose parent IS the math node. Without the explicit `< x end` check, position at fragment end is incorrectly reported as "inside", preventing overlay close — especially visible with adjacent short fragments like `$a$ $b$`.
 
 **Overlay detection**: Uses `overlays-in pos (1+ pos)` in addition to `overlays-at pos` to handle Emacs's half-open overlay intervals at boundaries.
+
+**`#` prefix for diagrams**: In tree-sitter, the `#` introducing a code expression is a sibling of the `call` node, not a parent. `treesit-node-at` at the `#` position returns the hash token; walking up never reaches the `call`. Fix: if walk fails and `char-after` is `#`, retry with position+1. The overlay spans from `#` (via `1- node-start`) so the bounds function must recognize `#` as inside.
+
+**`#let` body filtering**: Diagram calls inside `#let` bindings are definitions, not renderable content. `tip--inside-let-binding-p` checks for a `let` ancestor and skips them. This prevents `#let canvas(..args) = html.elem(...)[cetz.canvas(..args)]` from being detected as two diagram fragments.
 
 ## Typst-Specific Conventions
 
@@ -252,83 +262,34 @@ Per-fragment cost scales with document size (scope skeleton extraction). Overlay
 
 **Page clipping with `height: auto`**: Typst's auto page height doesn't fully account for glyph ink bounds beyond the content box. Upstream: https://github.com/typst/typst/issues/1028. Solved by rendering with large margins (20pt) and cropping SVG to ink bounds post-render.
 
-## Kodama Compatibility
+## HTML-Targeting Documents and Kodama
 
-TIP works with files targeting kodama's HTML export (`#show: kodama`). Key issues solved:
+### Critical quirks for future agents
 
-- **Page setting override**: kodama's show rule sets `page(paper: "iso-b6", margin: 2em)` for paged output. TIP's `page_setup` is emitted AFTER the skeleton (which contains `#show: kodama`) so it overrides with `width: auto`. This was a critical ordering fix — the skeleton contains show rules from the document, and page setup must come last.
+1. **Typst forbids `#set text(size: ...)` in html export mode.** Any document whose skeleton contains `html.elem`, `html.frame`, or `html.figure` must NOT get a text size override. The server detects this by string-matching the skeleton and conditionally omits the `#show math.equation: set text(size: 11pt)` rule.
 
-- **Scope extraction**: `#show: kodama` and `#show: preamble` are ShowRule nodes, preserved by the scope skeleton. The math show rules inside kodama (for HTML baseline) have no effect in paged mode (they check `export-target`).
+2. **`Feature::Html` must be enabled** in the Typst `Library` builder. Without it, `html.elem`/`html.frame` are "unknown variable" errors. These are no-ops in paged mode but must parse. See `world.rs`: `Library::builder().with_features([Feature::Html].into_iter().collect())`.
 
-- **`html.elem`, `html.frame`**: These functions only work with HTML export. In paged mode (what TIP uses), they produce content or are no-ops. Math inside `html.elem(...)` containers compiles fine because the skeleton strips the container.
+3. **`Kodama.toml` is a project root marker** alongside `typst.toml` and `.git`. Kodama projects have files in `trees/references/` importing `../_lib/kodama.typ` — the root must be above `trees/`.
 
-## Future: CeTZ and Fletcher Diagram Preview
+4. **Main file virtual path matters.** `set_main_path` gives the synthetic compilation document a vpath matching the real file's position relative to root. Without this, `#import "../_lib/kodama.typ"` resolves against `/tip-main.typ` (root dir) instead of the file's subdirectory.
 
-CeTZ (`@preview/cetz`) and Fletcher (`@preview/fletcher`) produce diagrams, not inline math. Key differences from math preview:
+5. **`#let` wrappers for html.** Kodama files define `#let canvas(..args) = html.elem(...)[cetz.canvas(..args)]`. This puts `cetz.canvas` inside a `let` body — `tip--inside-let-binding-p` skips these. The wrapper call `#canvas(...)` IS detected and compiled. In paged mode `html.elem` is a no-op, so the canvas wrapper produces content from the inner `cetz.canvas` — but it may produce an empty SVG (0 width). Fragments with `height < 0.01pt` are silently skipped.
 
-### What needs to change
+6. **Page footer/header leaks.** `#set page(footer: ...)` in the document skeleton causes "1/1" to appear in every fragment. Fixed by including `header: none, footer: none` in all page_setup variants.
 
-1. **Detection**: Math fragments are detected via tree-sitter `((math) @math)`. Diagrams are function calls like `cetz.canvas(...)` or `fletcher.diagram(...)`. Need a new tree-sitter query or AST pattern to detect them.
+7. **Unpaired delimiters in Typst math.** `$[0,1)$` has unmatched `[` and `)`. The old `compute_closing_delimiters` tried to count delimiters in the document tree — fundamentally broken. Now the skeleton tracks what it opens and returns matching closers directly.
 
-2. **Compilation**: Diagrams need their full argument structure preserved, not just scope context. The scope skeleton must keep the entire `cetz.canvas(...)` or `diagram(...)` call, not strip it like we strip `#list[...]`.
+### Kodama-specific files
 
-3. **Page setup**: Diagrams need `width: auto, height: auto` with generous margins. No baseline alignment needed — they're block elements.
+- `tip-kodama.el` — auto-detects `Kodama.toml`, enables `tip-kodama-mode` (shown in mode line)
+- Loaded optionally from `tip-mode` via `(fboundp 'tip-kodama-maybe-enable)`
 
-4. **Display**: Diagrams are block elements, use `:ascent center`. May want to limit max width/height.
+## CeTZ and Fletcher Diagram Preview (implemented)
 
-5. **Imports**: CeTZ and Fletcher are `@preview` packages. The `PackageStorage` already resolves them. The scope skeleton preserves `#import "@preview/cetz:0.4.2"`.
+Diagrams are detected via `tip-diagram-functions` customization (default: `cetz.canvas`, `canvas`, `diagram`, etc.). The tree walker `tip--collect-diagram-ranges` recursively finds matching `call` nodes, skipping those inside `#let` bodies.
 
-### Architecture approach
-
-The cleanest approach: extend `FragmentCompiler` with a `compile_diagram` method alongside the existing `compile_fragment` / `compile_fragment_scoped`. The diagram compiler:
-
-1. Takes the full function call source (e.g., `cetz.canvas(length: 1cm, { ... })`)
-2. Extracts scope context the same way as math (the skeleton)
-3. But preserves the ENTIRE diagram call in the skeleton (don't strip it)
-4. Compiles to SVG with `width: auto, height: auto`
-5. Returns SVG + dimensions (no baseline measurement)
-
-On the Emacs side:
-- `preview-toggle.el` already supports any preview type via `preview-toggle-type`
-- Add a new fragment collector for diagrams (tree-sitter query for FuncCall matching known diagram functions)
-- Use `tip--make-image-spec` with `display-p = t` (center aligned)
-
-### Key files to modify
-
-| File | What to add |
-|------|-------------|
-| `tip-core/src/compiler.rs` | `compile_diagram_scoped()` method, diagram-aware skeleton |
-| `tip-protocol/src/messages.rs` | `compile_diagrams` request type |
-| `tip-server/src/handler.rs` | Handler for diagram requests |
-| `tip/tip.el` | Diagram fragment collection, overlay creation |
-
-### CeTZ specifics
-
-CeTZ diagrams use `cetz.canvas(...)` which takes a closure with draw commands. The entire closure must be preserved. Example:
-
-```typst
-#cetz.canvas(length: 1cm, {
-  import cetz.draw: *
-  line((0,0), (1,1))
-  circle((0.5, 0.5), radius: 0.3)
-})
-```
-
-The scope skeleton must keep `#cetz.canvas(length: 1cm, { import cetz.draw: *; ... })` — the function call, its arguments, and the code block body.
-
-### Fletcher specifics
-
-Fletcher diagrams use `fletcher.diagram(...)`:
-
-```typst
-#fletcher.diagram(
-  node((0, 0), $A$),
-  node((1, 0), $B$),
-  edge((0, 0), (1, 0), "->"),
-)
-```
-
-Similar to CeTZ — preserve the full call. Note: Fletcher diagrams contain MATH inside `node(...)` — those inner math nodes should NOT be compiled separately as inline math (they're part of the diagram).
+Diagram overlays use `:ascent center` (block display, no baseline alignment). The overlay spans from `#` (1- node-start) to node-end. Inner math inside diagrams (e.g. `node((0,0), $A$)`) is part of the diagram fragment, not compiled separately.
 
 ## Key Reference Code
 
@@ -351,12 +312,30 @@ See [DISTRIBUTION.md](DISTRIBUTION.md) for the full plan. Summary:
 - **MELPA**: include Rust source, user compiles or downloads on first use
 - **CI**: GitHub Actions builds binaries for linux/macOS x86_64/aarch64 on release tags
 
+## Theme Change — SVG Color Substitution
+
+Theme changes do NOT recompile fragments. Instead, `tip--recolor-overlays` does string-replace on cached SVG data: old fg→new fg, old bg→new bg. Each overlay stores `tip-fg` and `tip-bg` properties recording the colors baked into its SVG.
+
+**Performance**: 0.5ms/fragment for string-replace vs 17ms/fragment for recompilation. For 1000 fragments: 0.5s vs 17s. No server round-trip needed.
+
+`tip-follow-theme-mode` hooks into `enable-theme-functions` / `disable-theme-functions`. Enabled by default in `tip-mode`. Also clears `tip-live--content-cache` so the childframe updates.
+
+## Emacs Batch Mode Quirks
+
+- `(face-attribute 'default :foreground)` returns `"unspecified-fg"` → all colors become `#000000`
+- `(face-attribute 'default :height)` returns `1` → `tip--font-size-pt` gives 0.1pt (with the fixed 11pt this is no longer a problem for rendering, but image scaling uses this)
+- `window-start`/`window-end` may not cover buffer content
+- `sit-for` does NOT reliably process subprocess output — use `accept-process-output`
+- `treesit-node-at` at position `(cdr range)` returns the closing `$` node, whose parent IS the math — must check `< x end` explicitly
+- GUI tests: use `test-harness.el` which captures errors to files and mirrors messages via `external-debugging-output`
+
 ## Code Quality
 
 - **Zero warnings**: Never tolerate warnings from `cargo` or `typst compile`. Fix immediately.
 - **No hardcoded presentation**: Page margin, width, height strategy come from Emacs via `page_setup` protocol field. Rust provides defaults but client can override.
 - **Modular**: tip-core stays transport-agnostic. preview-toggle.el is reusable for future LaTeX preview.
 - **No DWIM (Do What I Mean)**: Avoid implicit automatic behavior that the user didn't ask for. Compilation only happens when the user triggers it (explicit commands, or preview-toggle on cursor leave which is a direct consequence of user movement). No background idle-timer auto-compilation, no guessing intent. Every action should be traceable to a user gesture. This keeps behavior predictable and debuggable.
+- **Performance-conscious hooks**: `tip-server-response-functions` hook runs after every server response. Keep handlers cheap — don't add timers or heavy processing here.
 
 ## User Preferences
 

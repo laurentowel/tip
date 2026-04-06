@@ -86,13 +86,14 @@ TIP supports Typst documents targeting HTML export (`html.elem`, `html.frame`, e
 ### tip-server side
 
 - **HTML feature enabled.** The Typst `Library` is built with `Feature::Html` so `html.elem`, `html.frame`, etc. are defined. Without this, any scope skeleton containing `html.*` references (common in kodama files) would fail with "unknown variable: html". In paged export mode these are no-ops but must still parse.
+- **No text size override for HTML.** Typst forbids `#set text(size: ...)` in html export mode. The server detects HTML-targeting by checking if the skeleton contains `html.elem`/`html.frame`/`html.figure`, and conditionally skips the 11pt override. PDF-targeting documents still get fixed 11pt for consistency.
 - **Kodama.toml as root marker.** `find_project_root` checks for `Kodama.toml` alongside `typst.toml` and `.git`. This is critical: kodama projects have files in `trees/references/` that import `../_lib/kodama.typ` — the root must be above `trees/` for relative imports to resolve.
 - **Main file vpath.** The synthetic compilation document uses a fake `FileId` whose virtual path matches the real file's position relative to root. Without this, relative imports in the scope skeleton resolve against `/tip-main.typ` (root dir) instead of the actual file's subdirectory.
 
 ### tip.el side
 
 - **`#let` body filtering.** Diagram calls inside `#let` bindings are skipped — they're function definitions, not rendered content. This prevents false positives from patterns like `#let canvas(..args) = html.elem(...)[cetz.canvas(..args)]` where both `canvas(..args)` (pattern) and `cetz.canvas(..args)` (body) would otherwise match `tip-diagram-functions`.
-- **Wrapper call detection.** The user-defined `#canvas(...)` wrapper IS detected as a diagram (its name matches `tip-diagram-functions`). In paged mode, `html.elem` is a no-op, so the wrapper simply calls through to `cetz.canvas` and produces the expected output.
+- **Wrapper call detection.** The user-defined `#canvas(...)` wrapper IS detected as a diagram (its name matches `tip-diagram-functions`). In paged mode, `html.elem` is a no-op — the wrapper may produce an empty SVG (0 width). Fragments with `height < 0.01pt` are silently skipped.
 
 ### tip-kodama.el
 
