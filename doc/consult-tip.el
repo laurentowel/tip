@@ -84,9 +84,12 @@ Smaller values make candidates more compact."
                (source (replace-regexp-in-string
                         "[\n\t ]+" " "
                         (buffer-substring-no-properties beg (min (+ beg 50) end))))
-               (display (if img
-                            (propertize " " 'display img)
-                          (truncate-string-to-width source 50)))
+               ;; Candidate: rendered SVG + invisible source for filtering
+               (display (concat
+                         (if img
+                             (propertize " " 'display img)
+                           "")
+                         (propertize source 'invisible (when img t))))
                (cand (consult--location-candidate
                       display marker line idx)))
           ;; Stash source for marginalia and filtering
