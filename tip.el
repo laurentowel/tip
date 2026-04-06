@@ -77,10 +77,6 @@ Adjust the number and re-evaluate until baselines align."
   :type 'number
   :group 'tip)
 
-(defcustom tip-live-docstring-scale 2.1
-  "Scale factor for live preview in eldoc."
-  :type 'float
-  :group 'tip)
 
 ;;; * utils
 
@@ -556,96 +552,108 @@ Otherwise use baseline alignment for inline math."
        (cons (1- (treesit-node-start node)) ;; include #
              (treesit-node-end node))))))
 
-;;; * live preview with eldoc
+;;; * live preview (eldoc-based, works with eldoc-box for childframe)
 
 (defvar-local tip-live--content-cache ""
   "Cache of the last live-previewed fragment content.")
 
-(defvar-local tip-live--docstring "tip"
-  "String holding the live preview image as a text property.")
+(defvar-local tip-live--docstring nil
+  "Current live preview content for eldoc.")
 
 (defvar-local tip-live--timer nil
   "Idle timer for live preview.")
 
-(defun tip-live--compile-partial ()
-  "Compile the math fragment at point for live preview."
-  (when-let* (((eq major-mode 'typst-ts-mode))
-              (buf (current-buffer))
-              (bound (tip--get-bounds-of-math-at-point (point)))
-              (content (buffer-substring-no-properties (car bound) (cdr bound)))
-              ((not (string-equal tip-live--content-cache content)))
-              (fg (tip--color-to-hex (face-attribute 'default :foreground)))
-              (byte-start (1- (position-bytes (car bound))))
-              (byte-end (1- (position-bytes (cdr bound)))))
-    (setq tip-live--content-cache content)
-    (tip--sync-buffer)
-    (tip--send-request
-     "compile_live"
-     `(("uri" . ,(buffer-file-name))
-       ("start" . ,byte-start)
-       ("end" . ,byte-end)
-       ("color" . ,fg)
-       ("preamble" . ,(tip--build-preamble)))
-     (lambda (result)
-       (with-current-buffer buf
-         (let* ((err (alist-get 'error result))
-                (frag (alist-get 'fragment result))
-                (svg-data (and frag (alist-get 'svg frag)))
-                (height-pt (and frag (alist-get 'height_pt frag))))
-           (cond
-            ;; Compile error: show error text
-            (err
-             (tip--feed-error-to-docstring err)
-             (eldoc--invoke-strategy nil))
-            ;; Success: show SVG
-            ((and svg-data (> (length svg-data) 0) height-pt)
-             (tip--feed-image-to-docstring svg-data height-pt)
-             (eldoc--invoke-strategy nil)))))))))
-
-(defun tip--feed-image-to-docstring (svg-data height-pt)
-  "Set the live preview docstring to display SVG-DATA."
+(defun tip-live--set-image (svg-data)
+  "Set the eldoc docstring to show SVG-DATA as an image."
   (setq tip-live--docstring
-        (propertize "tip"
+        (propertize " "
                     'display
-                    (list (cons 'image
-                                (list :type 'svg
-                                      :data svg-data
-                                      :height `(,(* tip-live-docstring-scale
-                                                    (/ height-pt (tip--font-size-pt)))
-                                                . em)
-                                      :pointer 'hand))))))
+                    (list 'image
+                          :type 'svg
+                          :data svg-data
+                          :max-width (min (frame-pixel-width)
+                                          (* 40 (frame-char-width)))
+                          :ascent 'center))))
 
-(defun tip--feed-error-to-docstring (err)
-  "Set the live preview docstring to show error ERR."
+(defun tip-live--set-error (err)
+  "Set the eldoc docstring to show error ERR."
   (setq tip-live--docstring
-        (propertize (format "TIP error: %s" err)
-                    'face 'error)))
+        (propertize (format "TIP: %s" err) 'face 'error)))
 
-(defun tip-live--display-in-eldoc (callback)
-  "Eldoc documentation function for live typst previews."
-  (if (tip--get-bounds-of-math-at-point (point))
+(defun tip-live--clear ()
+  "Clear the live preview."
+  (setq tip-live--docstring nil)
+  (setq tip-live--content-cache ""))
+
+(defun tip-live--handle-result (result)
+  "Handle compilation result — update docstring with SVG or error."
+  (let* ((err (alist-get 'error result))
+         (frags (alist-get 'fragments result))
+         (frag (and frags (> (length frags) 0) (aref frags 0)))
+         (svg (and frag (alist-get 'svg frag)))
+         (h (and frag (alist-get 'height_pt frag))))
+    (cond
+     (err (tip-live--set-error err))
+     ((and svg (> (length svg) 0) h (> h 0))
+      (tip-live--set-image svg))
+     (t (tip-live--clear)))
+    ;; Trigger eldoc refresh
+    (eldoc--invoke-strategy nil)))
+
+(defun tip-live--compile-partial ()
+  "Compile the math fragment at point for live preview.
+Works in both normal typst-ts-mode and tip-edit buffers."
+  (cond
+   ;; In tip-edit buffer: delegate to edit preview
+   ((bound-and-true-p tip-edit-mode)
+    (tip-edit--live-preview))
+   ;; In typst-ts-mode: compile fragment at point
+   ((eq major-mode 'typst-ts-mode)
+    (if-let* ((bound (tip--get-bounds-of-math-at-point (point)))
+              (content (buffer-substring-no-properties (car bound) (cdr bound))))
+        (unless (string-equal tip-live--content-cache content)
+          (setq tip-live--content-cache content)
+          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+                (byte-start (1- (position-bytes (car bound))))
+                (byte-end (1- (position-bytes (cdr bound)))))
+            (tip--sync-buffer)
+            (tip--send-request
+             "compile_fragments"
+             `(("uri" . ,(buffer-file-name))
+               ("fragments" . ,(vector `(("start" . ,byte-start)
+                                          ("end" . ,byte-end))))
+               ("color" . ,fg)
+               ("preamble" . ,(tip--build-preamble)))
+             (lambda (result)
+               (tip-live--handle-result result)))))
+      ;; Outside math: clear
       (when tip-live--docstring
-        (funcall callback tip-live--docstring))
-    ;; Outside math: clear live preview state
-    (setq tip-live--docstring nil)
-    (setq tip-live--content-cache "")))
+        (tip-live--clear)
+        (eldoc--invoke-strategy nil))))))
+
+(defun tip-live--eldoc-function (callback)
+  "Eldoc documentation function for live typst previews."
+  (when tip-live--docstring
+    (funcall callback tip-live--docstring)))
 
 ;;;###autoload
 (defun tip-live-setup ()
-  "Enable live preview for math fragments via eldoc."
+  "Enable live preview for math fragments via eldoc.
+Works with eldoc-box for childframe display."
   (interactive)
-  (setq eldoc-idle-delay 0.1)
   (setq tip-live--timer
-        (run-with-idle-timer 0.1 t #'tip-live--compile-partial))
-  (add-hook 'eldoc-documentation-functions #'tip-live--display-in-eldoc nil t))
+        (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
+  (add-hook 'eldoc-documentation-functions #'tip-live--eldoc-function nil t))
 
 ;;;###autoload
 (defun tip-live-teardown ()
   "Disable live preview."
   (interactive)
   (when tip-live--timer
-    (cancel-timer tip-live--timer))
-  (remove-hook 'eldoc-documentation-functions #'tip-live--display-in-eldoc t))
+    (cancel-timer tip-live--timer)
+    (setq tip-live--timer nil))
+  (remove-hook 'eldoc-documentation-functions #'tip-live--eldoc-function t)
+  (tip-live--clear))
 
 ;;; * the minor mode
 
@@ -666,7 +674,7 @@ Automatically renders visible fragments and enables live preview."
         (setq-local preview-toggle-compile-region-fn
                     #'tip--compile-region)
         (preview-toggle-mode 1)
-        ;; Live preview via eldoc
+        ;; Live preview in side window
         (tip-live-setup)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
@@ -780,7 +788,7 @@ Like `org-edit-special' (C-c ').  Shows live preview while editing.
         (tip-edit-mode 1)
         (setq-local tip-edit--source-buffer src-buf)
         (setq-local tip-edit--source-overlay ov)
-        ;; Live preview: compile on idle and show in eldoc/header
+        ;; Live preview on idle
         (setq-local tip-edit--preview-timer
                     (run-with-idle-timer
                      0.3 t
@@ -792,51 +800,20 @@ Like `org-edit-special' (C-c ').  Shows live preview while editing.
       (pop-to-buffer edit-buf)
       (message "Edit fragment. C-c C-c to commit, C-c C-k to abort."))))
 
-(defun tip-edit--update-preview (_edit-buf result)
-  "Show compiled preview in a side *tip-preview* buffer."
-  (let* ((frags (alist-get 'fragments result))
-         (f (and frags (> (length frags) 0) (aref frags 0)))
-         (svg (and f (alist-get 'svg f)))
-         (h (and f (alist-get 'height_pt f))))
-    (when (and svg (> (length svg) 0) h (> h 0))
-      (let ((preview-buf (get-buffer-create "*tip-preview*")))
-        (with-current-buffer preview-buf
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert-image
-             (list 'image
-                   :type 'svg
-                   :data svg
-                   :max-width (window-body-width nil t)
-                   :ascent 'center))
-            (insert "\n"))
-          (setq buffer-read-only t))
-        ;; Show in side window if not already visible
-        (unless (get-buffer-window preview-buf)
-          (display-buffer preview-buf
-                          '(display-buffer-in-side-window
-                            (side . bottom)
-                            (window-height . 0.3))))))))
-
-(defvar-local tip-edit--content-cache nil
-  "Cache of last compiled content in edit buffer.")
-
 (defun tip-edit--live-preview ()
   "Compile edit buffer content and show preview in side window.
-Splices current edit text into source buffer before compiling."
-  (let ((edit-buf (current-buffer))
-        (src-buf tip-edit--source-buffer)
+Splices current edit text into source buffer before compiling.
+Reuses the shared `tip-live--show-preview' / `tip-live--handle-result'."
+  (let ((src-buf tip-edit--source-buffer)
         (ov tip-edit--source-overlay)
         (new-text (buffer-substring-no-properties (point-min) (point-max))))
-    ;; Skip if content unchanged
     (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
-               (not (equal new-text tip-edit--content-cache)))
-      (setq tip-edit--content-cache new-text)
+               (not (equal new-text tip-live--content-cache)))
+      (setq tip-live--content-cache new-text)
       (let ((beg (overlay-start ov))
             (end (overlay-end ov)))
         (with-current-buffer src-buf
           (tip-ensure)
-          ;; Splice edit text into source buffer content for sync
           (let* ((full-text (buffer-substring-no-properties (point-min) (point-max)))
                  (before (substring full-text 0 (1- beg)))
                  (after (substring full-text (1- end)))
@@ -844,11 +821,9 @@ Splices current edit text into source buffer before compiling."
                  (fg (tip--color-to-hex (face-attribute 'default :foreground)))
                  (byte-start (string-bytes before))
                  (byte-end (+ byte-start (string-bytes new-text))))
-            ;; Sync the spliced content
             (tip--send-request "sync"
                                `(("uri" . ,(buffer-file-name))
                                  ("content" . ,spliced)))
-            ;; Compile the fragment at the new position
             (tip--send-request
              "compile_fragments"
              `(("uri" . ,(buffer-file-name))
@@ -857,8 +832,7 @@ Splices current edit text into source buffer before compiling."
                ("color" . ,fg)
                ("preamble" . ,(tip--build-preamble)))
              (lambda (result)
-               (tip-edit--update-preview edit-buf result)))))))))
-
+               (tip-live--handle-result result)))))))))
 
 (defun tip-edit-commit ()
   "Write edit buffer contents back to source and close."
@@ -897,12 +871,7 @@ Splices current edit text into source buffer before compiling."
   "Clean up edit buffer state."
   (when tip-edit--preview-timer
     (cancel-timer tip-edit--preview-timer))
-  ;; Kill preview window
-  (when-let* ((preview-buf (get-buffer "*tip-preview*"))
-              (win (get-buffer-window preview-buf)))
-    (delete-window win))
-  (when-let* ((preview-buf (get-buffer "*tip-preview*")))
-    (kill-buffer preview-buf))
+  (tip-live--clear)
   ;; Kill edit buffer
   (let ((buf (current-buffer)))
     (quit-window t)

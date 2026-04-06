@@ -27,16 +27,13 @@
 (ert-deftest tip-test-customization-vars-exist ()
   (should (boundp 'tip-enable-debug))
   (should (boundp 'tip-server-executable))
-  (should (boundp 'tip-scale))
-  (should (boundp 'tip-live-docstring-scale)))
+  (should (boundp 'tip-scale)))
 
 (ert-deftest tip-test-customization-defaults ()
   (should (eq tip-enable-debug nil))
   (should (or (null tip-server-executable) (stringp tip-server-executable)))
   (should (numberp tip-scale))
-  (should (> tip-scale 0))
-  (should (numberp tip-live-docstring-scale))
-  (should (> tip-live-docstring-scale 0)))
+  (should (> tip-scale 0)))
 
 (ert-deftest tip-test-interactive-commands-exist ()
   (should (fboundp 'tip-ensure))
