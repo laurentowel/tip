@@ -570,11 +570,18 @@ Errors are shown both in the childframe and echoed to the message area."
          (svg (and frag (alist-get 'svg frag)))
          (h (and frag (alist-get 'height_pt frag))))
     (cond
+     ;; Explicit error response
      (err
       (tip-childframe-show-text err 'error)
       (message "TIP: %s" err))
+     ;; Fragment with valid SVG
      ((and svg (> (length svg) 0) h (> h 0))
       (tip-childframe-show svg))
+     ;; Fragment compiled but produced empty SVG — likely a compilation error
+     ;; that the server caught and returned as empty result
+     ((and frag (or (null svg) (equal svg "")))
+      (tip-childframe-show-text "Compilation produced no output" 'warning)
+      (message "TIP: compilation produced no output"))
      (t (tip-childframe-hide)))))
 
 (defun tip-live--compile-partial ()
@@ -647,6 +654,8 @@ Automatically renders visible fragments and enables live preview."
         (tip-live-setup)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
+        ;; Clean up stale overlays on buffer changes
+        (add-hook 'after-change-functions #'tip--cleanup-stale-overlays nil t)
         ;; Render visible fragments after a short delay (server needs to start)
         (run-with-timer 0.5 nil
                         (lambda ()
@@ -656,7 +665,18 @@ Automatically renders visible fragments and enables live preview."
                                 (tip-send-nbd)))))))
     ;; Teardown
     (tip-live-teardown)
+    (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
     (preview-toggle-mode -1)))
+
+;;; * stale overlay cleanup
+
+(defun tip--cleanup-stale-overlays (_beg _end _len)
+  "Remove tip overlays that cover zero-width or deleted regions.
+Called from `after-change-functions'."
+  (dolist (ov (overlays-in (point-min) (point-max)))
+    (when (eq (overlay-get ov 'tip) 'tip)
+      (when (>= (overlay-start ov) (overlay-end ov))
+        (delete-overlay ov)))))
 
 ;;; * cleanup
 
