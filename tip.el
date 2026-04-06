@@ -22,6 +22,7 @@
 (require 'json)
 (require 'treesit)
 (require 'preview-toggle)
+(require 'tip-childframe)
 
 ;;; * custom settings
 
@@ -552,53 +553,26 @@ Otherwise use baseline alignment for inline math."
        (cons (1- (treesit-node-start node)) ;; include #
              (treesit-node-end node))))))
 
-;;; * live preview (eldoc-based, works with eldoc-box for childframe)
+;;; * live preview (childframe-based, via tip-childframe.el)
 
 (defvar-local tip-live--content-cache ""
   "Cache of the last live-previewed fragment content.")
 
-(defvar-local tip-live--docstring nil
-  "Current live preview content for eldoc.")
-
 (defvar-local tip-live--timer nil
   "Idle timer for live preview.")
 
-(defun tip-live--set-image (svg-data)
-  "Set the eldoc docstring to show SVG-DATA as an image."
-  (setq tip-live--docstring
-        (propertize " "
-                    'display
-                    (list 'image
-                          :type 'svg
-                          :data svg-data
-                          :max-width (min (frame-pixel-width)
-                                          (* 40 (frame-char-width)))
-                          :ascent 'center))))
-
-(defun tip-live--set-error (err)
-  "Set the eldoc docstring to show error ERR."
-  (setq tip-live--docstring
-        (propertize (format "TIP: %s" err) 'face 'error)))
-
-(defun tip-live--clear ()
-  "Clear the live preview."
-  (setq tip-live--docstring nil)
-  (setq tip-live--content-cache ""))
-
 (defun tip-live--handle-result (result)
-  "Handle compilation result — update docstring with SVG or error."
+  "Handle compilation result — show SVG or error in childframe."
   (let* ((err (alist-get 'error result))
          (frags (alist-get 'fragments result))
          (frag (and frags (> (length frags) 0) (aref frags 0)))
          (svg (and frag (alist-get 'svg frag)))
          (h (and frag (alist-get 'height_pt frag))))
     (cond
-     (err (tip-live--set-error err))
+     (err (tip-childframe-show-text err 'error))
      ((and svg (> (length svg) 0) h (> h 0))
-      (tip-live--set-image svg))
-     (t (tip-live--clear)))
-    ;; Trigger eldoc refresh
-    (eldoc--invoke-strategy nil)))
+      (tip-childframe-show svg))
+     (t (tip-childframe-hide)))))
 
 (defun tip-live--compile-partial ()
   "Compile the math fragment at point for live preview.
@@ -626,24 +600,16 @@ Works in both normal typst-ts-mode and tip-edit buffers."
                ("preamble" . ,(tip--build-preamble)))
              (lambda (result)
                (tip-live--handle-result result)))))
-      ;; Outside math: clear
-      (when tip-live--docstring
-        (tip-live--clear)
-        (eldoc--invoke-strategy nil))))))
-
-(defun tip-live--eldoc-function (callback)
-  "Eldoc documentation function for live typst previews."
-  (when tip-live--docstring
-    (funcall callback tip-live--docstring)))
+      ;; Outside math: hide childframe, clear cache
+      (tip-childframe-hide)
+      (setq tip-live--content-cache "")))))
 
 ;;;###autoload
 (defun tip-live-setup ()
-  "Enable live preview for math fragments via eldoc.
-Works with eldoc-box for childframe display."
+  "Enable live preview for math fragments via childframe."
   (interactive)
   (setq tip-live--timer
-        (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
-  (add-hook 'eldoc-documentation-functions #'tip-live--eldoc-function nil t))
+        (run-with-idle-timer 0.3 t #'tip-live--compile-partial)))
 
 ;;;###autoload
 (defun tip-live-teardown ()
@@ -652,8 +618,8 @@ Works with eldoc-box for childframe display."
   (when tip-live--timer
     (cancel-timer tip-live--timer)
     (setq tip-live--timer nil))
-  (remove-hook 'eldoc-documentation-functions #'tip-live--eldoc-function t)
-  (tip-live--clear))
+  (tip-childframe-hide)
+  (setq tip-live--content-cache ""))
 
 ;;; * the minor mode
 
@@ -674,7 +640,7 @@ Automatically renders visible fragments and enables live preview."
         (setq-local preview-toggle-compile-region-fn
                     #'tip--compile-region)
         (preview-toggle-mode 1)
-        ;; Live preview in side window
+        ;; Live preview via childframe
         (tip-live-setup)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
@@ -871,7 +837,7 @@ Reuses the shared `tip-live--show-preview' / `tip-live--handle-result'."
   "Clean up edit buffer state."
   (when tip-edit--preview-timer
     (cancel-timer tip-edit--preview-timer))
-  (tip-live--clear)
+  (tip-childframe-hide)
   ;; Kill edit buffer
   (let ((buf (current-buffer)))
     (quit-window t)
