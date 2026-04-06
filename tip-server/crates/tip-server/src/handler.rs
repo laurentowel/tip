@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tip_core::compiler::FragmentCompiler;
 use tip_core::document::DocumentStore;
@@ -36,12 +36,28 @@ impl Handler {
     }
 
     fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
-        // Set project root from the file's parent directory
+        // Set project root by walking up from the file to find a project marker
         if let Some(parent) = Path::new(&params.uri).parent() {
-            self.world.set_root(parent.to_path_buf());
+            let root = Self::find_project_root(parent).unwrap_or_else(|| parent.to_path_buf());
+            self.world.set_root(root);
         }
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
+    }
+
+    /// Walk up from `dir` looking for a project root marker.
+    /// Returns the first directory containing typst.toml or .git.
+    fn find_project_root(dir: &Path) -> Option<PathBuf> {
+        let mut current = dir;
+        loop {
+            if current.join("typst.toml").exists() || current.join(".git").exists() {
+                return Some(current.to_path_buf());
+            }
+            match current.parent() {
+                Some(parent) if parent != current => current = parent,
+                _ => return None,
+            }
+        }
     }
 
     fn handle_compile_fragments(&mut self, params: CompileFragmentsParams) -> ResponseResult {

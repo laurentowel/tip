@@ -358,14 +358,24 @@ Diagrams (matching `tip-diagram-functions') are included as fragments."
               fragments)))
     (nreverse fragments)))
 
+(defun tip--inside-let-binding-p (node)
+  "Return non-nil if NODE is inside a let binding (definition, not invocation)."
+  (let ((parent (treesit-node-parent node)))
+    (while (and parent
+                (not (equal "let" (treesit-node-type parent))))
+      (setq parent (treesit-node-parent parent)))
+    (not (null parent))))
+
 (defun tip--collect-diagram-ranges (node beg end avoid-pos)
   "Recursively find diagram function calls under NODE.
+Skips calls inside #let bindings (function definitions, not invocations).
 Returns a list of (BEG . END) ranges."
   (let ((node-start (treesit-node-start node))
         (node-end (treesit-node-end node))
         (result nil))
     (when (and (<= node-start end) (>= node-end beg))
-      (if (tip--diagram-node-p node)
+      (if (and (tip--diagram-node-p node)
+               (not (tip--inside-let-binding-p node)))
           (let ((start (max beg (1- node-start)))
                 (dend (min end node-end)))
             (when (or (null avoid-pos)
@@ -726,6 +736,9 @@ Automatically renders visible fragments and enables live preview."
         (add-hook 'after-change-functions #'tip--cleanup-stale-overlays nil t)
         ;; Track theme changes
         (tip-follow-theme-mode 1)
+        ;; Kodama integration (auto-detect)
+        (when (fboundp 'tip-kodama-maybe-enable)
+          (tip-kodama-maybe-enable))
         ;; Render visible fragments after a short delay (server needs to start)
         (run-with-timer 0.5 nil
                         (lambda ()
@@ -736,6 +749,7 @@ Automatically renders visible fragments and enables live preview."
     ;; Teardown
     (tip-live-teardown)
     (tip-follow-theme-mode -1)
+    (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
     (preview-toggle-mode -1)))
 

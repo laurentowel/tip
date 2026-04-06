@@ -69,6 +69,34 @@ TIP consists of two parts:
 
 The compilation approach: for each math fragment, tip-server builds a synthetic Typst document that preserves the fragment's scope context (all `#let`, `#import`, `#set`, `#show` bindings visible at that position), compiles it via the typst crate, then crops the SVG to ink bounds and measures the baseline.
 
+## Fragment Detection Subtleties
+
+**Diagram calls inside `#let` are skipped.** If you write `#let canvas(..args) = cetz.canvas(..args)`, the `cetz.canvas` in the definition body is not treated as a renderable fragment — only actual invocations like `#canvas(...)` in the document body are previewed.
+
+**Project root detection.** tip-server walks up from the file's directory to find `.git` or `typst.toml` as the project root. This is needed for relative imports like `#import "../_lib/kodama.typ"`. If no marker is found, the file's parent directory is used.
+
+**Nested math filtering.** Tree-sitter returns all math nodes including nested ones (e.g., `$a + #text[$b$]$` returns both outer and inner). TIP filters to only compile outermost fragments. Math inside diagram calls (e.g., `node((0,0), $A$)`) is part of the diagram, not a separate fragment.
+
+## Kodama Compatibility
+
+TIP works with [Kodama](https://github.com/AliasQli/kodama) knowledge forest files that target HTML export. When a `Kodama.toml` is detected in a parent directory, `tip-kodama-mode` activates automatically (shown as `TIP-kodama` in the mode line).
+
+Kodama files use `html.elem`, `html.frame`, and wrapper patterns like:
+```typst
+#let canvas(..args) = html.elem("div", attrs: (style: "text-align: center"))[
+  #html.frame(cetz.canvas(..args))
+]
+```
+In paged mode (what TIP uses for compilation), `html.elem` is a no-op. TIP correctly:
+- Skips diagram calls inside `#let` bindings (the wrapper definition)
+- Previews the wrapper call `#canvas(...)` when invoked in the document body
+- Overrides kodama's page layout via `page_setup` (emitted after the scope skeleton)
+
+To use kodama compatibility, ensure `tip-kodama.el` is on your load-path:
+```elisp
+(require 'tip-kodama) ;; or autoloaded via tip-mode
+```
+
 ## Security and Network Access
 
 **tip-server needs internet access** to download Typst packages (`@preview/cetz`, `@preview/fletcher`, etc.) on first use. These are fetched from the official Typst package registry, the same way `typst compile` does. After initial download, packages are cached locally.
