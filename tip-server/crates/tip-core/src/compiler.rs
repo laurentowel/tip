@@ -82,6 +82,22 @@ impl FragmentCompiler {
         let source = build_scoped_source(document_source, frag_start, frag_end, color, is_multiline, page_setup, preamble)?;
         compile_source(world, &source, is_inline)
     }
+
+    /// Return the generated source for a fragment without compiling it.
+    /// Useful for debugging scope resolution.
+    pub fn debug_scoped_source(
+        document_source: &str,
+        frag_start: usize,
+        frag_end: usize,
+    ) -> Result<String, String> {
+        if frag_end > document_source.len() || frag_start >= frag_end {
+            return Err("invalid fragment range".into());
+        }
+        let content = &document_source[frag_start..frag_end];
+        let is_math = content.starts_with('$');
+        let is_multiline = is_math && is_multiline_math(content);
+        build_scoped_source(document_source, frag_start, frag_end, "#000000", is_multiline, None, None)
+    }
 }
 
 /// Compile a prepared source string and return the fragment output.

@@ -573,6 +573,37 @@ Otherwise use baseline alignment for inline math."
             (message "Overlay has no SVG data")))
       (message "No tip overlay at point"))))
 
+;;;###autoload
+(defun tip-show-skeleton-at-point ()
+  "Display the scoped skeleton for the fragment at point.
+Shows the synthetic Typst source that the server would compile,
+including all scope-defining statements visible at this position."
+  (interactive)
+  (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+    (unless bounds
+      (user-error "No math or diagram fragment at point"))
+    (let ((byte-start (1- (position-bytes (car bounds))))
+          (byte-end (1- (position-bytes (cdr bounds))))
+          (buf (current-buffer)))
+      (tip--sync-buffer)
+      (tip--send-request
+       "debug_skeleton"
+       `(("uri" . ,(buffer-file-name))
+         ("start" . ,byte-start)
+         ("end" . ,byte-end))
+       (lambda (result)
+         (let ((source (alist-get 'source result))
+               (err (alist-get 'error result)))
+           (if err
+               (message "TIP skeleton error: %s" err)
+             (with-current-buffer (get-buffer-create "*tip-skeleton*")
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert source)
+                 (when (fboundp 'typst-ts-mode) (typst-ts-mode))
+                 (goto-char (point-min)))
+               (display-buffer (current-buffer))))))))))
+
 ;;; * cursor and overlay management (delegates to preview-toggle)
 
 ;;;###autoload

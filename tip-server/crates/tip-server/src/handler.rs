@@ -30,6 +30,7 @@ impl Handler {
             Request::Sync(params) => self.handle_sync(params),
             Request::CompileFragments(params) => self.handle_compile_fragments(params),
             Request::CompileLive(params) => self.handle_compile_live(params),
+            Request::DebugSkeleton(params) => self.handle_debug_skeleton(params),
             Request::Shutdown => self.handle_shutdown(),
         };
         ResponseMessage { id, result }
@@ -153,6 +154,19 @@ impl Handler {
                     error: None,
                 },
             },
+            Err(err) => ResponseResult::Error { error: err },
+        }
+    }
+
+    fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
+        let content = match self.documents.get(&params.uri) {
+            Some(c) => c.to_string(),
+            None => return ResponseResult::Error {
+                error: format!("document not synced: {}", params.uri),
+            },
+        };
+        match FragmentCompiler::debug_scoped_source(&content, params.start, params.end) {
+            Ok(source) => ResponseResult::DebugSkeleton { source },
             Err(err) => ResponseResult::Error { error: err },
         }
     }

@@ -31,8 +31,17 @@ pub enum Request {
     CompileFragments(CompileFragmentsParams),
     #[serde(rename = "compile_live")]
     CompileLive(CompileLiveParams),
+    #[serde(rename = "debug_skeleton")]
+    DebugSkeleton(DebugSkeletonParams),
     #[serde(rename = "shutdown")]
     Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DebugSkeletonParams {
+    pub uri: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,6 +103,8 @@ pub enum ResponseResult {
     },
     #[serde(rename = "shutdown")]
     Shutdown { ok: bool },
+    #[serde(rename = "debug_skeleton")]
+    DebugSkeleton { source: String },
     #[serde(rename = "error")]
     Error { error: String },
 }
