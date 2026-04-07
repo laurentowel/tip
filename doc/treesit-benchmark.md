@@ -62,18 +62,17 @@ This is a worst case: the check must walk the full parent chain for every fragme
   ;; Collect all math ranges
   (let* ((ranges (treesit-query-range 'typst "((math) @math)"))
          (n (length ranges))     ;; 1000
-         (rounds 10)             ;; repeat to reduce noise
-         (t0 (float-time)))
-    ;; Run the check on every range, 10 times
-    (dotimes (_ rounds)
-      (dolist (pair ranges)
-        (tip--inside-let-binding-p
-         (treesit-node-at (car pair) 'typst))))
+         (t0 (float-time))
+         (in-let 0))
+    ;; Run the check on every range, single pass
+    (dolist (pair ranges)
+      (when (tip--inside-let-binding-p
+             (treesit-node-at (car pair) 'typst))
+        (cl-incf in-let)))
     (let* ((elapsed-ms (* 1000 (- (float-time) t0)))
-           (total (* rounds n))
-           (per-check (/ elapsed-ms total)))
-      (message "ranges: %d, rounds: %d, total checks: %d"
-               n rounds total)
+           (per-check (/ elapsed-ms n)))
+      (message "ranges: %d (%d in let, %d real)"
+               n in-let (- n in-let))
       (message "total: %.1fms, per-check: %.4fms (%.1f µs)"
                elapsed-ms per-check (* per-check 1000))))
 
@@ -82,20 +81,21 @@ This is a worst case: the check must walk the full parent chain for every fragme
 
 Note: `treesit-node-at` is included in the timing — it's part of the real cost. In production, each check calls `(tip--inside-let-binding-p (treesit-node-at (car pair) 'typst))`.
 
+Single pass — no repeated rounds. Each range is checked exactly once, same as in production.
+
 ## Results
 
 ```
-ranges: 1000, rounds: 10, total checks: 10000
-total: 35.7ms, per-check: 0.0036ms (3.6 µs)
+ranges: 1000 (500 in let, 500 real)
+total: 2.4ms, per-check: 0.0024ms (2.4 µs)
 ```
 
 | Metric | Value |
 |--------|-------|
-| Total checks | 10,000 |
-| Total time | 35.7ms |
-| Per check | 3.6µs |
-| 1000 fragments | 3.6ms |
-| 200 fragments (typical) | 0.7ms |
+| Total checks | 1,000 |
+| Total time | 2.4ms |
+| Per check | 2.4µs |
+| 200 fragments (typical) | 0.5ms |
 
 ## Why This Is Fast
 
@@ -115,7 +115,7 @@ Moving the check to the server would mean:
 
 2. **Redundant parsing.** The server already parses the document for scope skeleton extraction. But it does so per-fragment, not per-batch. Adding a pre-filter step would require a separate parse pass.
 
-3. **Latency.** A server round-trip (JSON encode → pipe write → server parse → pipe read → JSON decode) takes ~1ms minimum. The elisp check takes 3.6µs. The overhead of asking the server would be 300x slower than doing it locally.
+3. **Latency.** A server round-trip (JSON encode → pipe write → server parse → pipe read → JSON decode) takes ~1ms minimum. The elisp check takes 2.4µs. The overhead of asking the server would be ~400x slower than doing it locally.
 
 4. **Architecture.** TIP's design: Emacs decides what to compile, server compiles it. The let-binding check is a "what to compile" decision — it belongs on the Emacs side.
 
@@ -125,11 +125,11 @@ For context, here are the costs of each step in fragment collection:
 
 ```
 treesit-query-range (all math nodes):     ~50ms for 1000 fragments
-let-binding checks:                        ~3.6ms for 1000 fragments
+let-binding checks:                        ~2.4ms for 1000 fragments
 nesting deduplication:                     ~2ms for 1000 fragments
 byte offset conversion:                   ~1ms for 1000 fragments
 ─────────────────────────────────────────────────────────────────
 Total tip-collect-fragment-locations:     ~110ms for 1000 fragments
 ```
 
-The let-binding check is 3% of the total. The dominant cost is `treesit-query-range`, which scans the entire buffer's parse tree. Even if the let-binding check were instant, the total would barely change.
+The let-binding check is ~2% of the total. The dominant cost is `treesit-query-range`, which scans the entire buffer's parse tree. Even if the let-binding check were instant, the total would barely change.

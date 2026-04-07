@@ -57,7 +57,7 @@ Detection: `tip--inside-let-binding-p` walks tree-sitter parents looking for a `
 
 This also prevents preview-toggle from triggering open/close when the cursor moves through math inside `#let` bodies — `tip--get-bounds-of-math-at-point` returns nil for these.
 
-**Performance**: ~4µs per check. 1000 checks = 3.6ms. See [treesit-benchmark.md](treesit-benchmark.md) for the full benchmark with reproducible code and analysis of why this stays in elisp rather than Rust.
+**Performance**: ~2.4µs per check. 1000 checks = 2.4ms. See [treesit-benchmark.md](treesit-benchmark.md) for the full benchmark with reproducible code and analysis of why this stays in elisp rather than Rust.
 
 ## Layer 4: Nesting Deduplication
 
