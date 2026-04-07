@@ -630,12 +630,14 @@ Half-open interval: returns bounds only if BEG <= X < END."
   (let ((node (treesit-node-at x 'typst)))
     (or
      ;; Check if we're inside a math node (walk up)
+     ;; Skip math inside #let bindings (definitions, not rendered)
      (let ((n node))
        (while (and n (not (equal "math" (treesit-node-type n))))
          (setq n (treesit-node-parent n)))
        (when (and n
                   (<= (treesit-node-start n) x)
-                  (< x (treesit-node-end n)))
+                  (< x (treesit-node-end n))
+                  (not (tip--inside-let-binding-p n)))
          (cons (treesit-node-start n) (treesit-node-end n))))
      ;; Check diagram ranges (walk up for call node)
      (let ((n node) (found nil))
