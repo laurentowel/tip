@@ -480,7 +480,7 @@ height_pt, and depth_pt keys."
           (overlay-put ov 'face 'tip-error-face)))
       (when (and frag-beg frag-end (> (length svg-data) 0)
                  (> height-pt 0.01)
-                 (> (or width-pt 1) 0.01))
+                 (> (or width-pt 0) 0.01))
         ;; Clear existing overlays at this location
         (dolist (ov (overlays-in frag-beg frag-end))
           (when (eq (overlay-get ov 'tip) 'tip)
