@@ -258,6 +258,18 @@ cd tests/visual && typst compile --root /workspace/tip-improve/tip-server compar
 
 Per-fragment cost scales with document size (scope skeleton extraction). Overlay creation + redisplay is negligible.
 
+### Why multi-threaded compilation doesn't help (parallel-compile branch)
+
+We tried using rayon to compile fragments in parallel. Result: only 10% speedup (91s → 82s for 2000 fragments). The branch is `parallel-compile` — kept as a documented dead end.
+
+**Root cause**: Typst's `comemo` memoization cache works per-input. Each fragment is a different synthetic document (different scope skeleton + different math content). Comemo sees 2000 unique inputs → 2000 cache misses. Parallelizing 2000 cache misses across 8 threads just gives 2000 cache misses happening 8 at a time. No cache sharing across threads because the inputs are different.
+
+**What Typst actually parallelizes**: Typst's 2-3x speedup (from the 0.12 blog post) comes from parallelizing **layout within a single `compile()` call** — different pages of the same document are laid out on different threads. They share the same comemo cache because they're the same document. Our per-fragment approach calls `compile()` 2000 times on 2000 different documents — Typst's internal parallelism has nothing to parallelize within each tiny single-page compilation.
+
+**The real path to parallelism**: the full-document approach (`doc/full-document-approach.md`). Compile the real document once (one `compile()` call where Typst's parallelism kicks in), then extract per-fragment SVGs from the frame tree. This would give both exact baselines AND the parallelism benefit — for free, because Typst already does it internally.
+
+**Lesson for future agents**: don't try to parallelize the per-fragment compilation loop. The architecture needs to change from "N compilations of N synthetic documents" to "1 compilation of the real document + N frame extractions". See `doc/full-document-approach.md` for the design.
+
 ## Known Typst Limitations
 
 **Page clipping with `height: auto`**: Typst's auto page height doesn't fully account for glyph ink bounds beyond the content box. Upstream: https://github.com/typst/typst/issues/1028. Solved by rendering with large margins (20pt) and cropping SVG to ink bounds post-render.
