@@ -83,8 +83,8 @@ Crops display math to ink bounding box for compact minibuffer display."
                  (cropped (if (> ink-w 0)
                               (consult-tip--crop-svg data ink-w ink-h)
                             data)))
+            ;; After cropping, just cap width — height follows naturally
             (list 'image :type 'svg :data cropped
-                  :height line-h
                   :max-width consult-tip-image-max-width
                   :ascent 'center)))))))
 

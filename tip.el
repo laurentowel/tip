@@ -714,37 +714,40 @@ Works in both normal typst-ts-mode and tip-edit buffers."
       (tip-childframe-hide)
       (setq tip-live--content-cache "")))))
 
-;;;###autoload
 (defun tip-live--on-buffer-change (&rest _)
   "Hide childframe when switching away from a tip-mode buffer."
   (unless (and (eq major-mode 'typst-ts-mode)
-               (bound-and-true-p tip-mode))
+               (bound-and-true-p tip-mode)
+               (bound-and-true-p tip-live-mode))
     (tip-childframe-hide)))
 
 (defun tip-live--on-buffer-kill ()
   "Hide childframe when a tip-mode buffer is killed."
-  (when (bound-and-true-p tip-mode)
+  (when (bound-and-true-p tip-live-mode)
     (tip-childframe-hide)))
 
-(defun tip-live-setup ()
-  "Enable live preview for math fragments via childframe."
-  (interactive)
-  (setq tip-live--timer
-        (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
-  (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
-  (add-hook 'kill-buffer-hook #'tip-live--on-buffer-kill nil t))
-
 ;;;###autoload
-(defun tip-live-teardown ()
-  "Disable live preview."
-  (interactive)
-  (when tip-live--timer
-    (cancel-timer tip-live--timer)
-    (setq tip-live--timer nil))
-  (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
-  (remove-hook 'kill-buffer-hook #'tip-live--on-buffer-kill t)
-  (tip-childframe-hide)
-  (setq tip-live--content-cache ""))
+(define-minor-mode tip-live-mode
+  "Live preview of the math fragment at point in a childframe.
+Compiles the fragment under cursor on idle and shows the result
+in a floating childframe.  Disabled by default — enable with
+M-x tip-live-mode or (tip-live-mode 1)."
+  :init-value nil
+  :lighter " TIP-live"
+  (if tip-live-mode
+      (progn
+        (setq tip-live--timer
+              (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
+        (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
+        (add-hook 'kill-buffer-hook #'tip-live--on-buffer-kill nil t))
+    ;; Teardown: cancel timer, remove hooks, hide frame, clear cache
+    (when tip-live--timer
+      (cancel-timer tip-live--timer)
+      (setq tip-live--timer nil))
+    (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
+    (remove-hook 'kill-buffer-hook #'tip-live--on-buffer-kill t)
+    (tip-childframe-hide)
+    (setq tip-live--content-cache "")))
 
 ;;; * theme change tracking
 
@@ -809,8 +812,7 @@ Automatically renders visible fragments and enables live preview."
         (setq-local preview-toggle-compile-region-fn
                     #'tip--compile-region)
         (preview-toggle-mode 1)
-        ;; Live preview via childframe
-        (tip-live-setup)
+        ;; Live preview via childframe (off by default, user enables with M-x tip-live-mode)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
         ;; Clean up stale overlays on buffer changes
@@ -828,7 +830,7 @@ Automatically renders visible fragments and enables live preview."
                               (when tip-mode
                                 (tip-send-nbd)))))))
     ;; Teardown
-    (tip-live-teardown)
+    (when tip-live-mode (tip-live-mode -1))
     (tip-follow-theme-mode -1)
     (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
