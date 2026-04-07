@@ -499,7 +499,13 @@ height_pt, and depth_pt keys."
                                    (string-match-p "\n" (substring frag-text 1 -1)))))
                (img-spec (tip--make-image-spec svg-data height-pt depth-pt is-display))
                (display img-spec)
-               (ov (make-overlay frag-beg frag-end)))
+               ;; For display math, eat the preceding newline so no blank line appears
+               (ov-beg (if (and is-display
+                                (> frag-beg (point-min))
+                                (eq (char-before frag-beg) ?\n))
+                           (1- frag-beg)
+                         frag-beg))
+               (ov (make-overlay ov-beg frag-end)))
           (overlay-put ov 'tip 'tip)
           (overlay-put ov 'view-text nil)
           (overlay-put ov 'tip-height-pt height-pt)
