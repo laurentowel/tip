@@ -307,11 +307,14 @@ CALLBACK is called with the result alist when response arrives."
       (process-send-string tip--server-process json))))
 
 (defun tip--sync-buffer ()
-  "Sync current buffer content to tip-server."
+  "Sync current buffer content to tip-server.
+Always sends the full buffer, ignoring narrowing."
   (tip--send-request
    "sync"
    `(("uri" . ,(buffer-file-name))
-     ("content" . ,(buffer-substring-no-properties (point-min) (point-max))))))
+     ("content" . ,(save-restriction
+                     (widen)
+                     (buffer-substring-no-properties (point-min) (point-max)))))))
 
 ;;; * fragment collection
 
@@ -457,12 +460,15 @@ so it takes precedence over document-level #set text rules."
 (defun tip--apply-fragment-results (fragment-results)
   "Apply compiled SVG results as overlays.
 FRAGMENT-RESULTS is a vector of alists with start, end, svg,
-height_pt, and depth_pt keys."
-  (seq-doseq (frag fragment-results)
-    (let* ((byte-start (alist-get 'start frag))
-           (byte-end (alist-get 'end frag))
-           (frag-beg (byte-to-position (1+ byte-start)))
-           (frag-end (byte-to-position (1+ byte-end)))
+height_pt, and depth_pt keys.
+Handles narrowed buffers: byte-to-position needs full buffer access."
+  (save-restriction
+    (widen)
+    (seq-doseq (frag fragment-results)
+      (let* ((byte-start (alist-get 'start frag))
+             (byte-end (alist-get 'end frag))
+             (frag-beg (byte-to-position (1+ byte-start)))
+             (frag-end (byte-to-position (1+ byte-end)))
            (svg-data (alist-get 'svg frag))
            (height-pt (alist-get 'height_pt frag))
            (depth-pt (alist-get 'depth_pt frag))
@@ -521,7 +527,7 @@ height_pt, and depth_pt keys."
                                     (face-attribute 'default :background)))
           (overlay-put ov 'display display)
           (when (and is-single-line-display tip-display-indicator)
-            (overlay-put ov 'before-string tip-display-indicator)))))))
+            (overlay-put ov 'before-string tip-display-indicator))))))))
 
 (defun tip--font-size-pt ()
   "Return the default font size in points."
