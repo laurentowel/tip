@@ -372,15 +372,19 @@ fn build_scoped_source(
 
     let fragment = &document_source[frag_start..frag_end];
 
-    // bounded() is always included to prevent clipping.
-    // Client preamble (colors, etc.) is additional.
-    let client_preamble = preamble_override.unwrap_or("");
-
     // page_setup and client_preamble go AFTER skeleton so they override
     // document-level rules (page layout, text size, colors).
-    let source = format!(
-        "{DEFAULT_RENDERING_PREAMBLE}\n{skeleton}\n{client_preamble}\n{page_setup}\n{fragment}\n{closing}\n"
-    );
+    // Join non-empty sections with single newlines to avoid blank lines
+    // (Typst renders \n\n as paragraph breaks, causing spurious empty space).
+    let sections: Vec<&str> = [
+        DEFAULT_RENDERING_PREAMBLE,
+        skeleton.trim(),
+        preamble_override.unwrap_or("").trim(),
+        page_setup.trim(),
+        fragment,
+        closing.as_str(),
+    ].into_iter().filter(|s| !s.is_empty()).collect();
+    let source = sections.join("\n") + "\n";
     Ok(source)
 }
 

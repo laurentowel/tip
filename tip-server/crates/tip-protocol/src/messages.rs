@@ -175,6 +175,7 @@ mod tests {
                     svg: "<svg></svg>".into(),
                     height_pt: 12.5,
                     depth_pt: 2.3,
+                    width_pt: 24.0,
                     error: None,
                 }],
             },
