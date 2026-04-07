@@ -221,9 +221,10 @@ fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -
     }
 
     if bounds.is_empty() {
+        // No visible content — return zero-area bounds
         InkBounds {
-            min_x: 0.0, max_x: frame.width().to_pt(),
-            min_y: 0.0, max_y: frame.height().to_pt(),
+            min_x: 0.0, max_x: 0.0,
+            min_y: 0.0, max_y: 0.0,
         }
     } else {
         bounds
