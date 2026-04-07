@@ -102,36 +102,25 @@ For comparison, operations that can be done in elisp via tree-sitter:
 
 Any check that can be expressed as a tree-sitter parent walk should stay in elisp. The server should only handle work that requires the Typst compiler (scope extraction, compilation, SVG rendering).
 
-## The Pipeline
+## The Full Pipeline (measured)
 
-In a typical `tip-render-all` call on a 200-fragment document:
+Realistic 200-fragment document: imports, `#let` bindings, `#set`/`#show` rules,
+mix of simple inline (`$a_i + b_i$`), medium (`$integral ... + sum ...$`),
+complex (`$frac(alpha^2 + beta, gamma) dot score(i)$`), and display math
+(multi-line with limits and integrals). 13KB document.
 
 ```
-Elisp side:
-  treesit-query-range (find all math):    ~10ms
-  let-binding checks (200 × 2.4µs):       0.5ms
-  nesting dedup:                           0.4ms
-  byte conversion:                         0.2ms
-  json-encode + pipe write:                0.5ms
-                                          ─────
-  Elisp total:                            ~12ms
-
-Server side (1 batch request):
-  JSON parse:                              0.1ms
-  200 scope skeletons:                    ~50ms
-  200 typst::compile (comemo cached):    ~100ms
-  200 SVG export + crop:                  ~20ms
-  JSON encode + pipe write:                2ms
-                                          ─────
-  Server total:                          ~170ms
-
-Elisp callback:
-  json-parse-string:                       1ms
-  200 overlay creates:                    ~10ms
-                                          ─────
-  Callback total:                         ~11ms
-
-Total: ~193ms for 200 fragments (~1ms/fragment)
+Benchmark: 200 realistic fragments
+  Initial compile:        715ms total, 3.6ms/fragment
+  Second compile (warm):  706ms total, 3.5ms/fragment
 ```
 
-The IPC is a small fraction. The dominant cost is compilation on the server side, which is where it belongs.
+The IPC overhead (23µs per round-trip) is negligible compared to the 715ms
+total — one batch request, one batch response. The dominant cost is scope
+skeleton extraction + typst::compile on the server side, which is exactly
+where it should be.
+
+Note: comemo caching provides only ~1% speedup on the second compile here
+because each fragment has a different scope skeleton. On documents where
+fragments share similar scopes (e.g., all at the top level), comemo is
+more effective (~50% speedup observed in earlier benchmarks).
