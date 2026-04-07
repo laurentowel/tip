@@ -130,17 +130,12 @@ Crops display math to ink bounding box for compact minibuffer display."
                (source (replace-regexp-in-string
                         "[\n\t ]+" " "
                         (buffer-substring-no-properties beg (min (+ beg 50) end))))
-               ;; Candidate: rendered SVG + invisible source for filtering
-               (display (concat
-                         (if img
-                             (propertize " " 'display img)
-                           "")
-                         (propertize source 'invisible (when img t))))
+               ;; Candidate: source text (filterable, highlightable by vertico)
                (cand (consult--location-candidate
-                      display marker line idx)))
-          ;; Stash source for marginalia and filtering
-          (put-text-property 0 1 'consult-tip--source
-                             (truncate-string-to-width source 80) cand)
+                      source marker line idx)))
+          ;; Stash SVG image for annotation
+          (when img
+            (put-text-property 0 1 'consult-tip--image img cand))
           (cl-incf idx)
           (push cand candidates))))
     (unless candidates
@@ -173,11 +168,10 @@ appears as annotation in a right column."
 ;;; * marginalia annotator
 
 (defun consult-tip--annotate (cand)
-  "Annotate tip fragment CAND with its source text."
-  (when-let* ((source (get-text-property 0 'consult-tip--source
-                                          (car (member cand consult-tip--last-candidates)))))
-    (marginalia--fields
-     (source :truncate 0.6 :face 'marginalia-documentation))))
+  "Annotate tip fragment CAND with its rendered SVG."
+  (when-let* ((found (car (member cand consult-tip--last-candidates)))
+              (img (get-text-property 0 'consult-tip--image found)))
+    (concat " " (propertize " " 'display img))))
 
 (defvar consult-tip--last-candidates nil
   "Candidates from the last `consult-tip-fragment' call.
