@@ -32,11 +32,17 @@ Smaller values make candidates more compact."
   :type 'float
   :group 'tip)
 
-(defcustom consult-tip-image-max-width 300
+(defcustom consult-tip-image-max-width nil
   "Maximum pixel width of rendered SVG in candidates.
-Wider images (display math, diagrams) are scaled down to fit."
-  :type 'integer
+nil means ~40 characters worth of pixels (half a typical minibuffer)."
+  :type '(choice (const :tag "Auto (~40 chars)" nil)
+                 (integer :tag "Pixels"))
   :group 'tip)
+
+(defun consult-tip--max-width ()
+  "Compute max pixel width for SVG candidates."
+  (or consult-tip-image-max-width
+      (* 40 (frame-char-width))))
 
 (defun consult-tip--crop-svg (data ink-w ink-h)
   "Crop SVG DATA to center on ink bounds of INK-W x INK-H.
@@ -85,7 +91,7 @@ Crops display math to ink bounding box for compact minibuffer display."
                             data)))
             ;; After cropping, just cap width — height follows naturally
             (list 'image :type 'svg :data cropped
-                  :max-width consult-tip-image-max-width
+                  :max-width (consult-tip--max-width)
                   :ascent 'center)))))))
 
 (defun consult-tip--candidates ()
