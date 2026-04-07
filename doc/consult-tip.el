@@ -178,7 +178,7 @@ appears as annotation in a right column."
 Needed because consult strips text properties from the selected string.")
 
 ;; Register with marginalia
-(add-to-list 'marginalia-annotator-registry
+(add-to-list 'marginalia-annotators
              '(tip-fragment consult-tip--annotate builtin none))
 
 (provide 'consult-tip)
