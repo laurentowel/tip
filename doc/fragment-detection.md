@@ -145,7 +145,9 @@ produces empty SVGs (0 width, 40pt height). These are filtered by the height che
 (> height-pt 0.01)
 ```
 
-The server also detects HTML-targeting documents by checking if the scope skeleton contains `html.elem`/`html.frame`/`html.figure`, and conditionally skips the text size override (Typst forbids `#set text(size: ...)` in html export mode).
+## Text Size Override (PDF-targeting)
+
+For PDF-targeting documents, the server enforces `#show math.equation: set text(size: 11pt)` so all fragments render at the same size regardless of the document's own font settings. This is skipped for HTML-targeting documents because Typst forbids setting text size in html export mode. Detection: the scope skeleton is checked for `html.elem`/`html.frame`/`html.figure`.
 
 ## The Two Detection Functions
 
