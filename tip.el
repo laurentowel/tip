@@ -331,7 +331,7 @@ Skips fragment containing AVOID-POS if given.
 Filters out nested math — only keeps outermost fragments.
 Diagrams (matching `tip-diagram-functions') are included as fragments."
   (let (ranges fragments)
-    ;; Collect math ranges (skip empty: $$ or $ $)
+    ;; Collect math ranges (skip empty, skip inside #let bindings)
     (dolist (pair (treesit-query-range 'typst "((math) @math)"))
       (when (and
              (>= (car pair) beg)
@@ -340,6 +340,9 @@ Diagrams (matching `tip-diagram-functions') are included as fragments."
              (not (string-blank-p
                    (buffer-substring-no-properties
                     (1+ (car pair)) (1- (cdr pair))))) ;; skip $ $
+             ;; Skip math inside #let definitions (not rendered content)
+             (not (tip--inside-let-binding-p
+                   (treesit-node-at (car pair) 'typst)))
              (or (null avoid-pos)
                  (not (and (>= avoid-pos (car pair))
                            (<= avoid-pos (cdr pair))))))
