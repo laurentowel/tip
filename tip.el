@@ -505,6 +505,7 @@ height_pt, and depth_pt keys."
           (overlay-put ov 'tip-height-pt height-pt)
           (overlay-put ov 'tip-depth-pt depth-pt)
           (overlay-put ov 'tip-width-pt (or width-pt 0))
+          (overlay-put ov 'tip-svg svg-data)
           (overlay-put ov 'tip-fg (tip--color-to-hex
                                     (face-attribute 'default :foreground)))
           (overlay-put ov 'tip-bg (tip--color-to-hex
@@ -562,20 +563,21 @@ Otherwise use baseline alignment for inline math."
 
 ;;;###autoload
 (defun tip-copy-svg-at-point ()
-  "Copy the SVG data of the tip overlay at point to the kill ring."
+  "Copy the SVG data of the tip overlay at point to the kill ring.
+Works even when the overlay is open (display cleared)."
   (interactive)
-  (let ((ov (seq-find (lambda (ov)
-                        (and (eq (overlay-get ov 'tip) 'tip)
-                             (overlay-get ov 'display)))
+  (let ((ov (seq-find (lambda (ov) (eq (overlay-get ov 'tip) 'tip))
                       (append (overlays-at (point))
                               (overlays-in (point) (min (1+ (point)) (point-max)))))))
     (if ov
-        (let ((svg (plist-get (cdr (car-safe (overlay-get ov 'display))) :data)))
+        (let* ((disp (overlay-get ov 'display))
+               (svg (or (and disp (plist-get (cdr (car-safe disp)) :data))
+                        (overlay-get ov 'tip-svg))))
           (if svg
               (progn
                 (kill-new svg)
                 (message "SVG copied (%d bytes)" (length svg)))
-            (message "Overlay has no SVG data")))
+            (message "Overlay has no SVG data (not yet compiled?)")))
       (message "No tip overlay at point"))))
 
 ;;;###autoload
