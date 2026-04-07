@@ -115,7 +115,15 @@ Moving the check to the server would mean:
 
 2. **Redundant parsing.** The server already parses the document for scope skeleton extraction. But it does so per-fragment, not per-batch. Adding a pre-filter step would require a separate parse pass.
 
-3. **Latency.** A server round-trip (JSON encode → pipe write → server parse → pipe read → JSON decode) takes ~1ms minimum. The elisp check takes 2.4µs. The overhead of asking the server would be ~400x slower than doing it locally.
+3. **Latency.** Measured server round-trip overhead:
+
+```
+SYNC round-trip (IPC, no compilation):  100 calls, 2.3ms total, 23µs per call
+COMPILE round-trip (IPC + compile $a$): 50 calls, 3.4ms total, 68µs per call
+Let-binding check (tree-sitter):        1000 checks, 2.4ms total, 2.4µs per check
+```
+
+Even the cheapest server call (sync, no work) is 10x slower than the tree-sitter check. The IPC overhead alone (JSON encode → pipe write → server read → process → pipe write → JSON decode → callback dispatch) costs more than the entire parent walk.
 
 4. **Architecture.** TIP's design: Emacs decides what to compile, server compiles it. The let-binding check is a "what to compile" decision — it belongs on the Emacs side.
 
