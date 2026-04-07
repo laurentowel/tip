@@ -272,6 +272,24 @@ CeTZ/Fletcher diagrams aren't math equations — they're function call results. 
 
 A 1000-fragment document currently takes ~10s for initial compilation (10ms/fragment × 1000). Full-doc compilation would be faster (one compile, comemo caching) but the frame tree walk adds overhead. Benchmarking needed.
 
+### 6. Error Resilience
+
+This is a fundamental weakness of the full-document approach. Typst's `compile()` is all-or-nothing: if ANY part of the document has an error, the entire compilation fails — no `PagedDocument`, no frame tree, no SVGs for any fragment.
+
+The current per-fragment approach is resilient: fragment A fails, fragments B and C still render because they're independent synthetic documents.
+
+Strategy: **graceful degradation**.
+
+1. **Hybrid baseline** (recommended): use full-doc ONLY for baseline ratios (the hybrid from earlier in this essay). If full-doc fails, fall back to heuristic baselines (current `find_baseline_depth`). Per-fragment SVG rendering is unaffected — it still uses synthetic documents. No loss on error, just less precise baselines.
+
+2. **Fallback on error**: try full-doc first. On error, switch to per-fragment for everything. Doubles the work but only on broken documents.
+
+3. **Partial output**: Typst may produce warnings (which still yield a document) vs fatal errors (which don't). Check `warned.output` — some "errors" might be warnings that still produce usable output.
+
+4. **Error isolation**: Typst's error is usually localized (one undefined variable, one syntax error). If we could identify which fragment caused the error and exclude it, we could retry. But Typst doesn't support partial compilation.
+
+The hybrid baseline approach (option 1) is safest: full-doc is an enhancement, not a requirement. Documents with errors degrade gracefully to current behavior.
+
 ## Tinymist's Approach (for Reference)
 
 Tinymist's jump-from-click (`tinymist-query/src/jump.rs`) walks the frame tree similarly:
