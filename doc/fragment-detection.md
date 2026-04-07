@@ -57,7 +57,14 @@ Detection: `tip--inside-let-binding-p` walks tree-sitter parents looking for a `
 
 This also prevents preview-toggle from triggering open/close when the cursor moves through math inside `#let` bodies — `tip--get-bounds-of-math-at-point` returns nil for these.
 
-**Performance**: 0.002ms per check (tree-sitter parent walk). Negligible even for 1000 fragments.
+**Performance**: ~4µs per check (tree-sitter parent walk). 1000 checks = 3.6ms.
+
+```
+Benchmark: 1000 math ranges, 10 rounds, 10000 total checks
+  Total: 35.7ms, per-check: 0.0036ms (3.6µs)
+  Setup: 500 #let bindings + 500 real math fragments
+  Measured: tip--inside-let-binding-p on each range
+```
 
 ## Layer 4: Nesting Deduplication
 
