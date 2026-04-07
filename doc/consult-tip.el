@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'consult)
+(require 'marginalia)
 (require 'tip)
 
 (defcustom consult-tip-image-height 1.2
@@ -37,9 +38,36 @@ Wider images (display math, diagrams) are scaled down to fit."
   :type 'integer
   :group 'tip)
 
+(defun consult-tip--crop-svg (data ink-w ink-h)
+  "Crop SVG DATA to center on ink bounds of INK-W x INK-H.
+Rewrites viewBox to show only the content region."
+  (let* ((svg-w (and (string-match "width=\"\\([0-9.]+\\)" data)
+                     (string-to-number (match-string 1 data))))
+         (svg-h (and (string-match "height=\"\\([0-9.]+\\)" data)
+                     (string-to-number (match-string 1 data)))))
+    (if (and svg-w svg-h (> svg-w (* ink-w 1.5)))
+        ;; Content is centered in the page — compute viewBox crop
+        (let* ((pad 1.0)
+               (cx (/ (- svg-w ink-w) 2.0))  ;; centered content x-start
+               (vb-x (max 0 (- cx pad)))
+               (vb-w (+ ink-w (* pad 2)))
+               (result data))
+          ;; Rewrite viewBox
+          (when (string-match "viewBox=\"[^\"]*\"" result)
+            (setq result (replace-match
+                          (format "viewBox=\"%s 0 %s %s\"" vb-x vb-w svg-h)
+                          t t result)))
+          ;; Rewrite width
+          (when (string-match "width=\"[^\"]*\"" result)
+            (setq result (replace-match
+                          (format "width=\"%spt\"" vb-w)
+                          t t result)))
+          result)
+      data)))
+
 (defun consult-tip--get-svg-image (beg end)
   "Get a compact SVG image spec from a tip overlay in BEG..END, or nil.
-Uses tip-width-pt (ink width) to scale display math to actual content size."
+Crops display math to ink bounding box for compact minibuffer display."
   (let ((ov (seq-find (lambda (ov)
                         (and (eq (overlay-get ov 'tip) 'tip)
                              (overlay-get ov 'display)))
@@ -51,25 +79,14 @@ Uses tip-width-pt (ink width) to scale display math to actual content size."
         (when (and img (eq (car img) 'image))
           (let* ((data (plist-get (cdr img) :data))
                  (line-h (round (* consult-tip-image-height (frame-char-height))))
-                 ;; Display math: ink much narrower than SVG page width
-                 ;; Use ink width to compute a proportional pixel width
-                 (display-p (and (> ink-w 0) (> ink-h 0)
-                                 ;; SVG page is wider than 3× ink width → display math
-                                 (let ((svg-w (and (string-match "width=\"\\([0-9.]+\\)" data)
-                                                   (string-to-number (match-string 1 data)))))
-                                   (and svg-w (> svg-w (* ink-w 2)))))))
-            (if display-p
-                ;; Display math: scale based on ink dimensions, capped
-                (let ((scale (min (/ (float consult-tip-image-max-width) ink-w)
-                                  (/ (float line-h) ink-h))))
-                  (list 'image :type 'svg :data data
-                        :scale scale
-                        :max-width consult-tip-image-max-width
-                        :ascent 'center))
-              ;; Inline math: constrain to line height
-              (list 'image :type 'svg :data data
-                    :height line-h
-                    :ascent 'center))))))))
+                 ;; Crop display math SVG to ink bounds
+                 (cropped (if (> ink-w 0)
+                              (consult-tip--crop-svg data ink-w ink-h)
+                            data)))
+            (list 'image :type 'svg :data cropped
+                  :height line-h
+                  :max-width consult-tip-image-max-width
+                  :ascent 'center)))))))
 
 (defun consult-tip--candidates ()
   "Collect fragments as `consult-location' candidates."
@@ -134,6 +151,7 @@ appears as annotation in a right column."
     (user-error "Not in a typst-ts-mode buffer"))
   (let ((candidates (consult--slow-operation "Collecting fragments..."
                       (consult-tip--candidates))))
+    (setq consult-tip--last-candidates candidates)
     (consult--read
      candidates
      :prompt "Fragment: "
@@ -148,11 +166,20 @@ appears as annotation in a right column."
 
 ;;; * marginalia annotator
 
-(defun marginalia-annotate-tip-fragment (cand)
+(defun consult-tip--annotate (cand)
   "Annotate tip fragment CAND with its source text."
-  (when-let* ((source (get-text-property 0 'consult-tip--source cand)))
+  (when-let* ((source (get-text-property 0 'consult-tip--source
+                                          (car (member cand consult-tip--last-candidates)))))
     (marginalia--fields
      (source :truncate 0.6 :face 'marginalia-documentation))))
+
+(defvar consult-tip--last-candidates nil
+  "Candidates from the last `consult-tip-fragment' call.
+Needed because consult strips text properties from the selected string.")
+
+;; Register with marginalia
+(add-to-list 'marginalia-annotator-registry
+             '(tip-fragment consult-tip--annotate builtin none))
 
 (provide 'consult-tip)
 
