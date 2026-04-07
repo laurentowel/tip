@@ -153,8 +153,8 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
             width_pt: ink.width() + pad * 2.0,
         })
     } else {
-        // BLOCK/DISPLAY MATH: keep full page for in-buffer centering,
-        // but report ink width so clients can crop for compact display.
+        // BLOCK/DISPLAY MATH: no ink cropping (user may have intentional spacing).
+        // Margins are set to 0pt in page_setup so height = content box only.
         Ok(FragmentOutput {
             svg: svg_string,
             height_pt: page_height,
@@ -360,11 +360,11 @@ fn build_scoped_source(
                 "#show math.equation: set text(size: 11pt)\n"
             };
             let page = if is_multiline {
-                "#set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm), header: none, footer: none)\n"
+                "#set page(width: 16cm, height: auto, fill: none, margin: 0pt, header: none, footer: none)\n"
             } else if is_inline {
                 "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
             } else {
-                "#set page(height: auto, width: auto, margin: 0.2cm, fill: none, header: none, footer: none)\n"
+                "#set page(height: auto, width: auto, margin: 0pt, fill: none, header: none, footer: none)\n"
             };
             format!("{size_rule}{page}")
         }
