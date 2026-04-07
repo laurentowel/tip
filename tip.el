@@ -511,7 +511,12 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
                ;; For display math, eat the preceding newline so no blank line appears
                (ov-beg (if (and is-display
                                 (> frag-beg (point-min))
-                                (eq (char-before frag-beg) ?\n))
+                                (eq (char-before frag-beg) ?\n)
+                                ;; Only eat the newline if it's a blank line
+                                ;; (preceded by another newline or buffer start),
+                                ;; otherwise text on the previous line gets merged.
+                                (or (= (1- frag-beg) (point-min))
+                                    (eq (char-before (1- frag-beg)) ?\n)))
                            (1- frag-beg)
                          frag-beg))
                (ov (make-overlay ov-beg frag-end)))
