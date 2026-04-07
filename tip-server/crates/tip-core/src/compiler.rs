@@ -150,7 +150,7 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
             svg: cropped_svg,
             height_pt: cropped_height,
             depth_pt,
-            width_pt: ink.width() + pad * 2.0,
+            width_pt: if ink.is_empty() { 0.0 } else { ink.width() + pad * 2.0 },
         })
     } else {
         // BLOCK/DISPLAY MATH: no ink cropping (user may have intentional spacing).
@@ -159,7 +159,7 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
             svg: svg_string,
             height_pt: page_height,
             depth_pt: 0.0,
-            width_pt: ink.width() + pad * 2.0,
+            width_pt: if ink.is_empty() { 0.0 } else { ink.width() + pad * 2.0 },
         })
     }
 }
