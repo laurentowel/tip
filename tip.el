@@ -31,6 +31,11 @@
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-echo-errors nil
+  "When non-nil, show compilation errors in the echo area."
+  :type 'boolean
+  :group 'tip)
+
 (defcustom tip-server-executable nil
   "Path to the tip-server binary.
 If nil, auto-detected from PATH, local build, or user prompted."
@@ -474,9 +479,10 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
            (depth-pt (alist-get 'depth_pt frag))
            (width-pt (alist-get 'width_pt frag))
            (err (alist-get 'error frag)))
-      ;; Error fragment: highlight with error face, log to echo area
+      ;; Error fragment: highlight with error face, optionally log to echo area
       (when (and err frag-beg frag-end (= (length svg-data) 0))
-        (message "TIP: %s" err)
+        (when tip-echo-errors
+          (message "TIP: %s" err))
         ;; Clear any existing overlay here first
         (dolist (ov (overlays-in frag-beg frag-end))
           (when (eq (overlay-get ov 'tip) 'tip)
@@ -680,6 +686,49 @@ Half-open interval: returns bounds only if BEG <= X < END."
            (when (and (<= beg x) (< x end))
              (cons beg end))))))))
 
+;;; * echo-area error feedback (while editing inside a fragment)
+
+(defvar-local tip-echo--content-cache ""
+  "Cache of the last echo-error-checked fragment content.")
+
+(defvar-local tip-echo--timer nil
+  "Idle timer for echo-area error checking.")
+
+(defun tip-echo--handle-result (result)
+  "Show compilation errors in the echo area, ignore success."
+  (let* ((err (alist-get 'error result))
+         (frags (alist-get 'fragments result))
+         (frag (and frags (> (length frags) 0) (aref frags 0)))
+         (frag-err (and frag (alist-get 'error frag))))
+    (cond
+     (err (message "TIP: %s" err))
+     (frag-err (message "TIP: %s" frag-err)))))
+
+(defun tip-echo--compile-partial ()
+  "Compile fragment at point and echo errors."
+  (when (and tip-echo-errors
+             tip-mode
+             (eq major-mode 'typst-ts-mode)
+             (eq (current-buffer) (window-buffer))
+             (not (bound-and-true-p tip-live-mode)))
+    (if-let* ((bound (tip--get-bounds-of-math-at-point (point)))
+              (content (buffer-substring-no-properties (car bound) (cdr bound))))
+        (unless (string-equal tip-echo--content-cache content)
+          (setq tip-echo--content-cache content)
+          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+                (byte-start (1- (position-bytes (car bound))))
+                (byte-end (1- (position-bytes (cdr bound)))))
+            (tip--sync-buffer)
+            (tip--send-request
+             "compile_fragments"
+             `(("uri" . ,(buffer-file-name))
+               ("fragments" . ,(vector `(("start" . ,byte-start)
+                                          ("end" . ,byte-end))))
+               ("color" . ,fg)
+               ("preamble" . ,(tip--build-preamble)))
+             #'tip-echo--handle-result)))
+      (setq tip-echo--content-cache ""))))
+
 ;;; * live preview (childframe-based, via tip-childframe.el)
 
 (defvar-local tip-live--content-cache ""
@@ -849,6 +898,9 @@ Automatically renders visible fragments and enables live preview."
         ;; Kodama integration (auto-detect)
         (when (fboundp 'tip-kodama-maybe-enable)
           (tip-kodama-maybe-enable))
+        ;; Echo-area error timer (always start, checked inside the function)
+        (setq tip-echo--timer
+              (run-with-idle-timer 0.5 t #'tip-echo--compile-partial))
         ;; Render visible fragments after a short delay (server needs to start)
         (run-with-timer 0.5 nil
                         (lambda ()
@@ -857,6 +909,9 @@ Automatically renders visible fragments and enables live preview."
                               (when tip-mode
                                 (tip-send-nbd)))))))
     ;; Teardown
+    (when tip-echo--timer
+      (cancel-timer tip-echo--timer)
+      (setq tip-echo--timer nil))
     (when tip-live-mode (tip-live-mode -1))
     (tip-follow-theme-mode -1)
     (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
