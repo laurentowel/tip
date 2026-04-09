@@ -83,11 +83,13 @@ These are previewed as block elements (centered, no baseline alignment)."
   :type '(repeat string)
   :group 'tip)
 
-(defcustom tip-scale 1.0
+(defcustom tip-scale 'auto
   "Scaling factor for inline preview images.
-At 1.0, math is sized to match the buffer's text size.
-Increase for larger previews."
-  :type 'float
+When `auto' (default), computed as emacs-font-size / 11.0 so that
+math rendered at Typst's fixed 11pt matches the buffer text size.
+Set to a number to override (1.0 = render at Typst's native 11pt)."
+  :type '(choice (const :tag "Auto (match buffer font size)" auto)
+                 (float :tag "Manual scale factor"))
   :group 'tip)
 
 (defcustom tip-baseline-offset -2
@@ -595,12 +597,19 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
         (/ h 10.0)
       11.0)))  ;; fallback
 
+(defun tip--effective-scale ()
+  "Return the effective scale factor.
+When `tip-scale' is `auto', compute from the buffer font size."
+  (if (eq tip-scale 'auto)
+      (/ (tip--font-size-pt) 11.0)
+    tip-scale))
+
 (defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p)
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
 When DISPLAY-P is non-nil, use vertical centering (for display math).
 Otherwise use baseline alignment for inline math."
   (let* ((font-pt (tip--font-size-pt))
-         (height-em (* tip-scale (/ height-pt font-pt)))
+         (height-em (* (tip--effective-scale) (/ height-pt font-pt)))
          (ascent (if display-p
                      'center
                    ;; Inline: align to math baseline with user offset
