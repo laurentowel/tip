@@ -8,10 +8,10 @@ use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
-use typst_library::Feature;
 use typst_kit::download::{Downloader, ProgressSink};
 use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
 use typst_kit::package::PackageStorage;
+use typst_library::Feature;
 
 /// A World implementation for TIP that keeps the main source in memory
 /// (synced from the editor) and resolves imports from the filesystem
@@ -104,16 +104,15 @@ impl TipWorld {
                 .packages
                 .prepare_package(spec, &mut ProgressSink)
                 .map_err(|e| FileError::Other(Some(format!("{e}").into())))?;
-            let resolved = id.vpath().resolve(&dir).ok_or_else(|| {
-                FileError::NotFound(id.vpath().as_rootless_path().into())
-            })?;
+            let resolved = id
+                .vpath()
+                .resolve(&dir)
+                .ok_or_else(|| FileError::NotFound(id.vpath().as_rootless_path().into()))?;
             Ok(resolved)
         } else {
             // Project-local import: resolve relative to project root
             let root = self.root.as_deref().ok_or_else(|| {
-                FileError::Other(Some(
-                    "no project root set; cannot resolve imports".into(),
-                ))
+                FileError::Other(Some("no project root set; cannot resolve imports".into()))
             })?;
             id.vpath()
                 .resolve(root)
@@ -124,9 +123,8 @@ impl TipWorld {
     /// Read a source file from disk, caching it.
     fn read_source_from_disk(&self, id: FileId) -> FileResult<Source> {
         let path = self.resolve_path(id)?;
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            FileError::Other(Some(format!("{}: {}", path.display(), e).into()))
-        })?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| FileError::Other(Some(format!("{}: {}", path.display(), e).into())))?;
         let source = Source::new(id, text);
         self.sources.lock().unwrap().insert(id, source.clone());
         Ok(source)
@@ -135,9 +133,8 @@ impl TipWorld {
     /// Read a binary file from disk.
     fn read_file_from_disk(&self, id: FileId) -> FileResult<Bytes> {
         let path = self.resolve_path(id)?;
-        let data = std::fs::read(&path).map_err(|e| {
-            FileError::Other(Some(format!("{}: {}", path.display(), e).into()))
-        })?;
+        let data = std::fs::read(&path)
+            .map_err(|e| FileError::Other(Some(format!("{}: {}", path.display(), e).into())))?;
         Ok(Bytes::new(data))
     }
 }
@@ -162,8 +159,18 @@ impl TipWorldBuilder {
         let features = [Feature::Html].into_iter().collect();
         let library = Library::builder().with_features(features).build();
 
+        // Combine custom dirs with TYPST_FONT_PATHS env var
+        let mut all_dirs = self.font_dirs;
+        if let Ok(val) = std::env::var("TYPST_FONT_PATHS") {
+            for p in val.split(if cfg!(windows) { ';' } else { ':' }) {
+                if !p.is_empty() {
+                    all_dirs.push(PathBuf::from(p));
+                }
+            }
+        }
+
         let discovered: Fonts =
-            FontSearcher::new().search_with(self.font_dirs.iter().map(|p| p.as_path()));
+            FontSearcher::new().search_with(all_dirs.iter().map(|p| p.as_path()));
 
         let main = FileId::new_fake(VirtualPath::new("tip-main.typ"));
 

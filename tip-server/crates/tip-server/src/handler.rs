@@ -27,6 +27,7 @@ impl Handler {
     pub fn handle(&mut self, msg: RequestMessage) -> ResponseMessage {
         let id = msg.id;
         let result = match msg.request {
+            Request::Init(params) => self.handle_init(params),
             Request::Sync(params) => self.handle_sync(params),
             Request::CompileFragments(params) => self.handle_compile_fragments(params),
             Request::CompileLive(params) => self.handle_compile_live(params),
@@ -34,6 +35,12 @@ impl Handler {
             Request::Shutdown => self.handle_shutdown(),
         };
         ResponseMessage { id, result }
+    }
+
+    fn handle_init(&mut self, params: InitParams) -> ResponseResult {
+        let dirs: Vec<&str> = params.font_dirs.iter().map(|s| s.as_str()).collect();
+        self.world = TipWorld::with_font_dirs(&dirs);
+        ResponseResult::Init { ok: true }
     }
 
     fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
@@ -187,6 +194,18 @@ mod tests {
 
     fn make_handler() -> Handler {
         Handler::new()
+    }
+
+    #[test]
+    fn init_returns_ok() {
+        let mut h = make_handler();
+        let resp = h.handle(RequestMessage {
+            id: 1,
+            request: Request::Init(InitParams {
+                font_dirs: vec![],
+            }),
+        });
+        assert_eq!(resp.result, ResponseResult::Init { ok: true });
     }
 
     #[test]

@@ -36,6 +36,23 @@
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-font-dirs nil
+  "Additional font directories for tip-server.
+Each entry is either:
+- An absolute path string (used as-is)
+- A cons pair (ANCHOR . RELATIVE) where ANCHOR is a directory
+  and RELATIVE is resolved against it.  Use \".\" as ANCHOR in
+  .dir-locals.el to mean the project root (the directory
+  containing .dir-locals.el).
+
+Example in .dir-locals.el:
+  ((typst-ts-mode . ((tip-font-dirs . ((\".\" . \"fonts\"))))))
+
+Example in init.el (global):
+  (setq-default tip-font-dirs \\='(\"/home/user/.local/share/fonts/math\"))"
+  :type '(repeat (choice string (cons string string)))
+  :group 'tip)
+
 (defcustom tip-server-executable nil
   "Path to the tip-server binary.
 If nil, auto-detected from PATH, local build, or user prompted."
@@ -89,6 +106,32 @@ Adjust the number and re-evaluate until baselines align."
 (defmacro tip-debug-msg (&rest args)
   `(when tip-enable-debug
      (message ,@args)))
+
+;;; * font directory resolution
+
+(defun tip--resolve-font-dirs ()
+  "Resolve `tip-font-dirs' to a list of absolute directory paths.
+Strings are used as-is (must be absolute).
+Cons pairs (ANCHOR . RELATIVE) are resolved: \".\" means the
+directory containing the nearest .dir-locals.el."
+  (let (result)
+    (dolist (entry tip-font-dirs)
+      (cond
+       ((stringp entry)
+        (push (expand-file-name entry) result))
+       ((consp entry)
+        (let* ((anchor (car entry))
+               (relative (cdr entry))
+               (anchor-dir (if (string= anchor ".")
+                               (let ((dl (dir-locals-find-file
+                                          (or buffer-file-name default-directory))))
+                                 (cond
+                                  ((stringp dl) dl)
+                                  ((listp dl) (car dl))
+                                  (t default-directory)))
+                             (expand-file-name anchor))))
+          (push (expand-file-name relative anchor-dir) result)))))
+    (nreverse result)))
 
 ;;; * server process management
 
@@ -257,7 +300,12 @@ Returns the path, or nil if Docker mode (handled separately)."
              (message "tip-server: %s" (error-message-string err))
              nil)))
     (if tip--server-process
-        (message "tip-server started (pid %d)" (process-id tip--server-process))
+        (progn
+          (message "tip-server started (pid %d)" (process-id tip--server-process))
+          ;; Send init with font dirs if configured
+          (let ((dirs (tip--resolve-font-dirs)))
+            (when dirs
+              (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
       (message "tip-server failed to start"))))
 
 (defun tip--process-sentinel (proc event)

@@ -28,6 +28,8 @@ pub struct FragmentResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "method", content = "params")]
 pub enum Request {
+    #[serde(rename = "init")]
+    Init(InitParams),
     #[serde(rename = "sync")]
     Sync(SyncParams),
     #[serde(rename = "compile_fragments")]
@@ -38,6 +40,12 @@ pub enum Request {
     DebugSkeleton(DebugSkeletonParams),
     #[serde(rename = "shutdown")]
     Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InitParams {
+    #[serde(default)]
+    pub font_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,6 +103,8 @@ pub struct RequestMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum ResponseResult {
+    #[serde(rename = "init")]
+    Init { ok: bool },
     #[serde(rename = "sync")]
     Sync { ok: bool },
     #[serde(rename = "fragments")]
@@ -121,6 +131,29 @@ pub struct ResponseMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn roundtrip_init_request() {
+        let msg = RequestMessage {
+            id: 1,
+            request: Request::Init(InitParams {
+                font_dirs: vec!["/home/user/fonts".into(), "/opt/math-fonts".into()],
+            }),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: RequestMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn roundtrip_init_empty() {
+        let json = r#"{"id": 1, "method": "init", "params": {}}"#;
+        let msg: RequestMessage = serde_json::from_str(json).unwrap();
+        match msg.request {
+            Request::Init(params) => assert!(params.font_dirs.is_empty()),
+            other => panic!("expected Init, got {:?}", other),
+        }
+    }
 
     #[test]
     fn roundtrip_sync_request() {
