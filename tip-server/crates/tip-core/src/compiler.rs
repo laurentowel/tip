@@ -201,17 +201,16 @@ fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -
         let item_y = y_offset + pos.y.to_pt();
         match item {
             FrameItem::Text(text) => {
-                let font_size = text.size.to_pt();
-                let ascent = font_size * 0.8;
-                let descent = font_size * 0.25;
-                // Approximate text width from glyph advances
-                let text_width: f64 = text.glyphs.iter()
-                    .map(|g| g.x_advance.at(text.size).to_pt())
-                    .sum();
-                bounds.min_x = bounds.min_x.min(item_x);
-                bounds.max_x = bounds.max_x.max(item_x + text_width);
-                bounds.min_y = bounds.min_y.min(item_y - ascent);
-                bounds.max_y = bounds.max_y.max(item_y + descent);
+                // Use actual glyph bounding boxes from the font.
+                // The previous 0.8/0.25 estimates clipped tall delimiters
+                // like brackets whose ink extends far beyond normal ascent.
+                // bbox() flips y to frame coords: max.y is top (negative),
+                // min.y is bottom (positive).
+                let bbox = text.bbox();
+                bounds.min_x = bounds.min_x.min(item_x + bbox.min.x.to_pt());
+                bounds.max_x = bounds.max_x.max(item_x + bbox.max.x.to_pt());
+                bounds.min_y = bounds.min_y.min(item_y + bbox.max.y.to_pt());
+                bounds.max_y = bounds.max_y.max(item_y + bbox.min.y.to_pt());
             }
             FrameItem::Group(group) => {
                 let child = find_ink_extent(&group.frame, item_x, item_y);

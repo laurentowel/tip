@@ -94,7 +94,7 @@ The solution combines three ideas:
 
 **Step 2: Find the ink extent by walking the frame tree**
 - After compilation, scan all text items and shape items in the page frame
-- Compute the min/max y-positions (with estimated glyph ascent/descent)
+- For text: use `TextItem::bbox()` to get exact glyph bounding boxes from the font (not estimates — tall delimiters like `[` extend far beyond normal font ascent)
 - This gives the actual ink bounding box within the large-margin page
 
 **Step 3: Crop the SVG viewBox to the ink bounds**
@@ -348,6 +348,10 @@ Theme changes do NOT recompile fragments. Instead, `tip--recolor-overlays` does 
 - **Modular**: tip-core stays transport-agnostic. preview-toggle.el is reusable for future LaTeX preview.
 - **No DWIM (Do What I Mean)**: Avoid implicit automatic behavior that the user didn't ask for. Compilation only happens when the user triggers it (explicit commands, or preview-toggle on cursor leave which is a direct consequence of user movement). No background idle-timer auto-compilation, no guessing intent. Every action should be traceable to a user gesture. This keeps behavior predictable and debuggable.
 - **Performance-conscious hooks**: `tip-server-response-functions` hook runs after every server response. Keep handlers cheap — don't add timers or heavy processing here.
+
+## Rust Learning Notes
+
+`/workspace/learn-rust/rust-basics.md` — the user is learning Rust by studying tip-server. When answering Rust questions, actively update this file with new concepts and add exercises (answers go in `/workspace/learn-rust/.answers/`).
 
 ## User Preferences
 
