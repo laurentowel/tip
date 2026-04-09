@@ -143,8 +143,15 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
 
     if is_inline {
         // INLINE MATH: crop SVG to ink bounds, compute baseline for ascent.
+        // find_baseline_depth tries: Group baseline → text heuristic → font metrics.
+        // Final fallback (should rarely hit): 20pt margin + estimated ascent.
         let baseline_y = find_baseline_depth(&page.frame, 0.0)
-            .unwrap_or(27.5); // 20pt margin + ~7.5pt font ascent
+            .unwrap_or_else(|| {
+                // Last resort: derive from page height and margins.
+                // For height:auto with 20pt top margin and 11pt text,
+                // baseline ≈ 20 + 11 * 0.8 = 28.8
+                20.0 + 11.0 * 0.8
+            });
 
         let crop_top = (ink.min_y - pad).max(0.0);
         let crop_bottom = (ink.max_y + pad).min(page_height);
@@ -193,6 +200,7 @@ impl InkBounds {
 /// Find the ink extent of all rendered content in page coordinates.
 fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -> InkBounds {
     use typst::layout::FrameItem;
+    use typst::visualize::Geometry;
 
     let mut bounds = InkBounds::empty();
 
@@ -202,8 +210,6 @@ fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -
         match item {
             FrameItem::Text(text) => {
                 // Use actual glyph bounding boxes from the font.
-                // The previous 0.8/0.25 estimates clipped tall delimiters
-                // like brackets whose ink extends far beyond normal ascent.
                 // bbox() flips y to frame coords: max.y is top (negative),
                 // min.y is bottom (positive).
                 let bbox = text.bbox();
@@ -219,18 +225,38 @@ fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -
                 bounds.min_y = bounds.min_y.min(child.min_y);
                 bounds.max_y = bounds.max_y.max(child.max_y);
             }
-            FrameItem::Shape(_, _) => {
-                bounds.min_x = bounds.min_x.min(item_x - 0.5);
-                bounds.max_x = bounds.max_x.max(item_x + 0.5);
-                bounds.min_y = bounds.min_y.min(item_y - 0.5);
-                bounds.max_y = bounds.max_y.max(item_y + 0.5);
+            FrameItem::Shape(shape, _) => {
+                // Use actual geometry dimensions instead of ±0.5pt guess.
+                match &shape.geometry {
+                    Geometry::Line(target) => {
+                        let tx = item_x + target.x.to_pt();
+                        let ty = item_y + target.y.to_pt();
+                        bounds.min_x = bounds.min_x.min(item_x.min(tx));
+                        bounds.max_x = bounds.max_x.max(item_x.max(tx));
+                        bounds.min_y = bounds.min_y.min(item_y.min(ty));
+                        bounds.max_y = bounds.max_y.max(item_y.max(ty));
+                    }
+                    Geometry::Rect(size) => {
+                        bounds.min_x = bounds.min_x.min(item_x);
+                        bounds.max_x = bounds.max_x.max(item_x + size.x.to_pt());
+                        bounds.min_y = bounds.min_y.min(item_y);
+                        bounds.max_y = bounds.max_y.max(item_y + size.y.to_pt());
+                    }
+                    Geometry::Curve(_) => {
+                        // Curves (radical signs etc.) — use position as approximation.
+                        // Full curve bbox would require walking all segments.
+                        bounds.min_x = bounds.min_x.min(item_x);
+                        bounds.max_x = bounds.max_x.max(item_x);
+                        bounds.min_y = bounds.min_y.min(item_y);
+                        bounds.max_y = bounds.max_y.max(item_y);
+                    }
+                }
             }
             _ => {}
         }
     }
 
     if bounds.is_empty() {
-        // No visible content — return zero-area bounds
         InkBounds {
             min_x: 0.0, max_x: 0.0,
             min_y: 0.0, max_y: 0.0,
@@ -273,10 +299,13 @@ fn crop_svg_viewbox(
 
 /// Find the math baseline y-position (from page top) by examining the frame tree.
 ///
-/// Strategy: find the text item with the LARGEST font size. This is the primary
-/// math content (not sub/superscripts). Its y-position is the math baseline.
-/// This gives consistent baselines across expressions with and without
-/// subscripts, since the primary text's position is the true baseline.
+/// Strategy (in priority order):
+/// 1. Check if any Group frame has an explicit baseline (set by Typst's math layout
+///    for sums, integrals, matrices, brackets, cases, etc.) — exact, no heuristic.
+/// 2. Find the text item with the LARGEST font size (primary math content, not
+///    sub/superscripts). Its y-position is the math baseline.
+/// 3. For bare fractions (all text at reduced size), compute from font metrics:
+///    margin_top + font_ascent (derived from the font's ascender value).
 fn find_baseline_depth(
     frame: &typst::layout::Frame,
     y_offset: f64,
@@ -285,15 +314,79 @@ fn find_baseline_depth(
         return Some(y_offset + frame.baseline().to_pt());
     }
 
+    // Strategy 1: walk Groups for explicit baselines.
+    if let Some(bl) = find_group_baseline(frame, y_offset) {
+        return Some(bl);
+    }
+
+    // Strategy 2: largest text item heuristic.
     let page_mid = y_offset + frame.height().to_pt() / 2.0;
     let mut best: Option<(f64, f64, f64)> = None;
 
     collect_text_baselines(frame, y_offset, page_mid, &mut best);
 
-    // Only return if the found text is at primary size (>=9pt).
-    // For fractions where all text is reduced size (~7.7pt), return None
-    // so the caller uses the constant fallback baseline.
-    best.and_then(|(size, _, y)| if size >= 9.0 { Some(y) } else { None })
+    if let Some((size, _, y)) = best {
+        if size >= 9.0 {
+            return Some(y);
+        }
+        // Strategy 3: all text at reduced size (bare fraction).
+        // Derive baseline from font metrics instead of hardcoded 27.5.
+        if let Some(ascent) = find_font_ascent(frame) {
+            // margin is page_top position of the content area.
+            // For our layout: baseline = margin_top + font_ascent.
+            // margin_top is the y-offset of the first content, which is
+            // page_height - margin_bottom - content_height... but simpler:
+            // the baseline for full-size text WOULD be at the same y as
+            // other expressions. We know the text size (reduced) and the
+            // font ascent ratio. The full-size baseline position is:
+            // first_text_y - (reduced_ascent) + (full_ascent)
+            // where reduced_ascent ≈ font_ascent_ratio * reduced_size
+            // and full_ascent ≈ font_ascent_ratio * 11pt
+            let font_ascent_ratio = ascent; // ascent as fraction of em
+            let full_baseline = y - (font_ascent_ratio * size) + (font_ascent_ratio * 11.0);
+            return Some(full_baseline);
+        }
+    }
+    None
+}
+
+/// Walk the frame tree looking for a Group with an explicit baseline.
+/// Returns the baseline y-position in page coordinates.
+fn find_group_baseline(frame: &typst::layout::Frame, y_offset: f64) -> Option<f64> {
+    use typst::layout::FrameItem;
+    for (pos, item) in frame.items() {
+        if let FrameItem::Group(g) = item {
+            let gy = y_offset + pos.y.to_pt();
+            if g.frame.has_baseline() {
+                return Some(gy + g.frame.baseline().to_pt());
+            }
+            if let Some(bl) = find_group_baseline(&g.frame, gy) {
+                return Some(bl);
+            }
+        }
+    }
+    None
+}
+
+/// Extract the font's ascent as a ratio of em from the first text item.
+fn find_font_ascent(frame: &typst::layout::Frame) -> Option<f64> {
+    use typst::layout::FrameItem;
+    for (_pos, item) in frame.items() {
+        match item {
+            FrameItem::Text(t) => {
+                let ttf = t.font.ttf();
+                let em = ttf.units_per_em() as f64;
+                return Some(ttf.ascender() as f64 / em);
+            }
+            FrameItem::Group(g) => {
+                if let Some(r) = find_font_ascent(&g.frame) {
+                    return Some(r);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Recursively collect text items and track the one most likely to be
