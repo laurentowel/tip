@@ -92,13 +92,13 @@ Set to a number to override (1.0 = render at Typst's native 11pt)."
                  (float :tag "Manual scale factor"))
   :group 'tip)
 
-(defcustom tip-baseline-offset -2
+(defcustom tip-baseline-offset 0
   "Baseline correction in ascent percentage points.
 Adjusts the vertical position of all math fragments uniformly.
 Positive shifts math down, negative shifts up.
-To calibrate: evaluate in a typst-ts-mode buffer with tip-mode:
-  (progn (setq tip-baseline-offset -2) (tip-render-all))
-Adjust the number and re-evaluate until baselines align."
+Default is 0 — the pixel-aware ascent calculation should handle
+rounding automatically.  Adjust only if baselines are visibly off:
+  (progn (setq tip-baseline-offset -1) (tip-render-all))"
   :type 'number
   :group 'tip)
 
@@ -604,6 +604,14 @@ When `tip-scale' is `auto', compute from the buffer font size."
       (/ (tip--font-size-pt) 11.0)
     tip-scale))
 
+(defun tip--font-pixel-size ()
+  "Return the default font's pixel size."
+  (let ((font (face-attribute 'default :font)))
+    (if font
+        (let ((sz (font-get font :size)))
+          (if (and (numberp sz) (> sz 0)) sz 15))
+      15))) ;; fallback
+
 (defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p)
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
 When DISPLAY-P is non-nil, use vertical centering (for display math).
@@ -612,11 +620,23 @@ Otherwise use baseline alignment for inline math."
          (height-em (* (tip--effective-scale) (/ height-pt font-pt)))
          (ascent (if display-p
                      'center
-                   ;; Inline: align to math baseline with user offset
-                   (let ((raw (if (> height-pt 0)
-                                  (* 100.0 (/ (- height-pt depth-pt) height-pt))
-                                50.0)))
-                     (max 0 (min 100 (round (- raw tip-baseline-offset))))))))
+                   ;; Inline: compute ascent percentage from pixel values
+                   ;; to minimize rounding error.  Emacs computes image
+                   ;; height as ceil(height_em * font_pixel_size), then
+                   ;; ascent as height * (pct / 100.0).  We predict the
+                   ;; pixel height and find the percentage that gives the
+                   ;; closest baseline match.
+                   (let* ((pixel-size (tip--font-pixel-size))
+                          (height-px (ceiling (* height-em pixel-size)))
+                          (ascent-ratio (if (> height-pt 0)
+                                           (/ (- height-pt depth-pt) height-pt)
+                                         0.5))
+                          (desired-ascent-px (round (* ascent-ratio height-px)))
+                          (pct (if (> height-px 0)
+                                   (round (* 100.0 (/ (float desired-ascent-px)
+                                                      height-px)))
+                                 50)))
+                     (max 0 (min 100 (- pct tip-baseline-offset)))))))
     (list (cons 'image
                 (list :type 'svg
                       :data svg-data
