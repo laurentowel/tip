@@ -963,7 +963,7 @@ recompiling SVGs — no server round-trip."
                   ;; Check if it was display math by looking at ascent
                   )
                  (disp (overlay-get ov 'display))
-                 (old-ascent (plist-get (cdr (car-safe disp)) :ascent))
+                 (old-ascent (plist-get (cdr disp) :ascent))
                  (is-display (eq old-ascent 'center))
                  (new-spec (tip--make-image-spec svg h d is-display)))
             (overlay-put ov 'display (car new-spec))))))))
