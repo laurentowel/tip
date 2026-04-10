@@ -605,12 +605,24 @@ When `tip-scale' is `auto', compute from the buffer font size."
     tip-scale))
 
 (defun tip--font-pixel-size ()
-  "Return the default font's pixel size."
+  "Return the default font's pixel size.
+Respects `face-remapping-alist' (e.g. `variable-pitch-mode')."
   (let ((font (face-attribute 'default :font)))
     (if font
         (let ((sz (font-get font :size)))
           (if (and (numberp sz) (> sz 0)) sz 15))
       15))) ;; fallback
+
+(defun tip--font-metrics ()
+  "Return (ASCENT . DESCENT) in pixels for the default face font.
+Respects `face-remapping-alist'."
+  (let* ((font (face-attribute 'default :font))
+         (info (and font (font-info (font-xlfd-name font)))))
+    (if (and info (> (length info) 9))
+        (cons (aref info 8) (aref info 9))
+      ;; Fallback: estimate from pixel size
+      (let ((px (tip--font-pixel-size)))
+        (cons (round (* px 0.8)) (round (* px 0.2)))))))
 
 (defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p)
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
@@ -620,18 +632,38 @@ Otherwise use baseline alignment for inline math."
          (height-em (* (tip--effective-scale) (/ height-pt font-pt)))
          (ascent (if display-p
                      'center
-                   ;; Inline: compute ascent percentage from pixel values
-                   ;; to minimize rounding error.  Emacs computes image
-                   ;; height as ceil(height_em * font_pixel_size), then
-                   ;; ascent as height * (pct / 100.0).  We predict the
-                   ;; pixel height and find the percentage that gives the
-                   ;; closest baseline match.
+                   ;; Inline: compute ascent from pixel-level prediction.
+                   ;;
+                   ;; Emacs computes: height_px = ceil(height_em * pixel_size)
+                   ;; then positions: ascent_px = height_px * (pct / 100.0)
+                   ;;
+                   ;; We predict height_px, compute the desired ascent in
+                   ;; pixels, and find the percentage that best matches.
+                   ;; This accounts for ceil() rounding and integer %.
+                   ;;
+                   ;; Additionally, we adjust for the difference between
+                   ;; the Emacs font's ascent ratio and the Typst math
+                   ;; font's ascent ratio (0.806 for New Computer Modern).
+                   ;; This correction makes tip-baseline-offset unnecessary
+                   ;; for most font combinations.
                    (let* ((pixel-size (tip--font-pixel-size))
+                          (metrics (tip--font-metrics))
+                          (emacs-ascent-ratio
+                           (if (> (+ (car metrics) (cdr metrics)) 0)
+                               (/ (float (car metrics))
+                                  (+ (car metrics) (cdr metrics)))
+                             0.8))
+                          ;; Typst's New Computer Modern Math: ascender=806/1000
+                          (typst-ascent-ratio 0.806)
+                          ;; Correction: shift by the difference in ascent ratios.
+                          ;; Positive when Emacs font has higher ascent → shift down.
+                          (ratio-correction (- emacs-ascent-ratio typst-ascent-ratio))
                           (height-px (ceiling (* height-em pixel-size)))
                           (ascent-ratio (if (> height-pt 0)
                                            (/ (- height-pt depth-pt) height-pt)
                                          0.5))
-                          (desired-ascent-px (round (* ascent-ratio height-px)))
+                          (corrected-ratio (+ ascent-ratio ratio-correction))
+                          (desired-ascent-px (round (* corrected-ratio height-px)))
                           (pct (if (> height-px 0)
                                    (round (* 100.0 (/ (float desired-ascent-px)
                                                       height-px)))
