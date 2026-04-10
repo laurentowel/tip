@@ -929,11 +929,12 @@ Does string replacement on cached SVG data — no server round-trip."
               (old-bg (overlay-get ov 'tip-bg))
               (disp (overlay-get ov 'display)))
           (when (and old-fg old-bg disp (not (string= old-fg new-fg)))
-            (let ((svg (plist-get (cdr (car-safe disp)) :data)))
+            ;; disp is (image :type svg :data ...) — plist starts at (cdr disp)
+            (let ((svg (plist-get (cdr disp) :data)))
               (when svg
                 (let ((new-svg (string-replace old-bg new-bg
                                                (string-replace old-fg new-fg svg))))
-                  (setcar (cdr (plist-member (cdar disp) :data)) new-svg)
+                  (setcar (cdr (plist-member (cdr disp) :data)) new-svg)
                   (overlay-put ov 'tip-fg new-fg)
                   (overlay-put ov 'tip-bg new-bg))))))))))
 
