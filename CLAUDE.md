@@ -108,11 +108,34 @@ The solution combines three ideas:
 
 **Why this works**: The baseline_y is determined by the NON-bounded layout, so it's constant across all expressions. The cropping is post-render, so it doesn't affect the layout. The ascent percentage varies per expression (taller images have lower ascent %) but the ABSOLUTE baseline position (in pixels from the line top) is the same.
 
-### Baseline text item selection
+### Baseline detection — Group frames vs heuristic
 
-For finding the baseline y-position in the frame tree:
+Complex math expressions (big operators, matrices, sized delimiters, cases) produce a `FrameItem::Group` with `frame.has_baseline() = true` — the exact baseline set by Typst's math layout. Simple expressions (plain text, subscripts, accents) get inlined into the page frame, losing their baseline.
+
+**Strategy**: walk the frame tree looking for Groups with baselines first. If found, use the exact value. If not (inlined case), fall back to the text item heuristic:
 - Walk all text items, track the one with the **largest font size** (primary math content, not sub/superscripts)
 - On font-size ties, prefer the item **closest to the page midpoint** (handles fractions where both numerator and denominator are at reduced size — the midpoint is near the fraction bar, which is the correct baseline)
+
+**Which expressions produce Groups** (tested empirically):
+- `$sum_(i=0)^n$`, `$integral_0^1$` — big operators with limits
+- `$mat(1,0;0,1)$` — matrices
+- `$cases(...)$` — case expressions
+- `$lr([...])$` — sized delimiters
+- `$(a+b)/(c+d)$` — inline fractions with auto-sized parens
+
+**Which get inlined** (no Group, heuristic works): `$a+b$`, `$a_b$`, `$a^2$`, `$sqrt(x)$`, `$tilde(a)$`, `$abs(x)$`, bare `$frac(a,b)$`
+
+### `TextItem::bbox()` for ink bounds
+
+Uses `font.ttf().glyph_bounding_box()` per glyph — exact outlines, not estimates. Critical for tall delimiters like brackets. The bbox y-coordinates are flipped from glyph coords (y-up) to frame coords (y-down): after the flip, `bbox.max.y` is the **top** (negative) and `bbox.min.y` is the **bottom** (positive).
+
+### Font MATH table access
+
+The math axis height and other constants are available via `font.ttf().tables().math` (ttf-parser). Typst uses `constants.axis_height()` to position fraction bars. Currently we don't use this in `find_baseline_depth` but could for the bare-fraction fallback case.
+
+### Baseline measurement diagram
+
+`cargo test -p tip-core --test baseline_measure -- --nocapture` generates `test-output/baseline-diagram.pdf` with exact measurements from the frame tree. Uses CeTZ `anchor: "base-west"` for baseline-accurate text placement. All positions are measured, not estimated.
 
 ### User calibration
 
@@ -331,6 +354,19 @@ Theme changes do NOT recompile fragments. Instead, `tip--recolor-overlays` does 
 **Performance**: 0.5ms/fragment for string-replace vs 17ms/fragment for recompilation. For 1000 fragments: 0.5s vs 17s. No server round-trip needed.
 
 `tip-follow-theme-mode` hooks into `enable-theme-functions` / `disable-theme-functions`. Enabled by default in `tip-mode`. Also clears `tip-live--content-cache` so the childframe updates.
+
+## Font Change — Overlay Rescaling
+
+Font changes (size or family) affect `tip-scale` (auto) and baseline alignment. `tip--rescale-overlays` updates all overlay image specs from cached SVG data without recompilation — same pattern as theme recoloring.
+
+`tip-follow-theme-mode` also hooks `buffer-face-mode-hook` so `variable-pitch-mode` toggling works automatically.
+
+For external font managers like fontaine, add to user config:
+```elisp
+(add-hook 'fontaine-set-preset-hook #'tip--on-font-change)
+```
+
+For `text-scale-adjust` (C-x C-+/-), no hook is needed — Emacs re-evaluates `(N . em)` image heights from the current font size automatically.
 
 ## Emacs Batch Mode Quirks
 

@@ -965,6 +965,36 @@ Invalidates live preview cache so childframe updates."
         (tip--recolor-overlays)
         (setq tip-live--content-cache "")))))
 
+(defun tip--rescale-overlays ()
+  "Update image specs on all tip overlays for the current font.
+Recomputes scale and ascent from the current font metrics without
+recompiling SVGs — no server round-trip."
+  (dolist (ov (overlays-in (point-min) (point-max)))
+    (when (and (eq (overlay-get ov 'tip) 'tip)
+               (overlay-get ov 'display))
+      (let ((svg (overlay-get ov 'tip-svg))
+            (h (overlay-get ov 'tip-height-pt))
+            (d (overlay-get ov 'tip-depth-pt)))
+        (when (and svg h (> h 0))
+          (let* ((is-display (eq (overlay-get ov 'view-text) nil)
+                  ;; Check if it was display math by looking at ascent
+                  )
+                 (disp (overlay-get ov 'display))
+                 (old-ascent (plist-get (cdr (car-safe disp)) :ascent))
+                 (is-display (eq old-ascent 'center))
+                 (new-spec (tip--make-image-spec svg h d is-display)))
+            (overlay-put ov 'display (car new-spec))))))))
+
+(defun tip--on-font-change (&rest _)
+  "Update all tip buffers after a font change.
+Rescales overlays using current font metrics — no recompilation."
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when tip-mode
+        (tip--rescale-overlays)
+        (setq tip-live--content-cache "")
+        (setq tip-echo--content-cache "")))))
+
 ;;;###autoload
 (define-minor-mode tip-follow-theme-mode
   "Automatically update tip overlays when the Emacs theme changes.
@@ -974,9 +1004,12 @@ Replaces colors in cached SVGs instantly — no server round-trip."
   (if tip-follow-theme-mode
       (progn
         (add-hook 'enable-theme-functions #'tip--on-theme-change)
-        (add-hook 'disable-theme-functions #'tip--on-theme-change))
+        (add-hook 'disable-theme-functions #'tip--on-theme-change)
+        ;; Font changes via variable-pitch-mode / buffer-face-mode
+        (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t))
     (remove-hook 'enable-theme-functions #'tip--on-theme-change)
-    (remove-hook 'disable-theme-functions #'tip--on-theme-change)))
+    (remove-hook 'disable-theme-functions #'tip--on-theme-change)
+    (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)))
 
 ;;; * the minor mode
 
