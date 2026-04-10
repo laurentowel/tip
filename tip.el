@@ -640,30 +640,12 @@ Otherwise use baseline alignment for inline math."
                    ;; We predict height_px, compute the desired ascent in
                    ;; pixels, and find the percentage that best matches.
                    ;; This accounts for ceil() rounding and integer %.
-                   ;;
-                   ;; Additionally, we adjust for the difference between
-                   ;; the Emacs font's ascent ratio and the Typst math
-                   ;; font's ascent ratio (0.806 for New Computer Modern).
-                   ;; This correction makes tip-baseline-offset unnecessary
-                   ;; for most font combinations.
                    (let* ((pixel-size (tip--font-pixel-size))
-                          (metrics (tip--font-metrics))
-                          (emacs-ascent-ratio
-                           (if (> (+ (car metrics) (cdr metrics)) 0)
-                               (/ (float (car metrics))
-                                  (+ (car metrics) (cdr metrics)))
-                             0.8))
-                          ;; Typst's New Computer Modern Math: ascender=806/1000
-                          (typst-ascent-ratio 0.806)
-                          ;; Correction: shift by the difference in ascent ratios.
-                          ;; Positive when Emacs font has higher ascent → shift down.
-                          (ratio-correction (- emacs-ascent-ratio typst-ascent-ratio))
                           (height-px (ceiling (* height-em pixel-size)))
                           (ascent-ratio (if (> height-pt 0)
                                            (/ (- height-pt depth-pt) height-pt)
                                          0.5))
-                          (corrected-ratio (+ ascent-ratio ratio-correction))
-                          (desired-ascent-px (round (* corrected-ratio height-px)))
+                          (desired-ascent-px (round (* ascent-ratio height-px)))
                           (pct (if (> height-px 0)
                                    (round (* 100.0 (/ (float desired-ascent-px)
                                                       height-px)))
