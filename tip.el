@@ -110,6 +110,13 @@ expanding the SVG viewBox; does not require recompilation.
   :type 'number
   :group 'tip)
 
+(defcustom tip-transparent-bg t
+  "If non-nil, render SVGs with transparent background.
+When nil, the SVG background is filled with the Emacs default
+background color (and swapped on theme change)."
+  :type 'boolean
+  :group 'tip)
+
 
 ;;; * utils
 
@@ -512,11 +519,12 @@ Returns a list of (BEG . END) ranges."
   "Build a Typst preamble that syncs Emacs theme colors.
 Text size override is sent separately via page_setup (after skeleton)
 so it takes precedence over document-level #set text rules."
-  (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (bg (tip--color-to-hex (face-attribute 'default :background))))
+  (let ((fg (tip--color-to-hex (face-attribute 'default :foreground))))
     (concat
      (format "#show math.equation: set text(rgb(\"%s\"))\n" fg)
-     (format "#set page(fill: rgb(\"%s\"))\n" bg))))
+     (unless tip-transparent-bg
+       (format "#set page(fill: rgb(\"%s\"))\n"
+               (tip--color-to-hex (face-attribute 'default :background)))))))
 
 ;;; * compilation and rendering
 
@@ -616,8 +624,9 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
           (overlay-put ov 'tip-svg svg-data)
           (overlay-put ov 'tip-fg (tip--color-to-hex
                                     (face-attribute 'default :foreground)))
-          (overlay-put ov 'tip-bg (tip--color-to-hex
-                                    (face-attribute 'default :background)))
+          (unless tip-transparent-bg
+            (overlay-put ov 'tip-bg (tip--color-to-hex
+                                      (face-attribute 'default :background))))
           (overlay-put ov 'display display)
           (when (and is-single-line-display tip-display-indicator)
             (overlay-put ov 'before-string tip-display-indicator))))))))
@@ -959,20 +968,24 @@ M-x tip-live-mode or (tip-live-mode 1)."
   "Update SVG colors in all tip overlays to match current theme.
 Does string replacement on cached SVG data — no server round-trip."
   (let ((new-fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (new-bg (tip--color-to-hex (face-attribute 'default :background))))
+        (new-bg (unless tip-transparent-bg
+                  (tip--color-to-hex (face-attribute 'default :background)))))
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (eq (overlay-get ov 'tip) 'tip)
         (let ((old-fg (overlay-get ov 'tip-fg))
               (old-bg (overlay-get ov 'tip-bg))
               (disp (overlay-get ov 'display)))
-          (when (and old-fg old-bg disp (not (string= old-fg new-fg)))
-            ;; disp is (image :type svg :data ...) — plist starts at (cdr disp)
-            (let ((svg (plist-get (cdr disp) :data)))
-              (when svg
-                (let ((new-svg (string-replace old-bg new-bg
-                                               (string-replace old-fg new-fg svg))))
-                  (setcar (cdr (plist-member (cdr disp) :data)) new-svg)
-                  (overlay-put ov 'tip-fg new-fg)
+          (when (and old-fg disp (not (string= old-fg new-fg)))
+            (let* ((svg (plist-get (cdr disp) :data))
+                   (new-svg (when svg
+                              (let ((s (string-replace old-fg new-fg svg)))
+                                (if (and old-bg new-bg)
+                                    (string-replace old-bg new-bg s)
+                                  s)))))
+              (when new-svg
+                (setcar (cdr (plist-member (cdr disp) :data)) new-svg)
+                (overlay-put ov 'tip-fg new-fg)
+                (when new-bg
                   (overlay-put ov 'tip-bg new-bg))))))))))
 
 (defun tip--on-theme-change (&rest _)
