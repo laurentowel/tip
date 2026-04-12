@@ -698,13 +698,11 @@ Otherwise use baseline alignment for inline math."
                                  50)))
                      (max 0 (min 100 (- pct tip-baseline-offset)))))))
     (list (cons 'image
-                (nconc (list :type 'svg
-                             :data svg-data
-                             :height `(,height-em . em)
-                             :ascent ascent
-                             :pointer 'hand)
-                       (when tip-transparent-bg
-                         '(:background "none")))))))
+                (list :type 'svg
+                      :data svg-data
+                      :height `(,height-em . em)
+                      :ascent ascent
+                      :pointer 'hand)))))
 
 ;;; * public commands
 
