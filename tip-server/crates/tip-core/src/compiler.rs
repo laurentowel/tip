@@ -170,11 +170,20 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
             width_pt: ink.width() + pad * 2.0,
         })
     } else {
-        // BLOCK/DISPLAY MATH: no ink cropping (user may have intentional spacing).
-        // Margins are set to 0pt in page_setup so height = content box only.
+        // BLOCK/DISPLAY MATH: crop SVG to ink bounds (avoids clipping from
+        // Typst's height:auto not accounting for full glyph extents, typst#1028).
+        // No baseline computation — display math uses :ascent center.
+        let crop_top = (ink.min_y - pad).max(0.0);
+        let crop_bottom = (ink.max_y + pad).min(page_height);
+        let cropped_height = crop_bottom - crop_top;
+
+        let cropped_svg = crop_svg_viewbox(
+            &svg_string, page_width, page_height, crop_top, cropped_height,
+        );
+
         Ok(FragmentOutput {
-            svg: svg_string,
-            height_pt: page_height,
+            svg: cropped_svg,
+            height_pt: cropped_height,
             depth_pt: 0.0,
             width_pt: ink.width() + pad * 2.0,
         })
@@ -463,11 +472,11 @@ fn build_scoped_source(
                 "#show math.equation: set text(size: 11pt)\n"
             };
             let page = if is_multiline {
-                "#set page(width: 16cm, height: auto, fill: none, margin: 0pt, header: none, footer: none)\n"
+                "#set page(width: 16cm, height: auto, fill: none, margin: (top: 20pt, bottom: 20pt, rest: 0pt), header: none, footer: none)\n"
             } else if is_inline {
                 "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
             } else {
-                "#set page(height: auto, width: auto, margin: 0pt, fill: none, header: none, footer: none)\n"
+                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
             };
             format!("{size_rule}{page}")
         }
