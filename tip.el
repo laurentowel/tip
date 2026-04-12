@@ -102,8 +102,40 @@ rounding automatically.  Adjust only if baselines are visibly off:
   :type 'number
   :group 'tip)
 
+(defcustom tip-display-math-padding 3.0
+  "Extra vertical padding (in pt) added above and below display math.
+Prevents the rendered image from feeling cramped.  Applied by
+expanding the SVG viewBox; does not require recompilation.
+  (progn (setq tip-display-math-padding 5) (tip-render-all))"
+  :type 'number
+  :group 'tip)
+
 
 ;;; * utils
+
+(defun tip--pad-svg-viewbox (svg-data padding)
+  "Expand SVG-DATA viewBox by PADDING pt above and below.
+Returns (SVG-STRING . ADDED-HEIGHT-PT)."
+  (if (and (> padding 0)
+           (string-match
+            "viewBox=\"\\([^ \"]+\\) \\([^ \"]+\\) \\([^ \"]+\\) \\([^ \"]+\\)\""
+            svg-data))
+      (let* ((vy (string-to-number (match-string 2 svg-data)))
+             (vw (match-string 3 svg-data))
+             (vh (string-to-number (match-string 4 svg-data)))
+             (new-vy (- vy padding))
+             (new-vh (+ vh (* 2 padding)))
+             (new-vb (format "viewBox=\"%s %s %s %s\""
+                             (match-string 1 svg-data)
+                             new-vy vw new-vh))
+             (result (replace-match new-vb t t svg-data))
+             ;; Also update height="Xpt"
+             (result (if (string-match "height=\"[^\"]+\"" result)
+                         (replace-match
+                          (format "height=\"%spt\"" new-vh) t t result)
+                       result)))
+        (cons result (* 2.0 padding)))
+    (cons svg-data 0.0)))
 
 (defmacro tip-debug-msg (&rest args)
   `(when tip-enable-debug
@@ -628,7 +660,12 @@ Respects `face-remapping-alist'."
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
 When DISPLAY-P is non-nil, use vertical centering (for display math).
 Otherwise use baseline alignment for inline math."
-  (let* ((font-pt (tip--font-size-pt))
+  (let* ((padded (if display-p
+                     (tip--pad-svg-viewbox svg-data tip-display-math-padding)
+                   (cons svg-data 0.0)))
+         (svg-data (car padded))
+         (height-pt (+ height-pt (cdr padded)))
+         (font-pt (tip--font-size-pt))
          (height-em (* (tip--effective-scale) (/ height-pt font-pt)))
          (ascent (if display-p
                      'center
