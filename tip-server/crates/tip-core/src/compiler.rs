@@ -330,14 +330,26 @@ fn find_baseline_depth(
 
     // Strategy 2: largest text item heuristic.
     let page_mid = y_offset + frame.height().to_pt() / 2.0;
-    let mut best: Option<(f64, f64, f64)> = None;
+    let mut items = Vec::new();
+    collect_text_items(frame, y_offset, &mut items);
 
-    collect_text_baselines(frame, y_offset, page_mid, &mut best);
+    // Find the largest font size (at or above threshold).
+    let max_size = items.iter().map(|&(s, _)| s).fold(0.0_f64, f64::max);
 
-    if let Some((size, _, y)) = best {
-        if size >= 9.0 {
+    if max_size > 0.0 {
+        // Collect y-values of items at that largest size.
+        let ys: Vec<f64> = items
+            .iter()
+            .filter(|&&(s, _)| (s - max_size).abs() < 0.1)
+            .map(|&(_, y)| y)
+            .collect();
+
+        let y = pick_baseline_y(&ys, page_mid);
+
+        if max_size >= 9.0 {
             return Some(y);
         }
+        let size = max_size;
         // Strategy 3: all text at reduced size (bare fraction).
         // Derive baseline from font metrics instead of hardcoded 27.5.
         if let Some(ascent) = find_font_ascent(frame) {
@@ -398,48 +410,44 @@ fn find_font_ascent(frame: &typst::layout::Frame) -> Option<f64> {
     None
 }
 
-/// Recursively collect text items and track the one most likely to be
-/// on the math baseline. Strategy: prefer the largest font size; on ties,
-/// prefer the y-position closest to the page's vertical midpoint
-/// (which is near the math baseline for centered fractions etc.).
-fn collect_text_baselines(
+/// Recursively collect text items as (font_size_pt, y_from_page_top).
+fn collect_text_items(
     frame: &typst::layout::Frame,
     y_offset: f64,
-    page_mid: f64,
-    best: &mut Option<(f64, f64, f64)>, // (font_size_pt, dist_to_mid, y_from_page_top)
+    out: &mut Vec<(f64, f64)>,
 ) {
     use typst::layout::FrameItem;
 
     for (pos, item) in frame.items() {
         match item {
             FrameItem::Text(text) => {
-                let size = text.size.to_pt();
-                let y = y_offset + pos.y.to_pt();
-                let dist = (y - page_mid).abs();
-                let is_better = match best {
-                    Some((best_size, best_dist, _)) => {
-                        if size > *best_size {
-                            true
-                        } else if (size - *best_size).abs() < 0.1 {
-                            // Same font size: prefer closer to midpoint
-                            dist < *best_dist
-                        } else {
-                            false
-                        }
-                    }
-                    None => true,
-                };
-                if is_better {
-                    *best = Some((size, dist, y));
-                }
+                out.push((text.size.to_pt(), y_offset + pos.y.to_pt()));
             }
             FrameItem::Group(group) => {
                 let child_y = y_offset + pos.y.to_pt();
-                collect_text_baselines(&group.frame, child_y, page_mid, best);
+                collect_text_items(&group.frame, child_y, out);
             }
             _ => {}
         }
     }
+}
+
+/// Pick the math baseline y from same-size candidates.
+/// - 1 item: that y
+/// - 2 items far apart (>2pt): largest y (base char of accent pair like hat(G))
+/// - Otherwise: closest to page midpoint (matrix row at math axis)
+fn pick_baseline_y(ys: &[f64], page_mid: f64) -> f64 {
+    if ys.len() == 2 && (ys[0] - ys[1]).abs() > 2.0 {
+        return ys[0].max(ys[1]);
+    }
+    *ys.iter()
+        .min_by(|a, b| {
+            (*a - page_mid)
+                .abs()
+                .partial_cmp(&(*b - page_mid).abs())
+                .unwrap()
+        })
+        .unwrap_or(&page_mid)
 }
 
 /// Build a scope-aware source by extracting only scope-defining statements

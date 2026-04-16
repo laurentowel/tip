@@ -83,6 +83,23 @@ fn baseline_subscript() {
 }
 
 #[test]
+fn baseline_accent() {
+    // Accents like hat/tilde produce 2 same-size text items: the base
+    // character at the math baseline and the accent glyph above it.
+    // The heuristic must pick the base (larger y), not the accent.
+    let mut world = TipWorld::new();
+    let simple = FragmentCompiler::compile_fragment(&mut world, "$G$", "#000000", "").unwrap();
+    let hat = FragmentCompiler::compile_fragment(&mut world, "$hat(G)$", "#000000", "").unwrap();
+    let tilde = FragmentCompiler::compile_fragment(&mut world, "$tilde(G)$", "#000000", "").unwrap();
+    assert!(hat.depth_pt < simple.depth_pt + 2.0,
+            "hat depth ({:.2}) should match G's descender ({:.2})",
+            hat.depth_pt, simple.depth_pt);
+    assert!(tilde.depth_pt < simple.depth_pt + 2.0,
+            "tilde depth ({:.2}) should match G's descender ({:.2})",
+            tilde.depth_pt, simple.depth_pt);
+}
+
+#[test]
 fn baseline_matrix() {
     let mut world = TipWorld::new();
     let out = FragmentCompiler::compile_fragment(&mut world, "$mat(1, 0; 0, 1)$", "#000000", "").unwrap();

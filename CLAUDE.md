@@ -113,8 +113,11 @@ The solution combines three ideas:
 Complex math expressions (big operators, matrices, sized delimiters, cases) produce a `FrameItem::Group` with `frame.has_baseline() = true` — the exact baseline set by Typst's math layout. Simple expressions (plain text, subscripts, accents) get inlined into the page frame, losing their baseline.
 
 **Strategy**: walk the frame tree looking for Groups with baselines first. If found, use the exact value. If not (inlined case), fall back to the text item heuristic:
-- Walk all text items, track the one with the **largest font size** (primary math content, not sub/superscripts)
-- On font-size ties, prefer the item **closest to the page midpoint** (handles fractions where both numerator and denominator are at reduced size — the midpoint is near the fraction bar, which is the correct baseline)
+- Collect all text items as `(size, y)` pairs, find the **largest font size** (primary math content, not sub/superscripts)
+- Among items at that largest size, pick the y-value via `pick_baseline_y`:
+  - **1 item** → that y
+  - **2 items with y-spread > 2pt** → the **larger y** (base character of an accent pair like `$hat(G)$`/`$tilde(G)$`, where the accent sits above the base at the same font size)
+  - **Otherwise** (items clustered in y, or 3+ items across multiple rows) → **closest to page midpoint** (handles matrices centered on the math axis, and fractions where both numerator and denominator are at reduced size)
 
 **Which expressions produce Groups** (tested empirically):
 - `$sum_(i=0)^n$`, `$integral_0^1$` — big operators with limits
@@ -123,7 +126,7 @@ Complex math expressions (big operators, matrices, sized delimiters, cases) prod
 - `$lr([...])$` — sized delimiters
 - `$(a+b)/(c+d)$` — inline fractions with auto-sized parens
 
-**Which get inlined** (no Group, heuristic works): `$a+b$`, `$a_b$`, `$a^2$`, `$sqrt(x)$`, `$tilde(a)$`, `$abs(x)$`, bare `$frac(a,b)$`
+**Which get inlined** (no Group, heuristic works): `$a+b$`, `$a_b$`, `$a^2$`, `$sqrt(x)$`, `$tilde(a)$`, `$hat(a)$`, `$abs(x)$`, bare `$frac(a,b)$`. Accents (`hat`, `tilde`, etc.) produce 2 same-size text items at different y — the "2 items with gap → larger y" rule picks the base character.
 
 ### `TextItem::bbox()` for ink bounds
 
