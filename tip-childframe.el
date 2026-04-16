@@ -60,9 +60,11 @@ Used in corner mode to keep childframe away from frame borders."
                (integer :tag "Top"))
   :group 'tip-childframe)
 
-(defcustom tip-childframe-scale 1.5
-  "Scale factor for SVG display in the childframe.
-Values > 1.0 make the live preview larger than inline overlays."
+(defcustom tip-childframe-scale 2.0
+  "Scale factor for SVG display in the childframe, relative to the
+buffer font size.  1.0 matches the inline overlay size; 2.0 doubles it.
+The effective scale is buffer-font-pt / 11 * tip-childframe-scale,
+so the preview grows with the buffer font."
   :type 'float
   :group 'tip-childframe)
 
@@ -223,9 +225,14 @@ In overflow mode, returns screen-absolute coordinates."
 ;;; * public API
 
 (defun tip-childframe-show (svg-data)
-  "Show SVG-DATA in a childframe near the cursor, scaled by `tip-childframe-scale'."
+  "Show SVG-DATA in a childframe near the cursor.
+Sized by `tip-childframe-scale' times the buffer-font ratio, so the
+preview scales with font size rather than the SVG's native 11pt."
   (let* ((buf (tip-childframe--ensure-buffer))
-         (scale (or tip-childframe-scale 1.0))
+         (font-pt (if (fboundp 'tip--font-size-pt)
+                      (tip--font-size-pt)
+                    11.0))
+         (scale (* (or tip-childframe-scale 1.0) (/ font-pt 11.0)))
          (scaled-max-w (round (* tip-childframe-max-pixel-width scale)))
          (scaled-max-h (round (* tip-childframe-max-pixel-height scale)))
          (img (list 'image
