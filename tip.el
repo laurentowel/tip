@@ -990,14 +990,14 @@ Does string replacement on cached SVG data — no server round-trip."
 
 (defun tip--on-theme-change (&rest _)
   "Update all tip buffers after a theme change.
-With `tip-transparent-bg', recompiles to pick up the new foreground.
-Otherwise uses fast SVG color substitution (no recompilation)."
+Uses fast SVG color substitution (~0.5ms/fragment) rather than
+recompilation (~17ms/fragment).  Works with both transparent and
+opaque backgrounds: the fg color swap is always needed; the bg swap
+is skipped when `tip-transparent-bg' is non-nil (no bg baked in)."
   (dolist (buf (buffer-list))
     (with-current-buffer buf
       (when tip-mode
-        (if tip-transparent-bg
-            (tip-render-all)
-          (tip--recolor-overlays))
+        (tip--recolor-overlays)
         (setq tip-live--content-cache "")))))
 
 (defun tip--rescale-overlays ()
