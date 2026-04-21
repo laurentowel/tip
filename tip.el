@@ -628,8 +628,19 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
             (overlay-put ov 'tip-bg (tip--color-to-hex
                                       (face-attribute 'default :background))))
           (overlay-put ov 'display display)
+          (overlay-put ov 'modification-hooks
+                       (list #'tip--invalidate-on-modification))
           (when (and is-single-line-display tip-display-indicator)
             (overlay-put ov 'before-string tip-display-indicator))))))))
+
+(defun tip--invalidate-on-modification (ov after-p _beg _end &optional _len)
+  "Delete OV when its covered text is edited, so stale previews don't linger.
+The preview-toggle cursor-transition logic only fires when the cursor
+enters/leaves a fragment; an edit that doesn't cross a boundary (e.g.
+backspace from immediately after the closing `$') would otherwise leave
+the image displayed over now-mismatched source."
+  (when (and after-p (overlay-buffer ov))
+    (delete-overlay ov)))
 
 (defun tip--font-size-pt ()
   "Return the default font size in points."
