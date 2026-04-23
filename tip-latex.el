@@ -76,14 +76,20 @@ Groups:
   1  \\[  (display)
   2  \\(  (inline)
   3  $$   (display)
-  4  single $  (inline) — only when not escaped and not doubled
+  4  single $  (inline)  — caller must post-filter escapes
   5  \\begin{ENV}  (display, named environment)
-  6  →    the ENV name (inside group 5)"
+  6  →    the ENV name (inside group 5)
+
+Note: group 4 matches ANY `$' (no preceding-char constraint), because
+a lookbehind would require scanning before point and breaks
+`re-search-forward' when the caller does `goto-char' directly at an
+opening `$'.  The collector filters escapes (`\\$') and `$$' pairs in
+post-processing."
   (concat
    "\\(\\\\\\[\\)"                                     ; 1 \[
    "\\|\\(\\\\(\\)"                                    ; 2 \(
-   "\\|\\(\\$\\$\\)"                                   ; 3 $$
-   "\\|\\(?:\\(?:^\\|[^\\\\$]\\)\\(\\$\\)\\)"          ; 4 single $
+   "\\|\\(\\$\\$\\)"                                   ; 3 $$ (before single-$ so prefers)
+   "\\|\\(\\$\\)"                                      ; 4 single $
    "\\|\\(\\\\begin{" (tip-latex--math-env-group-re) "}\\)"))
                                                       ; 5 whole \begin{…}, 6 name
 
@@ -202,9 +208,16 @@ Returns nil (and emits a one-time warning) when the buffer contains
       (while (re-search-forward re end t)
         (let* ((kind (tip-latex--opener-kind-at-match))
                (start (tip-latex--opener-start)))
-          ;; Emacs regex uses leftmost match across alternatives; the single-$
-          ;; branch includes the preceding char so it matches one position
-          ;; earlier than the $$ branch, beating $$ on a tie.  Reclassify.
+          ;; Skip `\$' (escaped dollar): a single-$ match whose preceding
+          ;; char is a backslash isn't a math opener.
+          (when (and (eq kind 'dollar1) start
+                     (> start (point-min))
+                     (eq (char-before start) ?\\))
+            (setq kind nil))
+          ;; `$' immediately followed by another `$' is `$$' — the regex's
+          ;; $$ alternative comes first so we only hit this when there's
+          ;; no match at the first `$' position (e.g. scanning started
+          ;; inside `$$…$$' past the first `$').
           (when (and (eq kind 'dollar1) start
                      (< (1+ start) (point-max))
                      (eq (char-after (1+ start)) ?$))
@@ -219,8 +232,13 @@ Returns nil (and emits a one-time warning) when the buffer contains
                              (not (and (>= avoid-pos start)
                                        (<= avoid-pos fend)))))
                 (push (cons start fend) ranges)
-                ;; Resume past the close so we don't match inside.
-                (goto-char fend)))))))
+                ;; Resume past the close so we don't match inside it.
+                ;; If the close is past our scan bound, stop the loop
+                ;; — otherwise the next re-search-forward signals
+                ;; "Invalid search bound (wrong side of point)".
+                (if (>= fend end)
+                    (goto-char end)
+                  (goto-char fend))))))))
     (let ((outer (tip-latex--outermost (nreverse ranges))))
       (mapcar (lambda (pair)
                 `(("start" . ,(1- (position-bytes (car pair))))

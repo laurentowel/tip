@@ -141,11 +141,18 @@ impl LatexCompiler {
         let metrics = parse_preview_output(&stdout, fragments.len());
 
         // Step 3: dvisvgm → N svg files
+        //
+        // --bbox=min crops tightly to actual glyph ink bounds.  This
+        // eliminates the phantom whitespace below fragments with no
+        // descenders (e.g. "$a+b=c$") that --bbox=preview leaves behind
+        // due to font-metric descent.  The trade-off: preview.sty's
+        // "Snippet ended" log values no longer match the SVG
+        // dimensions, so we parse the SVG viewBox afterwards.
         let dvisvgm_out = Command::new("dvisvgm")
             .args([
                 "--page=1-",
                 "--no-fonts",
-                "--bbox=preview",
+                "--bbox=min",
                 "--exact",
                 "--relative",
                 "--output=batch-%9p.svg",
@@ -165,34 +172,80 @@ impl LatexCompiler {
             )));
         }
 
-        // Step 4: collect per-fragment results
+        // Step 4: collect per-fragment results.  Use SVG viewBox to get the
+        // true (ink-cropped) dimensions; fall back to the preview.sty log
+        // metric if the viewBox is missing/malformed.
         let mut results = Vec::with_capacity(fragments.len());
         for (i, metric) in metrics.into_iter().enumerate() {
-            match metric {
-                Some(m) => {
-                    let svg_path = tmp.path().join(format!("batch-{:09}.svg", i + 1));
-                    match fs::read_to_string(&svg_path) {
-                        Ok(svg) => results.push(Ok(FragmentOutput {
-                            svg,
+            let svg_path = tmp.path().join(format!("batch-{:09}.svg", i + 1));
+            match fs::read_to_string(&svg_path) {
+                Ok(svg) => {
+                    let dims = parse_svg_dimensions(&svg).or_else(|| {
+                        metric.as_ref().map(|m| SvgDims {
                             height_pt: m.height_pt,
                             depth_pt: m.depth_pt,
                             width_pt: m.width_pt,
+                        })
+                    });
+                    match dims {
+                        Some(d) => results.push(Ok(FragmentOutput {
+                            svg,
+                            height_pt: d.height_pt,
+                            depth_pt: d.depth_pt,
+                            width_pt: d.width_pt,
                         })),
-                        Err(e) => results.push(Err(format!(
-                            "svg {} not readable: {}",
-                            svg_path.display(),
-                            e
+                        None => results.push(Err(format!(
+                            "fragment {} has no dimensions (svg viewBox missing, no log entry)",
+                            i + 1
                         ))),
                     }
                 }
-                None => results.push(Err(format!(
-                    "fragment {} missing from preview output",
-                    i + 1
+                Err(e) => results.push(Err(format!(
+                    "svg {} not readable: {}",
+                    svg_path.display(),
+                    e
                 ))),
             }
         }
         Ok(results)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SvgDims {
+    height_pt: f64,
+    depth_pt: f64,
+    width_pt: f64,
+}
+
+/// Extract ink-bounded dimensions from an SVG's viewBox and width attrs.
+///
+/// dvisvgm emits `viewBox='MIN_X MIN_Y WIDTH HEIGHT'` in pt units when we
+/// pass `--exact --relative`.  With `--bbox=min`, MIN_Y ≤ 0 corresponds
+/// to the ink extent above the text baseline (baseline is y=0), and
+/// (MIN_Y + HEIGHT) ≥ 0 gives the depth below baseline.
+fn parse_svg_dimensions(svg: &str) -> Option<SvgDims> {
+    let vb_start = svg.find("viewBox=")?;
+    let quote_char = svg[vb_start + "viewBox=".len()..].chars().next()?;
+    let after_quote = &svg[vb_start + "viewBox=".len() + 1..];
+    let vb_end = after_quote.find(quote_char)?;
+    let inner = &after_quote[..vb_end];
+    let parts: Vec<f64> = inner.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let min_y = parts[1];
+    let width = parts[2];
+    let height = parts[3];
+    let max_y = min_y + height;
+    // Clamp: if the whole viewBox sits above or below the baseline (y=0),
+    // treat the side away from baseline as zero.
+    let depth = if max_y > 0.0 { max_y } else { 0.0 };
+    Some(SvgDims {
+        height_pt: height,
+        depth_pt: depth,
+        width_pt: width,
+    })
 }
 
 /// Write `batch.tex` at PATH.
@@ -206,6 +259,14 @@ fn write_batch_tex(path: &Path, preamble: &str, fragments: &[&str]) -> std::io::
     // User preamble, up to (but not including) \begin{document} if present.
     let preamble_body = strip_begin_document(preamble);
     writeln!(f, "{}", preamble_body)?;
+    // xcolor — required for our \color[HTML]{...} injection in the handler.
+    // Load unconditionally; xcolor tolerates being loaded twice but we still
+    // guard with a provided-check to avoid option-clash warnings if the user
+    // already loaded it with custom options.
+    writeln!(
+        f,
+        "\\makeatletter\\@ifpackageloaded{{xcolor}}{{}}{{\\usepackage{{xcolor}}}}\\makeatother"
+    )?;
     // Preview.sty options: active (enable snippets), tightpage (emit bbox
     // metadata for dvisvgm to crop to), auctex (emit per-snippet size
     // messages we can parse from stdout).
@@ -229,9 +290,12 @@ fn strip_begin_document(preamble: &str) -> &str {
 
 #[derive(Debug, Clone)]
 struct FragmentMetric {
-    /// Total visible height above baseline, in pt (after tightpage adjust).
+    /// TOTAL height of the SVG bounding box (above-baseline + below-baseline),
+    /// in pt, after tightpage adjustment.  This matches tip-core-typst's
+    /// convention so the client's tip--make-image-spec computes ascent
+    /// as (height - depth) / height correctly.
     height_pt: f64,
-    /// Depth below baseline, in pt.
+    /// Depth below baseline, in pt, after tightpage adjustment.
     depth_pt: f64,
     /// Total width, in pt.
     width_pt: f64,
@@ -275,9 +339,16 @@ fn parse_preview_output(stdout: &str, n_fragments: usize) -> Vec<Option<Fragment
             if n == 0 || n > n_fragments {
                 continue;
             }
+            // org-latex-preview conventions (see doc/latex-preview-survey.md):
+            //   above_baseline = H + T   (H is height above; T is tightpage top)
+            //   below_baseline = D - B   (D is depth; B is tightpage bottom; B < 0)
+            //   total_height   = above + below
+            //   width          = W + R - L
+            let above = h + top_sp;
+            let below = d - bottom_sp;
             metrics[n - 1] = Some(FragmentMetric {
-                height_pt: (h + top_sp) / SP_PER_PT,
-                depth_pt: (d - bottom_sp) / SP_PER_PT,
+                height_pt: (above + below) / SP_PER_PT,
+                depth_pt: below / SP_PER_PT,
                 width_pt: (w + right_sp - left_sp) / SP_PER_PT,
             });
         }
@@ -366,12 +437,33 @@ Preview: Tightpage -32891 -32891 32891 32891
         assert!(metrics[0].is_some());
         assert!(metrics[1].is_some());
         let m = metrics[0].as_ref().unwrap();
-        // height = (655360 + 32891) / 65536 ≈ 10.50 pt
-        assert!((m.height_pt - 10.50).abs() < 0.01, "got {}", m.height_pt);
-        // depth  = (131072 - (-32891)) / 65536 ≈ 2.50 pt
+        // above = (655360 + 32891) / 65536 ≈ 10.50 pt
+        // below = (131072 - (-32891)) / 65536 ≈ 2.50 pt
+        // height = above + below ≈ 13.00 pt
+        assert!((m.height_pt - 13.00).abs() < 0.01, "got {}", m.height_pt);
+        // depth  ≈ 2.50 pt
         assert!((m.depth_pt - 2.50).abs() < 0.01, "got {}", m.depth_pt);
         // width  = (1310720 + 32891 - (-32891)) / 65536 ≈ 21.00 pt
         assert!((m.width_pt - 21.00).abs() < 0.01, "got {}", m.width_pt);
+    }
+
+    #[test]
+    fn parse_svg_dimensions_basic() {
+        let svg = "<svg viewBox='.4 -6.9 38.9 7.74' width='38.9pt' height='7.74pt'>";
+        let d = parse_svg_dimensions(svg).unwrap();
+        assert!((d.width_pt - 38.9).abs() < 0.01);
+        assert!((d.height_pt - 7.74).abs() < 0.01);
+        // max_y = -6.9 + 7.74 = 0.84 → depth
+        assert!((d.depth_pt - 0.84).abs() < 0.01, "got {}", d.depth_pt);
+    }
+
+    #[test]
+    fn parse_svg_dimensions_no_depth() {
+        // viewBox entirely above baseline (e.g. superscript only).
+        let svg = "<svg viewBox='0 -5 10 3'>";
+        let d = parse_svg_dimensions(svg).unwrap();
+        assert!((d.height_pt - 3.0).abs() < 0.01);
+        assert_eq!(d.depth_pt, 0.0);
     }
 
     #[test]

@@ -317,6 +317,48 @@ shared with Feature 1).
 | `get_context` / local scope inference | preview.sty inherits the preamble via `\input`; no per-fragment scope logic needed |
 | Snippets / pretty-printing | editor-assist concerns, not preview          |
 
+## Future: error handling
+
+LaTeX is much easier to write wrongly than Typst.  Missing braces, undefined
+commands, mismatched `\begin/\end`, unclosed math modes, stray `&` — all
+produce errors that preview.sty swallows per-snippet but dvisvgm may not
+produce a page for.  Robust error handling is a future-work item worth
+studying both reference projects for:
+
+**org-latex-preview**:
+- Parses `! LaTeX Error:` blocks from stdout per snippet and attaches them
+  to `fragment-info :errors`.
+- Distinguishes fatal (no DVI produced) from recoverable (DVI has page for
+  this snippet but with error message) — only the former triggers a failure
+  callback.
+- Rewrites line numbers in error messages from snippet-local
+  (`l.N` inside the batch file) to buffer-local (offsetting by the
+  `! Preview: Snippet N started` line), so jump-to-error lands in the
+  user's source.  See `--latex-preview-filter`, lines 2820-2876.
+- Emits a single `+` fringe indicator on fragments that had errors, and on
+  hover shows the LaTeX error text.
+
+**digestif** does LSP-side diagnostics entirely from parsing (not from
+running TeX), so it catches structural issues — unbalanced braces, unknown
+commands, missing required args — before a compile even runs:
+- `Manuscript:scan` callbacks can raise diagnostics when commands' arg
+  signatures don't match (via the package tag DB).
+- Useful as a *preflight check* in tip-latex: run digestif-style parsing,
+  mark likely-broken fragments, skip sending them to the server.
+
+For tip-latex v2 we should port both halves:
+- Client-side preflight (digestif-inspired): use a smaller command
+  signature DB (just the common math envs + `\newcommand`/`\input` shape)
+  to flag unbalanced-brace or unknown-command fragments before compile.
+- Server-side per-snippet error extraction (OLP-inspired): remap line
+  numbers in `! LaTeX Error:` blocks to buffer coordinates, return them
+  on `FragmentResult { error: Some(...) }` so the existing tip-render
+  overlay error face kicks in.
+
+Both avoid the v1 failure mode where one broken fragment fails the whole
+batch (currently the server sometimes returns an empty SVG for snippets
+following an error, because preview.sty's error recovery isn't bulletproof).
+
 ## Open questions (the same three from before, sharpened)
 
 1. **Include policy for v1**: refuse hard (no previews at all if `\input`

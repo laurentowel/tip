@@ -267,6 +267,15 @@ Automatically renders visible fragments and enables live preview."
         (setq-local preview-toggle-compile-region-fn
                     #'tip--compile-region)
         (preview-toggle-mode 1)
+        ;; Belt-and-suspenders: preview-toggle-mode may be a no-op if it was
+        ;; already enabled, and something (other major-mode setup, third-party
+        ;; hooks) occasionally clears our local post-command-hook between
+        ;; mode activation and the user's first cursor move.  Force both
+        ;; hooks in directly — add-hook is idempotent.
+        (unless preview-toggle--marker
+          (setq preview-toggle--marker (make-marker)))
+        (add-hook 'pre-command-hook #'preview-toggle--pre-command nil 'local)
+        (add-hook 'post-command-hook #'preview-toggle--post-command nil 'local)
         ;; Live preview via childframe (off by default, user enables with M-x tip-live-mode)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)

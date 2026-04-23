@@ -102,7 +102,7 @@ impl Handler {
                         Ok(frag) => results.push(FragmentResult {
                             start: loc.start,
                             end: loc.end,
-                            svg: frag.svg,
+                            svg: ensure_svg_fill(&frag.svg, &params.color),
                             height_pt: frag.height_pt,
                             depth_pt: frag.depth_pt,
                             width_pt: frag.width_pt,
@@ -157,8 +157,60 @@ fn color_command(color: &str) -> String {
             return format!("\\color[HTML]{{{}}}", hex.to_ascii_uppercase());
         }
     }
-    // Fallback: pass through as a named color.
     format!("\\color{{{}}}", color)
+}
+
+/// Ensure the SVG has an explicit fill color on its top-level page group.
+///
+/// dvisvgm optimizes away any color that matches the SVG default (black),
+/// so a `\color[HTML]{000000}` fragment comes out with no fill attribute
+/// at all.  When Emacs renders such an SVG the paths inherit `currentColor`
+/// from the surrounding face — which for `latex-mode` math is
+/// `tex-math-face` (purple-ish by default).
+///
+/// Fix: if the SVG lacks any `fill=` / `stroke=` attribute, wrap the
+/// `<g id='page1'>` contents with `<g fill='COLOR'>`.  If a color
+/// attribute already exists we assume dvisvgm got it right and leave
+/// the SVG alone.
+fn ensure_svg_fill(svg: &str, color: &str) -> String {
+    if svg.contains("fill=") || svg.contains("stroke=") {
+        return svg.to_string();
+    }
+    let hex_upper = color.strip_prefix('#').map(|s| s.to_ascii_uppercase());
+    let fill = match hex_upper {
+        Some(h) if h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()) => {
+            format!("#{}", h)
+        }
+        _ => color.to_string(),
+    };
+    // Insert `<g fill='...'>` right after `<g id='pageN'>` and close it
+    // before the matching `</g>` at the very end of the document.
+    // dvisvgm numbers the outer group by page within its input, so each
+    // per-fragment SVG can have pageN for any N (not always 1).
+    let page_marker = "<g id='page";
+    let Some(pos) = svg.find(page_marker) else {
+        return svg.to_string();
+    };
+    // Skip past the `page` label, digits, and closing `'>`.
+    let after_page = &svg[pos + page_marker.len()..];
+    let Some(close_quote) = after_page.find("'>") else {
+        return svg.to_string();
+    };
+    let insert_at = pos + page_marker.len() + close_quote + "'>".len();
+    // Find the last `</g>` before `</svg>` — that's the close of page1.
+    let Some(svg_end) = svg.rfind("</svg>") else {
+        return svg.to_string();
+    };
+    let Some(page_close_rel) = svg[..svg_end].rfind("</g>") else {
+        return svg.to_string();
+    };
+    let mut out = String::with_capacity(svg.len() + 40);
+    out.push_str(&svg[..insert_at]);
+    out.push_str(&format!("<g fill='{}'>", fill));
+    out.push_str(&svg[insert_at..page_close_rel]);
+    out.push_str("</g>");
+    out.push_str(&svg[page_close_rel..]);
+    out
 }
 
 #[cfg(test)]
@@ -173,6 +225,38 @@ mod tests {
     #[test]
     fn color_from_name() {
         assert_eq!(color_command("red"), "\\color{red}");
+    }
+
+    #[test]
+    fn ensure_svg_fill_injects_when_missing() {
+        let svg = "<svg>\n<g id='page1'>\n<use x='0' y='0' href='#g1'/>\n</g>\n</svg>";
+        let out = ensure_svg_fill(svg, "#000000");
+        assert!(out.contains("<g fill='#000000'>"));
+        assert!(out.contains("<use x='0' y='0' href='#g1'/>"));
+    }
+
+    #[test]
+    fn ensure_svg_fill_handles_non_page1() {
+        // dvisvgm writes `<g id='pageN'>` where N is 1-indexed per input
+        // page, so per-fragment SVGs emitted from a batch have pageN > 1.
+        let svg = "<svg>\n<g id='page3'>\n<use/>\n</g>\n</svg>";
+        let out = ensure_svg_fill(svg, "#000000");
+        assert!(out.contains("<g fill='#000000'>"));
+    }
+
+    #[test]
+    fn ensure_svg_fill_leaves_existing_alone() {
+        let svg = "<svg>\n<g id='page1'>\n<g fill='#ff0000'>\n<use/>\n</g>\n</g>\n</svg>";
+        let out = ensure_svg_fill(svg, "#000000");
+        assert_eq!(out, svg);
+        assert!(!out.contains("#000000"));
+    }
+
+    #[test]
+    fn ensure_svg_fill_non_hex_passes_through() {
+        let svg = "<svg>\n<g id='page1'>\n<use/>\n</g>\n</svg>";
+        let out = ensure_svg_fill(svg, "red");
+        assert!(out.contains("<g fill='red'>"));
     }
 
     #[test]
