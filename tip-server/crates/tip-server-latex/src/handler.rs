@@ -94,7 +94,12 @@ impl Handler {
         // resolve the same way they would during a real compile.
         let cwd = Path::new(&params.uri).parent().map(Path::to_path_buf);
 
-        match LatexCompiler::compile_batch(preamble, &wrapped_refs, cwd.as_deref()) {
+        match LatexCompiler::compile_batch(
+            preamble,
+            &wrapped_refs,
+            cwd.as_deref(),
+            params.display_math_width.as_deref(),
+        ) {
             Ok(batch) => {
                 let mut results = Vec::with_capacity(batch.len());
                 for (loc, out) in params.fragments.iter().zip(batch.into_iter()) {
@@ -140,6 +145,7 @@ impl Handler {
             color: params.color,
             page_setup: params.page_setup,
             preamble: params.preamble,
+            display_math_width: None,
         };
         match self.handle_compile_fragments(fragments_params) {
             ResponseResult::Fragments { mut fragments } if !fragments.is_empty() => {

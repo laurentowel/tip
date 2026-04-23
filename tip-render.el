@@ -32,12 +32,14 @@
 
 ;;; * SVG utilities
 
+(defvar tip-display-math-width)
+
 (defun tip--pad-svg-viewbox (svg-data padding)
   "Expand SVG-DATA viewBox by PADDING pt above and below.
 Returns (SVG-STRING . ADDED-HEIGHT-PT)."
   (if (and (> padding 0)
            (string-match
-            "viewBox=\"\\([^ \"]+\\) \\([^ \"]+\\) \\([^ \"]+\\) \\([^ \"]+\\)\""
+            "viewBox=[\"']\\([^ \"']+\\) \\([^ \"']+\\) \\([^ \"']+\\) \\([^ \"']+\\)[\"']"
             svg-data))
       (let* ((vy (string-to-number (match-string 2 svg-data)))
              (vw (match-string 3 svg-data))
@@ -48,12 +50,33 @@ Returns (SVG-STRING . ADDED-HEIGHT-PT)."
                              (match-string 1 svg-data)
                              new-vy vw new-vh))
              (result (replace-match new-vb t t svg-data))
-             (result (if (string-match "height=\"[^\"]+\"" result)
+             (result (if (string-match "height=[\"'][^\"']+[\"']" result)
                          (replace-match
                           (format "height=\"%spt\"" new-vh) t t result)
                        result)))
         (cons result (* 2.0 padding)))
     (cons svg-data 0.0)))
+
+(defun tip--resolve-display-width-em ()
+  "Return the configured display-math target width in em, or nil.
+Reads `tip-display-math-width' — a number uses it directly, a plist
+selects by active backend name (falling back to `:default').
+The resolved value is sent to the server so display math is laid out
+at textwidth = NNem by LaTeX itself (centering happens naturally)."
+  (when (boundp 'tip-display-math-width)
+    (let ((raw tip-display-math-width))
+      (cond
+       ((null raw) nil)
+       ((numberp raw) raw)
+       ((and (listp raw) (keywordp (car raw)))
+        (let* ((backend (when (fboundp 'tip-active-backend)
+                          (let ((b (tip-active-backend)))
+                            (and b (tip-backend-name b)))))
+               (key (and backend (intern (concat ":" (symbol-name backend)))))
+               (per-backend (and key (plist-get raw key)))
+               (default (plist-get raw :default)))
+          (or per-backend default)))
+       (t nil)))))
 
 ;;; * font metrics (used for ascent prediction and scaling)
 

@@ -84,6 +84,14 @@ pub struct CompileFragmentsParams {
     /// If omitted, tip-server injects bounded() to prevent clipping.
     #[serde(default)]
     pub preamble: Option<String>,
+    /// Target width for display-math SVGs, as a LaTeX dimension string
+    /// (e.g. "20em" or "400pt").  When set, the LaTeX backend runs
+    /// `\setlength{\textwidth}{...}` before each batch, so
+    /// `\begin{preview}\[...\]\end{preview}` produces a full-textwidth
+    /// SVG with the math centered by LaTeX itself.  Inline `$...$`
+    /// is unaffected.  Typst and other backends may ignore this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_math_width: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

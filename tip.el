@@ -119,6 +119,29 @@ background color (and swapped on theme change)."
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-display-math-width nil
+  "Target width for displayed math overlays, in em.
+Applies to block math, numbered equations, multi-line aligns,
+pmatrix, cases — anything classified as display-single, display-multi,
+or block.  Inline math is never affected.
+
+  nil         — tight (ink-cropped) SVG at cursor position.  Default.
+  NUMBER      — total SVG width in em units (e.g. 20 → 20em wide,
+                math centered within).
+  PLIST       — per-backend override.  Keys are backend names (symbols
+                matching `(tip-backend-name (tip-active-backend))'),
+                plus optional `:default'.  Each value obeys the NUMBER
+                rule.  Example: \\='(:latex 22 :typst 20 :default 20).
+
+Future: a window-fraction mode (e.g. 0.9 → 90% of line width) may be
+added; for now keep it explicit in em to sidestep window-size volatility.
+Buffer-local."
+  :type '(choice (const :tag "Tight (ink-cropped)" nil)
+                 (number :tag "Absolute width in em")
+                 (plist  :key-type symbol :value-type number))
+  :group 'tip
+  :local t)
+
 
 ;;; * preamble (theme sync)
 
@@ -151,15 +174,21 @@ background color (and swapped on theme change)."
          (fg (tip--color-to-hex (face-attribute 'default :foreground)))
          (preamble (tip-build-preamble))
          (frag-locs (tip-collect-fragments beg end avoid-pos))
-         (n (length frag-locs)))
+         (n (length frag-locs))
+         (display-width-em (tip--resolve-display-width-em))
+         (params `(("uri" . ,(buffer-file-name))
+                   ("fragments" . ,(vconcat frag-locs))
+                   ("color" . ,fg)
+                   ("preamble" . ,preamble))))
+    (when display-width-em
+      (setq params
+            (append params
+                    `(("display_math_width"
+                       . ,(format "%sem" display-width-em))))))
     (when (> n 0)
       (tip--sync-buffer)
       (tip--send-request
-       "compile_fragments"
-       `(("uri" . ,(buffer-file-name))
-         ("fragments" . ,(vconcat frag-locs))
-         ("color" . ,fg)
-         ("preamble" . ,preamble))
+       "compile_fragments" params
        (lambda (result)
          (with-current-buffer buf
            (tip--apply-fragment-results

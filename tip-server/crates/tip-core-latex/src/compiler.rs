@@ -95,6 +95,7 @@ impl LatexCompiler {
         preamble: &str,
         fragments: &[&str],
         working_dir: Option<&Path>,
+        display_math_width: Option<&str>,
     ) -> Result<Vec<Result<FragmentOutput, String>>, LatexError> {
         if fragments.is_empty() {
             return Ok(vec![]);
@@ -103,7 +104,7 @@ impl LatexCompiler {
         let tmp = tempfile::tempdir()
             .map_err(|e| LatexError::Io(format!("create tempdir: {e}")))?;
         let tex_path = tmp.path().join("batch.tex");
-        write_batch_tex(&tex_path, preamble, fragments)
+        write_batch_tex(&tex_path, preamble, fragments, display_math_width)
             .map_err(|e| LatexError::Io(format!("write batch.tex: {e}")))?;
 
         // Step 1: latex → DVI
@@ -148,17 +149,21 @@ impl LatexCompiler {
 
         // Step 3: dvisvgm → N svg files
         //
-        // --bbox=min crops tightly to actual glyph ink bounds.  This
-        // eliminates the phantom whitespace below fragments with no
-        // descenders (e.g. "$a+b=c$") that --bbox=preview leaves behind
-        // due to font-metric descent.  The trade-off: preview.sty's
-        // "Snippet ended" log values no longer match the SVG
-        // dimensions, so we parse the SVG viewBox afterwards.
+        // --bbox=preview uses preview.sty's tightpage annotations, which
+        // respect \textwidth: display math like `\[...\]` produces a
+        // full-textwidth SVG with the math centered by LaTeX itself
+        // (important for the `display_math_width` feature).  Inline math
+        // fragments stay tight because preview.sty only pads display
+        // environments.
+        //
+        // We read dimensions directly from the SVG's viewBox afterwards,
+        // so the preview.sty stdout values don't need to match (they
+        // don't — sp vs bp).
         let dvisvgm_out = Command::new("dvisvgm")
             .args([
                 "--page=1-",
                 "--no-fonts",
-                "--bbox=min",
+                "--bbox=preview",
                 "--exact",
                 "--relative",
                 "--output=batch-%9p.svg",
@@ -256,7 +261,12 @@ fn parse_svg_dimensions(svg: &str) -> Option<SvgDims> {
 }
 
 /// Write `batch.tex` at PATH.
-fn write_batch_tex(path: &Path, preamble: &str, fragments: &[&str]) -> std::io::Result<()> {
+fn write_batch_tex(
+    path: &Path,
+    preamble: &str,
+    fragments: &[&str],
+    display_math_width: Option<&str>,
+) -> std::io::Result<()> {
     let mut f = fs::File::create(path)?;
     // If preamble lacks \documentclass, supply a minimal default.
     let has_documentclass = preamble.contains("\\documentclass");
@@ -267,13 +277,20 @@ fn write_batch_tex(path: &Path, preamble: &str, fragments: &[&str]) -> std::io::
     let preamble_body = strip_begin_document(preamble);
     writeln!(f, "{}", preamble_body)?;
     // xcolor — required for our \color[HTML]{...} injection in the handler.
-    // Load unconditionally; xcolor tolerates being loaded twice but we still
-    // guard with a provided-check to avoid option-clash warnings if the user
-    // already loaded it with custom options.
     writeln!(
         f,
         "\\makeatletter\\@ifpackageloaded{{xcolor}}{{}}{{\\usepackage{{xcolor}}}}\\makeatother"
     )?;
+    // Optional textwidth for display-math sizing.  When set,
+    // `\begin{preview}\[...\]\end{preview}` produces a full-textwidth SVG
+    // with the math centered by LaTeX itself — no SVG post-processing
+    // needed.  Inline math is unaffected (it doesn't fill a line).
+    if let Some(w) = display_math_width {
+        if !w.trim().is_empty() {
+            writeln!(f, "\\setlength{{\\textwidth}}{{{}}}", w)?;
+            writeln!(f, "\\setlength{{\\linewidth}}{{{}}}", w)?;
+        }
+    }
     // Preview.sty options: active (enable snippets), tightpage (emit bbox
     // metadata for dvisvgm to crop to), auctex (emit per-snippet size
     // messages we can parse from stdout).
@@ -511,8 +528,8 @@ Preview: Tightpage -32891 -32891 32891 32891
         }
         let preamble = "\\documentclass{article}\n\\usepackage{amsmath}\n";
         let fragments = ["$a + b$", "$$ x^2 + y^2 $$"];
-        let results =
-            LatexCompiler::compile_batch(preamble, &fragments, None).expect("compile");
+        let results = LatexCompiler::compile_batch(preamble, &fragments, None, None)
+            .expect("compile");
         assert_eq!(results.len(), 2);
         for r in &results {
             let out = r.as_ref().expect("fragment ok");
