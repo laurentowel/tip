@@ -45,6 +45,11 @@ pub struct FragmentOutput {
     pub height_pt: f64,
     pub depth_pt: f64,
     pub width_pt: f64,
+    /// Base font size used by LaTeX when rendering this batch, in pt.
+    /// Parsed from preview.sty's `Preview: Fontsize Npt` line.  Constant
+    /// across all fragments in a batch — it reflects the document class
+    /// option (10pt / 11pt / 12pt).  None when the line was absent.
+    pub font_size_pt: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +144,7 @@ impl LatexCompiler {
 
         // Step 2: parse preview.sty markers from stdout
         let metrics = parse_preview_output(&stdout, fragments.len());
+        let font_size_pt = parse_preview_fontsize(&stdout);
 
         // Step 3: dvisvgm → N svg files
         //
@@ -193,6 +199,7 @@ impl LatexCompiler {
                             height_pt: d.height_pt,
                             depth_pt: d.depth_pt,
                             width_pt: d.width_pt,
+                            font_size_pt,
                         })),
                         None => results.push(Err(format!(
                             "fragment {} has no dimensions (svg viewBox missing, no log entry)",
@@ -388,6 +395,19 @@ fn parse_snippet_ended(line: &str) -> Option<(usize, f64, f64, f64)> {
     Some((n, h, d, w))
 }
 
+/// Parse `Preview: Fontsize 10pt` (or 11pt / 12pt) from preview.sty's stdout.
+/// Tolerates a file:line: prefix from file-line-error.
+fn parse_preview_fontsize(stdout: &str) -> Option<f64> {
+    stdout.lines().find_map(|line| {
+        let marker = "Preview: Fontsize ";
+        let at = line.find(marker)?;
+        let rest = &line[at + marker.len()..];
+        // `rest` starts with the number then "pt".
+        let pt_at = rest.find("pt")?;
+        rest[..pt_at].trim().parse::<f64>().ok()
+    })
+}
+
 fn tail(s: &str, n_lines: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     let start = lines.len().saturating_sub(n_lines);
@@ -445,6 +465,13 @@ Preview: Tightpage -32891 -32891 32891 32891
         assert!((m.depth_pt - 2.50).abs() < 0.01, "got {}", m.depth_pt);
         // width  = (1310720 + 32891 - (-32891)) / 65536 ≈ 21.00 pt
         assert!((m.width_pt - 21.00).abs() < 0.01, "got {}", m.width_pt);
+    }
+
+    #[test]
+    fn parse_fontsize_basic() {
+        assert_eq!(parse_preview_fontsize("Preview: Fontsize 10pt\nother\n"), Some(10.0));
+        assert_eq!(parse_preview_fontsize("./file.tex:1: Preview: Fontsize 11pt"), Some(11.0));
+        assert_eq!(parse_preview_fontsize("no fontsize here"), None);
     }
 
     #[test]

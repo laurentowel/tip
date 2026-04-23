@@ -93,6 +93,7 @@ impl Handler {
                     height_pt: 0.0,
                     depth_pt: 0.0,
                     width_pt: 0.0,
+                            font_size_pt: Some(11.0),
                     error: Some("invalid fragment range".into()),
                 });
                 continue;
@@ -115,6 +116,7 @@ impl Handler {
                         height_pt: output.height_pt,
                         depth_pt: output.depth_pt,
                         width_pt: output.width_pt,
+                            font_size_pt: Some(11.0),
                         error: None,
                     });
                 }
@@ -126,6 +128,7 @@ impl Handler {
                         height_pt: 0.0,
                         depth_pt: 0.0,
                         width_pt: 0.0,
+                            font_size_pt: Some(11.0),
                         error: Some(err),
                     });
                 }
@@ -162,6 +165,7 @@ impl Handler {
                     height_pt: output.height_pt,
                     depth_pt: output.depth_pt,
                     width_pt: output.width_pt,
+                            font_size_pt: Some(11.0),
                     error: None,
                 },
             },

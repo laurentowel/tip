@@ -18,6 +18,14 @@ pub struct FragmentResult {
     /// Ink width in points (content only, no margins).
     #[serde(default)]
     pub width_pt: f64,
+    /// Base font size used by the backend when rendering this fragment.
+    /// The client uses this to pick a natural display scale (math appears
+    /// at the same visual size as the surrounding buffer text).  Typst
+    /// always renders at 11pt; LaTeX reads the value preview.sty reports
+    /// (usually 10, 11, or 12 depending on the document class).  Absent
+    /// when the backend can't report it reliably.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_pt: Option<f64>,
     /// Compilation error message, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -209,6 +217,7 @@ mod tests {
                     height_pt: 12.5,
                     depth_pt: 2.3,
                     width_pt: 24.0,
+                    font_size_pt: Some(11.0),
                     error: None,
                 }],
             },

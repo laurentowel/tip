@@ -62,11 +62,15 @@ Returns (SVG-STRING . ADDED-HEIGHT-PT)."
   (let ((h (face-attribute 'default :height)))
     (if (numberp h) (/ h 10.0) 11.0)))
 
-(defun tip--effective-scale ()
+(defun tip--effective-scale (&optional rendered-pt)
   "Return the effective scale factor.
-When `tip-scale' is `auto', compute from the buffer font size."
+When `tip-scale' is `auto', compute it so the rendered math (at
+the backend's native font size) visually matches the Emacs buffer
+font.  RENDERED-PT, if provided, is that native font size from the
+backend — e.g. preview.sty's \"Preview: Fontsize Npt\" for LaTeX,
+or Typst's fixed 11pt.  Defaults to 11.0 when absent."
   (if (eq tip-scale 'auto)
-      (/ (tip--font-size-pt) 11.0)
+      (/ (tip--font-size-pt) (or rendered-pt 11.0))
     tip-scale))
 
 (defun tip--font-pixel-size ()
@@ -90,17 +94,18 @@ Respects `face-remapping-alist'."
 
 ;;; * image spec
 
-(defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p)
+(defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p rendered-pt)
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
 When DISPLAY-P is non-nil, use vertical centering (for display math).
-Otherwise use baseline alignment for inline math."
+RENDERED-PT is the backend's native render size (see
+`tip--effective-scale').  Defaults to 11.0."
   (let* ((padded (if display-p
                      (tip--pad-svg-viewbox svg-data tip-display-math-padding)
                    (cons svg-data 0.0)))
          (svg-data (car padded))
          (height-pt (+ height-pt (cdr padded)))
          (font-pt (tip--font-size-pt))
-         (height-em (* (tip--effective-scale) (/ height-pt font-pt)))
+         (height-em (* (tip--effective-scale rendered-pt) (/ height-pt font-pt)))
          (ascent (if display-p
                      'center
                    ;; Inline: compute ascent from pixel-level prediction.
@@ -156,6 +161,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
              (height-pt (alist-get 'height_pt frag))
              (depth-pt (alist-get 'depth_pt frag))
              (width-pt (alist-get 'width_pt frag))
+             (font-size-pt (alist-get 'font_size_pt frag))
              (err (alist-get 'error frag)))
         ;; Error fragment: highlight with error face, optionally log.
         (when (and err frag-beg frag-end (= (length svg-data) 0))
@@ -178,7 +184,8 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
                  (class (tip-classify-fragment frag-text))
                  (is-single-line-display (eq class 'display-single))
                  (is-display (memq class '(display-single display-multi block)))
-                 (img-spec (tip--make-image-spec svg-data height-pt depth-pt is-display))
+                 (img-spec (tip--make-image-spec svg-data height-pt depth-pt
+                                                 is-display font-size-pt))
                  (display img-spec)
                  ;; For display math, eat a preceding blank line so the
                  ;; overlay doesn't leave an orphan gap.
@@ -195,6 +202,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
             (overlay-put ov 'tip-height-pt height-pt)
             (overlay-put ov 'tip-depth-pt depth-pt)
             (overlay-put ov 'tip-width-pt (or width-pt 0))
+            (overlay-put ov 'tip-font-size-pt font-size-pt)
             (overlay-put ov 'tip-svg svg-data)
             (overlay-put ov 'tip-fg (tip--color-to-hex
                                      (face-attribute 'default :foreground)))
@@ -254,12 +262,13 @@ recompiling SVGs — no server round-trip."
                (overlay-get ov 'display))
       (let ((svg (overlay-get ov 'tip-svg))
             (h (overlay-get ov 'tip-height-pt))
-            (d (overlay-get ov 'tip-depth-pt)))
+            (d (overlay-get ov 'tip-depth-pt))
+            (fs (overlay-get ov 'tip-font-size-pt)))
         (when (and svg h (> h 0))
           (let* ((disp (overlay-get ov 'display))
                  (old-ascent (plist-get (cdr disp) :ascent))
                  (is-display (eq old-ascent 'center))
-                 (new-spec (tip--make-image-spec svg h d is-display)))
+                 (new-spec (tip--make-image-spec svg h d is-display fs)))
             (overlay-put ov 'display (car new-spec))))))))
 
 (defun tip--on-font-change (&rest _)

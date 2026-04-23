@@ -106,6 +106,7 @@ impl Handler {
                             height_pt: frag.height_pt,
                             depth_pt: frag.depth_pt,
                             width_pt: frag.width_pt,
+                            font_size_pt: frag.font_size_pt,
                             error: None,
                         }),
                         Err(e) => results.push(FragmentResult {
@@ -115,6 +116,7 @@ impl Handler {
                             height_pt: 0.0,
                             depth_pt: 0.0,
                             width_pt: 0.0,
+                            font_size_pt: None,
                             error: Some(e),
                         }),
                     }
