@@ -1,21 +1,23 @@
-;;; tip.el --- Typst Inline Preview -*- lexical-binding: t; -*-
+;;; tip.el --- Typeset Inline Preview -*- lexical-binding: t; -*-
 
 ;; Author: Elio Azuray
 ;; URL: https://github.com/elioazuray/typst-inline-preview
 ;; Version: 2.0.0
 ;; Package-Requires: ((emacs "29.1"))
-;; Keywords: languages, typst, preview
+;; Keywords: languages, typst, tex, preview
 
 ;; This file is not part of GNU Emacs.
 
 ;;; Commentary:
 
-;; Inline math preview for typst-ts-mode.  Renders Typst math fragments
-;; as SVG images displayed as overlays in the buffer.
+;; TIP — Typeset Inline Preview.  A backend-pluggable framework for
+;; rendering typeset fragments (math, figures) as inline SVG overlays.
+;; The active backend today is Typst (via typst-ts-mode); a LaTeX
+;; backend is planned.
 ;;
-;; Communicates with tip-server (Rust binary) via stdio JSON-RPC.
-;; Requires: tip-server binary on `exec-path' or configured via
-;; `tip-server-executable'.
+;; Communicates with a per-backend server binary (e.g. tip-server-typst)
+;; via stdio JSON-RPC.  Requires the binary on `exec-path' or
+;; configured via `tip-server-executable'.
 
 ;;; Code:
 

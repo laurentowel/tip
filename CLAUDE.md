@@ -1,8 +1,8 @@
-# TIP — Typst Inline Preview
+# TIP — Typeset Inline Preview
 
 ## Project Overview
 
-TIP is an Emacs minor mode that renders Typst math fragments as inline SVG previews, inspired by org-latex-preview. This workspace contains the original implementation and an in-progress rewrite.
+TIP is an Emacs minor mode that renders typeset math fragments (and, opt-in, figures) as inline SVG previews, inspired by org-latex-preview. The active backend today is Typst; the architecture is backend-pluggable so a LaTeX backend can be added later. This workspace contains the original implementation and an in-progress rewrite.
 
 ## Workspace Layout
 

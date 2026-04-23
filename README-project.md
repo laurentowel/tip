@@ -1,4 +1,4 @@
-# TIP — Typst Inline Preview
+# TIP — Typeset Inline Preview
 
 Render Typst math fragments as inline SVG previews in Emacs, like org-latex-preview for LaTeX.
 
@@ -18,7 +18,7 @@ cargo build --release
 
 # 2. In Emacs (requires Emacs 29.1+, typst-ts-mode, tree-sitter grammar)
 (add-to-list 'load-path "/path/to/tip-improve/tip")
-(setq tip-server-executable "/path/to/tip-improve/tip-server/target/release/tip-server")
+(setq tip-server-executable "/path/to/tip-improve/tip-server/target/release/tip-server-typst")
 (require 'tip)
 (add-hook 'typst-ts-mode-hook #'tip-mode)
 ```
@@ -73,7 +73,7 @@ Measured with Emacs 30.2, release build, real display (not batch mode):
 ## Architecture
 
 ```
-Emacs (tip.el)          Rust (tip-server)
+Emacs (tip.el)          Rust (tip-server-typst)
      │                        │
      │──── sync buffer ──────→│  TipWorld (in-memory VFS)
      │──── compile_fragments ─→│  Scope extraction (AST walk)
@@ -135,11 +135,11 @@ tip-repo/
 ├── tests/                  Emacs integration tests + sandbox
 ├── tip-server/             Rust server
 │   ├── crates/
-│   │   ├── tip-protocol/   Messages + stdio transport
-│   │   ├── tip-core/       Typst World, compiler, scope extraction
-│   │   └── tip-server/     Binary entry point
+│   │   ├── tip-protocol/       Messages + stdio transport (shared)
+│   │   ├── tip-core-typst/     Typst World, compiler, scope extraction
+│   │   └── tip-server-typst/   Binary entry point (tip-server-typst)
 │   ├── testkit/            Shared test utilities
-│   └── Dockerfile          Docker build for tip-server
+│   └── Dockerfile          Docker build for tip-server-typst
 ├── CLAUDE.md               Developer guide (architecture, baseline deep-dive)
 ├── DISTRIBUTION.md         Distribution plan (elpaca, MELPA, Docker)
 └── .ref/                   Reference repos (gitignored, for development)
