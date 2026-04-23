@@ -517,10 +517,13 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
 ;;; * inline error display
 
 (defface tip-error-face
-  '((((background light)) :background "#fff3cd")
-    (((background dark))  :background "#1a2744"))
+  '((((background light))
+     :underline (:style wave :color "#d63939"))
+    (((background dark))
+     :underline (:style wave :color "#f87171")))
   "Face for fragments that failed to compile.
-Light yellow on light backgrounds, deep blue on dark."
+Red wavy underline, matching Flymake's error style.  Source text
+stays visible so the user can fix in-place."
   :group 'tip)
 
 ;;; * stale overlay cleanup

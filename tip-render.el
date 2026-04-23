@@ -278,6 +278,44 @@ RENDERED-PT is the backend's native render size (see
                       :ascent ascent
                       :pointer 'hand)))))
 
+;;; * error-overlay helpers
+
+(defface tip-warning-face
+  '((((background light)) :underline (:style wave :color "#d97706"))
+    (((background dark))  :underline (:style wave :color "#f59e0b")))
+  "Face for fragments that compiled with a warning.
+Wavy underline in amber.  Overrides `tip-error-face' when the
+fragment's `error_detail.severity' is `warning'."
+  :group 'tip)
+
+(defun tip--locate-error-hint (frag-beg frag-end hint &optional line-in-fragment)
+  "Search for HINT (a substring) inside (FRAG-BEG..FRAG-END) and return
+\(BEG . END) of the first match, or nil if HINT is nil/empty/not found.
+
+LINE-IN-FRAGMENT, when a non-negative integer, biases the search to the
+Nth line of the fragment so that repeated tokens (`$', `x', …) don't
+yield the first occurrence in a multi-line fragment.  Exact line
+position isn't always reliable (LaTeX's `l.N' sometimes points at a
+recovery artifact), so we fall back to a plain first-match search."
+  (when (and hint (> (length hint) 0))
+    (save-excursion
+      (save-restriction
+        (narrow-to-region frag-beg frag-end)
+        (let ((search-start
+               (if (and (integerp line-in-fragment)
+                        (> line-in-fragment 0))
+                   (save-excursion
+                     (goto-char (point-min))
+                     (forward-line line-in-fragment)
+                     (point))
+                 (point-min))))
+          (goto-char search-start)
+          (or (search-forward hint nil t)
+              (progn (goto-char (point-min))
+                     (search-forward hint nil t)))
+          (when (match-beginning 0)
+            (cons (match-beginning 0) (match-end 0))))))))
+
 ;;; * overlay application
 
 (defun tip--invalidate-on-modification (ov after-p _beg _end &optional _len)
@@ -292,7 +330,8 @@ the image displayed over now-mismatched source."
 (defun tip--apply-fragment-results (fragment-results)
   "Apply compiled SVG results as overlays.
 FRAGMENT-RESULTS is a vector of alists with start, end, svg,
-height_pt, depth_pt, width_pt, and (optional) error keys.
+height_pt, depth_pt, width_pt, optional error, and optional
+error_detail (severity, message, hint, line_in_fragment, detail).
 Handles narrowed buffers: `byte-to-position' needs full buffer access."
   (save-restriction
     (widen)
@@ -306,20 +345,62 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
              (depth-pt (alist-get 'depth_pt frag))
              (width-pt (alist-get 'width_pt frag))
              (font-size-pt (alist-get 'font_size_pt frag))
-             (err (alist-get 'error frag)))
-        ;; Error fragment: highlight with error face, optionally log.
-        (when (and err frag-beg frag-end (= (length svg-data) 0))
+             (err (alist-get 'error frag))
+             (err-detail (alist-get 'error_detail frag))
+             (err-severity (alist-get 'severity err-detail))
+             (err-message (alist-get 'message err-detail))
+             (err-hint (alist-get 'hint err-detail))
+             (err-line (alist-get 'line_in_fragment err-detail))
+             (err-full (alist-get 'detail err-detail)))
+        ;; Failed fragment path: err OR err-detail present.  Show the
+        ;; source text with an inline marker + error-face underline on
+        ;; the hint region (if we can locate it).  preview.sty often
+        ;; produces a partial SVG even on error — we intentionally do
+        ;; NOT display that garbled image; user needs to see the source
+        ;; to fix it.
+        (when (and frag-beg frag-end (or err err-detail))
           (when tip-echo-errors
-            (message "TIP: %s" err))
+            (message "TIP [%s]: %s" (or err-severity "error")
+                     (or err-message err "compile failed")))
           (dolist (ov (overlays-in frag-beg frag-end))
             (when (eq (overlay-get ov 'tip) 'tip)
               (delete-overlay ov)))
-          (let ((ov (make-overlay frag-beg frag-end)))
+          (let* ((hint-range (tip--locate-error-hint frag-beg frag-end
+                                                     err-hint err-line))
+                 (face (if (eq err-severity 'warning)
+                           'tip-warning-face
+                         'tip-error-face))
+                 (marker (cond ((eq err-severity 'warning) "⚑ ")
+                               (t "⚠ ")))
+                 ;; Underline overlay: whole fragment if hint can't be
+                 ;; located, else just the hint region.
+                 (under-beg (or (car hint-range) frag-beg))
+                 (under-end (or (cdr hint-range) frag-end))
+                 (ov (make-overlay under-beg under-end)))
             (overlay-put ov 'tip 'tip)
-            (overlay-put ov 'face 'tip-error-face)))
+            (overlay-put ov 'face face)
+            (overlay-put ov 'before-string
+                         (propertize marker 'face face))
+            (overlay-put ov 'help-echo
+                         (if err-full
+                             (format "%s\n\n%s"
+                                     (or err-message err) err-full)
+                           (or err-message err "compile failed")))
+            (overlay-put ov 'tip-error-severity err-severity)
+            (overlay-put ov 'tip-error-message err-message)
+            (overlay-put ov 'tip-error-hint err-hint)
+            (overlay-put ov 'tip-error-line err-line)
+            (overlay-put ov 'tip-error-detail err-full)
+            ;; Remember the fragment range for next-error navigation even
+            ;; when the underline covers a smaller span.
+            (overlay-put ov 'tip-frag-beg frag-beg)
+            (overlay-put ov 'tip-frag-end frag-end)))
+        ;; Success path — only when we have a valid SVG AND no error_detail.
         (when (and frag-beg frag-end (> (length svg-data) 0)
                    (> (or height-pt 0) 0.01)
                    (> (or width-pt 0) 0.01)
+                   (not err-detail)
+                   (not err)
                    (not (string-match-p "width=\"0pt\"" svg-data)))
           (dolist (ov (overlays-in frag-beg frag-end))
             (when (eq (overlay-get ov 'tip) 'tip)
