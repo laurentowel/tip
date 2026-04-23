@@ -16,6 +16,7 @@
 
 (require 'seq)
 (require 'subr-x)
+(require 'tip-backend)
 
 ;; Customs and helpers that live in tip.el — forward-declared.
 (defvar tip-scale)
@@ -173,19 +174,10 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
           (dolist (ov (overlays-in frag-beg frag-end))
             (when (eq (overlay-get ov 'tip) 'tip)
               (delete-overlay ov)))
-          ;; Fragments starting with `#' are block calls (figures).
           (let* ((frag-text (buffer-substring-no-properties frag-beg frag-end))
-                 (is-block-call (eq (aref frag-text 0) ?#))
-                 (is-single-line-display
-                  (and (not is-block-call)
-                       (>= (length frag-text) 3)
-                       (eq (aref frag-text 0) ?$)
-                       (memq (aref frag-text 1) '(?\s ?\t))
-                       (not (string-match-p "\n" (substring frag-text 1 -1)))))
-                 (is-display (or is-block-call
-                                 is-single-line-display
-                                 (and (not is-block-call)
-                                      (string-match-p "\n" (substring frag-text 1 -1)))))
+                 (class (tip-classify-fragment frag-text))
+                 (is-single-line-display (eq class 'display-single))
+                 (is-display (memq class '(display-single display-multi block)))
                  (img-spec (tip--make-image-spec svg-data height-pt depth-pt is-display))
                  (display img-spec)
                  ;; For display math, eat a preceding blank line so the

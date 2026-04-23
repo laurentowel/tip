@@ -21,13 +21,12 @@
 
 (require 'tip-childframe)
 (require 'tip-server-proc)
+(require 'tip-backend)
 
 ;; Forward-declares from tip / tip-typst.
 (defvar tip-echo-errors)
 (defvar tip-mode)
 (declare-function tip--color-to-hex "tip" (color))
-(declare-function tip--get-bounds-of-math-at-point "tip-typst" (x))
-(declare-function tip--build-preamble "tip-typst" ())
 (declare-function tip-edit--live-preview "tip" ())
 (defvar tip-edit-mode)
 
@@ -56,7 +55,7 @@
              (eq major-mode 'typst-ts-mode)
              (eq (current-buffer) (window-buffer))
              (not (bound-and-true-p tip-live-mode)))
-    (if-let* ((bound (tip--get-bounds-of-math-at-point (point)))
+    (if-let* ((bound (tip-bounds-at-point (point)))
               (content (buffer-substring-no-properties (car bound) (cdr bound))))
         (unless (string-equal tip-echo--content-cache content)
           (setq tip-echo--content-cache content)
@@ -70,7 +69,7 @@
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                          ("end" . ,byte-end))))
                ("color" . ,fg)
-               ("preamble" . ,(tip--build-preamble)))
+               ("preamble" . ,(tip-build-preamble)))
              #'tip-echo--handle-result)))
       (setq tip-echo--content-cache ""))))
 
@@ -111,7 +110,7 @@ Works in both normal typst-ts-mode and tip-edit buffers."
     (tip-edit--live-preview))
    ;; In typst-ts-mode: compile fragment at point.
    ((eq major-mode 'typst-ts-mode)
-    (if-let* ((bound (tip--get-bounds-of-math-at-point (point)))
+    (if-let* ((bound (tip-bounds-at-point (point)))
               (content (buffer-substring-no-properties (car bound) (cdr bound))))
         (unless (string-equal tip-live--content-cache content)
           (setq tip-live--content-cache content)
@@ -125,7 +124,7 @@ Works in both normal typst-ts-mode and tip-edit buffers."
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                          ("end" . ,byte-end))))
                ("color" . ,fg)
-               ("preamble" . ,(tip--build-preamble)))
+               ("preamble" . ,(tip-build-preamble)))
              (lambda (result)
                (tip-live--handle-result result)))))
       (tip-childframe-hide)

@@ -18,6 +18,7 @@
 
 (require 'json)
 (require 'cl-lib)
+(require 'tip-backend)
 
 ;; Customs that live in tip.el — forward-declared so the byte-compiler
 ;; knows they'll exist at runtime.
@@ -88,24 +89,30 @@ Called with one argument: the result alist.")
 ;;; * discovery / installation
 
 (defun tip--find-server ()
-  "Find the tip-server executable, or prompt user to install.
-Returns the path, or nil if Docker mode (handled separately)."
+  "Find the backend's server executable, or prompt user to install.
+Returns the path, or nil if Docker mode (handled separately).
+Uses `tip-server-executable-name' from the active backend; falls back
+to the Typst default when no backend is active (e.g. bare test buffers)."
   (when tip-use-docker
     (cl-return-from tip--find-server nil))
-  (or tip-server-executable
-      (executable-find "tip-server-typst")
-      ;; Check local build beside tip.el
-      (let ((local (expand-file-name
-                    "tip-server/target/release/tip-server-typst"
-                    (tip--package-dir))))
-        (when (file-executable-p local) local))
-      ;; Check in elpaca build dir (source repo)
-      (let ((elpaca-src (expand-file-name
-                         "tip-server/target/release/tip-server-typst"
-                         (file-name-directory
-                          (or (locate-library "tip") "")))))
-        (when (file-executable-p elpaca-src) elpaca-src))
-      (tip--prompt-install)))
+  (let* ((name (or (tip-server-executable-name) "tip-server-typst"))
+         ;; When the backend resolved to an absolute path already, use it.
+         (absolute (and name (file-name-absolute-p name) (file-executable-p name))))
+    (or (and absolute name)
+        tip-server-executable
+        (executable-find name)
+        ;; Check local build beside tip.el
+        (let ((local (expand-file-name
+                      (concat "tip-server/target/release/" name)
+                      (tip--package-dir))))
+          (when (file-executable-p local) local))
+        ;; Check in elpaca build dir (source repo)
+        (let ((elpaca-src (expand-file-name
+                           (concat "tip-server/target/release/" name)
+                           (file-name-directory
+                            (or (locate-library "tip") "")))))
+          (when (file-executable-p elpaca-src) elpaca-src))
+        (tip--prompt-install))))
 
 (defun tip--prompt-install ()
   "Prompt user to install tip-server."
@@ -130,13 +137,16 @@ Returns the path, or nil if Docker mode (handled separately)."
 
 ;;;###autoload
 (defun tip--compile-from-source ()
-  "Compile tip-server from Rust source using `compilation-mode'."
+  "Compile tip-server from Rust source using `compilation-mode'.
+Builds the binary matching the active backend's `server-executable'
+field (defaulting to tip-server-typst)."
   (interactive)
   (unless (executable-find "cargo")
     (user-error "Rust toolchain not found. Install from https://rustup.rs"))
   (let* ((pkg-dir (tip--package-dir))
          (server-dir (expand-file-name "tip-server" pkg-dir))
-         (target (expand-file-name "target/release/tip-server-typst" server-dir)))
+         (bin (or (tip-server-executable-name) "tip-server-typst"))
+         (target (expand-file-name (concat "target/release/" bin) server-dir)))
     (unless (file-directory-p server-dir)
       (user-error "tip-server source not found at %s" server-dir))
     (let ((default-directory server-dir)

@@ -15,6 +15,7 @@
 
 (require 'treesit)
 (require 'cl-lib)
+(require 'tip-backend)
 
 ;; Forward declarations — these live in tip.el.  The `defvar' form here
 ;; just tells the byte-compiler they exist; it doesn't rebind them.
@@ -170,6 +171,42 @@ so it takes precedence over document-level #set text rules."
      (unless tip-transparent-bg
        (format "#set page(fill: rgb(\"%s\"))\n"
                (tip--color-to-hex (face-attribute 'default :background)))))))
+
+;;; * fragment classification
+
+(defun tip-typst-classify-fragment (text)
+  "Classify Typst fragment TEXT for display purposes.
+Returns one of:
+  `block'          — starts with `#' (e.g. `#figure(...)').
+  `display-single' — single-line display math (`$ ... $' no newline).
+  `display-multi'  — multi-line display math.
+  `inline'         — otherwise (`$...$')."
+  (cond
+   ((or (zerop (length text)) (eq (aref text 0) ?#))
+    (if (zerop (length text)) 'inline 'block))
+   ((and (>= (length text) 3)
+         (eq (aref text 0) ?$)
+         (memq (aref text 1) '(?\s ?\t))
+         (not (string-match-p "\n" (substring text 1 -1))))
+    'display-single)
+   ((and (>= (length text) 2)
+         (string-match-p "\n" (substring text 1 -1)))
+    'display-multi)
+   (t 'inline)))
+
+;;; * backend registration
+
+(defvar tip-server-executable)
+
+(tip-register-backend
+ (make-tip-backend
+  :name 'typst
+  :major-modes '(typst-ts-mode typst-mode)
+  :collect-fragments-fn #'tip-collect-fragment-locations
+  :bounds-at-point-fn #'tip--get-bounds-of-math-at-point
+  :build-preamble-fn #'tip--build-preamble
+  :classify-fragment-fn #'tip-typst-classify-fragment
+  :server-executable "tip-server-typst"))
 
 (provide 'tip-typst)
 

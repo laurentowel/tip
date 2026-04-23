@@ -26,6 +26,7 @@
 (require 'cl-lib)
 (require 'preview-toggle)
 (require 'tip-childframe)
+(require 'tip-backend)
 (require 'tip-server-proc)
 (require 'tip-render)
 (require 'tip-typst)
@@ -147,8 +148,8 @@ background color (and swapped on theme change)."
      (error "No region selected")))
   (let* ((buf (current-buffer))
          (fg (tip--color-to-hex (face-attribute 'default :foreground)))
-         (preamble (tip--build-preamble))
-         (frag-locs (tip-collect-fragment-locations beg end avoid-pos))
+         (preamble (tip-build-preamble))
+         (frag-locs (tip-collect-fragments beg end avoid-pos))
          (n (length frag-locs)))
     (when (> n 0)
       (tip--sync-buffer)
@@ -208,7 +209,7 @@ Works even when the overlay is open (display cleared)."
 Shows the synthetic Typst source that the server would compile,
 including all scope-defining statements visible at this position."
   (interactive)
-  (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+  (let ((bounds (tip-bounds-at-point (point))))
     (unless bounds
       (user-error "No math or figure fragment at point"))
     (let ((byte-start (1- (position-bytes (car bounds))))
@@ -257,10 +258,11 @@ Automatically renders visible fragments and enables live preview."
   (if tip-mode
       (progn
         (tip-ensure)
-        ;; Configure preview-toggle for Typst math
+        ;; Configure preview-toggle to route fragment lookup through the
+        ;; active backend.
         (setq-local preview-toggle-type 'tip)
         (setq-local preview-toggle-region-at-point-fn
-                    #'tip--get-bounds-of-math-at-point)
+                    #'tip-bounds-at-point)
         (setq-local preview-toggle-compile-region-fn
                     #'tip--compile-region)
         (preview-toggle-mode 1)
@@ -554,7 +556,7 @@ Called from `after-change-functions'."
 Like `org-edit-special' (C-c ').  Shows live preview while editing.
 \\[tip-edit-commit] saves back, \\[tip-edit-abort] cancels."
   (interactive)
-  (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+  (let ((bounds (tip-bounds-at-point (point))))
     (unless bounds
       (user-error "No math or figure at point"))
     (let* ((beg (car bounds))
@@ -626,7 +628,7 @@ Reuses the shared `tip-live--show-preview' / `tip-live--handle-result'."
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                           ("end" . ,byte-end))))
                ("color" . ,fg)
-               ("preamble" . ,(tip--build-preamble)))
+               ("preamble" . ,(tip-build-preamble)))
              (lambda (result)
                (tip-live--handle-result result)))))))))
 
