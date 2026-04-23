@@ -1,56 +1,31 @@
-//! Protocol handler for tip-server-latex.
+//! LaTeX backend for the unified `tip-server`.
 //!
-//! Receives the same JSON-RPC messages as tip-server-typst (see
-//! tip-protocol). Implements `sync`, `compile_fragments`, and
-//! `shutdown`. `init`, `compile_live`, and `debug_skeleton` are accepted
-//! with minimal/no-op implementations — they can grow as needed.
+//! Dispatched to from `handler.rs` when the incoming message's
+//! `backend` field is `Latex`.  Implements `sync`, `compile_fragments`,
+//! and `compile_live`; `debug_skeleton` is not meaningful for LaTeX.
 
 use std::path::Path;
 
 use tip_core_latex::{DocumentStore, LatexCompiler};
 use tip_protocol::messages::*;
 
-pub struct Handler {
+pub struct LatexBackend {
     documents: DocumentStore,
-    shutdown: bool,
 }
 
-impl Handler {
+impl LatexBackend {
     pub fn new() -> Self {
         Self {
             documents: DocumentStore::new(),
-            shutdown: false,
         }
     }
 
-    pub fn should_shutdown(&self) -> bool {
-        self.shutdown
-    }
-
-    pub fn handle(&mut self, msg: RequestMessage) -> ResponseMessage {
-        let id = msg.id;
-        let result = match msg.request {
-            Request::Init(_) => ResponseResult::Init { ok: true },
-            Request::Sync(params) => self.handle_sync(params),
-            Request::CompileFragments(params) => self.handle_compile_fragments(params),
-            Request::CompileLive(params) => self.handle_compile_live(params),
-            Request::DebugSkeleton(_) => ResponseResult::Error {
-                error: "debug_skeleton not implemented for LaTeX backend".into(),
-            },
-            Request::Shutdown => {
-                self.shutdown = true;
-                ResponseResult::Shutdown { ok: true }
-            }
-        };
-        ResponseMessage { id, result }
-    }
-
-    fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
+    pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
     }
 
-    fn handle_compile_fragments(&mut self, params: CompileFragmentsParams) -> ResponseResult {
+    pub fn handle_compile_fragments(&mut self, params: CompileFragmentsParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),
             None => {
@@ -146,9 +121,10 @@ impl Handler {
         }
     }
 
-    fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
+    pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
         // Map live → batch-of-one.
         let fragments_params = CompileFragmentsParams {
+            backend: BackendId::Latex,
             uri: params.uri,
             fragments: vec![FragmentLocation {
                 start: params.start,
@@ -305,34 +281,19 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_sets_flag() {
-        let mut h = Handler::new();
-        let resp = h.handle(RequestMessage {
-            id: 1,
-            request: Request::Shutdown,
-        });
-        assert_eq!(resp.result, ResponseResult::Shutdown { ok: true });
-        assert!(h.should_shutdown());
-    }
-
-    #[test]
     fn compile_without_sync_errors() {
-        let mut h = Handler::new();
-        let resp = h.handle(RequestMessage {
-            id: 1,
-            request: Request::CompileFragments(CompileFragmentsParams {
-                uri: "/missing.tex".into(),
-                fragments: vec![FragmentLocation { start: 0, end: 0 }],
-                color: "#000000".into(),
-                page_setup: None,
-                preamble: None,
-                display_math_width: None,
-            }),
+        let mut b = LatexBackend::new();
+        let resp = b.handle_compile_fragments(CompileFragmentsParams {
+            backend: BackendId::Latex,
+            uri: "/missing.tex".into(),
+            fragments: vec![FragmentLocation { start: 0, end: 0 }],
+            color: "#000000".into(),
+            page_setup: None,
+            preamble: None,
+            display_math_width: None,
         });
-        match resp.result {
-            ResponseResult::Error { error } => {
-                assert!(error.contains("not synced"));
-            }
+        match resp {
+            ResponseResult::Error { error } => assert!(error.contains("not synced")),
             other => panic!("expected error, got {:?}", other),
         }
     }

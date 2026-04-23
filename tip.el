@@ -565,6 +565,77 @@ Called from `after-change-functions'."
   (tip-clear-buffer))
 
 ;;;###autoload
+(defun tip-doctor ()
+  "Probe tip-server and external deps; print a diagnostic report.
+Useful both for interactive troubleshooting (\"is my setup OK?\") and
+as the body of a bug report — the report includes server version,
+OS/arch, backend statuses, dep paths and versions, plus any warnings.
+
+If no server is running, one is started for the probe.  The report
+appears in the `*tip-doctor*' buffer."
+  (interactive)
+  (tip--send-request
+   "health_check" nil
+   (lambda (result)
+     (tip--doctor-render result))))
+
+(defun tip--doctor-render (result)
+  "Format health-check RESULT into the `*tip-doctor*' buffer."
+  (let* ((report (alist-get "report" result nil nil #'equal))
+         (buf (get-buffer-create "*tip-doctor*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (tip--doctor-format report))
+      (goto-char (point-min))
+      (special-mode))
+    (display-buffer buf)))
+
+(defun tip--doctor-format (r)
+  "Insert a formatted report from the alist R."
+  (cl-labels
+      ((field (k)
+         (alist-get k r nil nil #'equal))
+       (sub (a k)
+         (alist-get k a nil nil #'equal))
+       (mark (ok)
+         (if ok "[ok]   " "[FAIL] "))
+       (dep (label probe)
+         (let* ((found (eq (sub probe "found") t))
+                (meets (not (eq (sub probe "meets_min_version") :json-false)))
+                (path (sub probe "path"))
+                (ver (sub probe "version")))
+           (insert (format "  %s%-12s" (mark (and found meets)) label))
+           (if found
+               (insert (format "%s\n               %s\n"
+                               (or ver "(version unknown)")
+                               (or path "")))
+             (insert "not found\n")))))
+    (insert "tip-server health check\n")
+    (insert "=======================\n\n")
+    (insert (format "server %s   target %s   %s/%s\n\n"
+                    (field "server_version")
+                    (field "target_triple")
+                    (field "os") (field "arch")))
+    (let ((tp (field "typst")))
+      (when tp
+        (insert (format "Typst backend\n  %stypst %s, %d fonts\n\n"
+                        (mark (eq (sub tp "ok") t))
+                        (sub tp "typst_version")
+                        (sub tp "fonts_found")))))
+    (let ((lx (field "latex")))
+      (when lx
+        (insert (format "LaTeX backend  %s\n" (mark (eq (sub lx "ok") t))))
+        (dep "latex"     (sub lx "latex"))
+        (dep "dvisvgm"   (sub lx "dvisvgm"))
+        (dep "preview.sty" (sub lx "preview_sty"))
+        (insert "\n")))
+    (let ((ws (field "warnings")))
+      (when (and ws (> (length ws) 0))
+        (insert "Warnings:\n")
+        (mapc (lambda (w) (insert (format "  - %s\n" w))) (append ws nil))))))
+
+;;;###autoload
 (defun tip-shutdown ()
   "Shut down the tip-server process."
   (interactive)

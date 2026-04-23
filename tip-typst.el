@@ -206,7 +206,7 @@ Returns one of:
   :bounds-at-point-fn #'tip--get-bounds-of-math-at-point
   :build-preamble-fn #'tip--build-preamble
   :classify-fragment-fn #'tip-typst-classify-fragment
-  :server-executable "tip-server-typst"))
+  :server-executable "tip-server"))
 
 (provide 'tip-typst)
 

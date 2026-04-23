@@ -91,6 +91,7 @@ mod tests {
         let request = RequestMessage {
             id: 42,
             request: Request::Sync(SyncParams {
+                backend: crate::messages::BackendId::Typst,
                 uri: "/test.typ".into(),
                 content: "$x^2$".into(),
             }),

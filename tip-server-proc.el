@@ -95,7 +95,7 @@ Uses `tip-server-executable-name' from the active backend; falls back
 to the Typst default when no backend is active (e.g. bare test buffers)."
   (when tip-use-docker
     (cl-return-from tip--find-server nil))
-  (let* ((name (or (tip-server-executable-name) "tip-server-typst"))
+  (let* ((name (or (tip-server-executable-name) "tip-server"))
          ;; When the backend resolved to an absolute path already, use it.
          (absolute (and name (file-name-absolute-p name) (file-executable-p name))))
     (or (and absolute name)
@@ -145,7 +145,7 @@ field (defaulting to tip-server-typst)."
     (user-error "Rust toolchain not found. Install from https://rustup.rs"))
   (let* ((pkg-dir (tip--package-dir))
          (server-dir (expand-file-name "tip-server" pkg-dir))
-         (bin (or (tip-server-executable-name) "tip-server-typst"))
+         (bin (or (tip-server-executable-name) "tip-server"))
          (target (expand-file-name (concat "target/release/" bin) server-dir)))
     (unless (file-directory-p server-dir)
       (user-error "tip-server source not found at %s" server-dir))
@@ -279,13 +279,33 @@ field (defaulting to tip-server-typst)."
 
 ;;; * request/response
 
+(defvar tip--backend-carrying-methods
+  '("sync" "compile_fragments" "compile_live" "debug_skeleton")
+  "Request methods that carry a `backend' field.
+`init', `health_check', and `shutdown' do not — they are backend-agnostic.")
+
+(defun tip--current-backend-id ()
+  "Return the current buffer's backend as a protocol id string.
+Derived from `tip-active-backend' (which is based on `major-mode').
+Returns \"typst\" if no backend is active (safe default — the server
+treats it as Typst per `BackendId::default')."
+  (let ((b (and (fboundp 'tip-active-backend) (tip-active-backend))))
+    (if b (symbol-name (tip-backend-name b)) "typst")))
+
 (defun tip--send-request (method params &optional callback)
   "Send a JSON-RPC request to tip-server.
 METHOD is the method name string.
-PARAMS is an alist of parameters.
+PARAMS is an alist of parameters.  For methods in
+`tip--backend-carrying-methods' a `backend' field is auto-injected
+from the current buffer's active backend so a single server process
+can serve multiple backends per Emacs session.
 CALLBACK is called with the result alist when response arrives."
   (tip-ensure)
   (let* ((id (tip--next-id))
+         (params (if (and (member method tip--backend-carrying-methods)
+                          (not (assoc "backend" params)))
+                     (cons `("backend" . ,(tip--current-backend-id)) params)
+                   params))
          (request `(("id" . ,id)
                     ("method" . ,method)
                     ("params" . ,params))))

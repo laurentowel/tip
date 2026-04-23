@@ -1,4 +1,7 @@
+mod diagnostics;
 mod handler;
+mod latex_backend;
+mod typst_backend;
 
 use std::io::{self, BufReader};
 

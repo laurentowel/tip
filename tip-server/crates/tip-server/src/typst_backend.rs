@@ -5,45 +5,26 @@ use tip_core_typst::document::DocumentStore;
 use tip_core_typst::world::TipWorld;
 use tip_protocol::messages::*;
 
-pub struct Handler {
+pub struct TypstBackend {
     documents: DocumentStore,
     world: TipWorld,
-    shutdown: bool,
 }
 
-impl Handler {
+impl TypstBackend {
     pub fn new() -> Self {
         Self {
             documents: DocumentStore::new(),
             world: TipWorld::new(),
-            shutdown: false,
         }
     }
 
-    pub fn should_shutdown(&self) -> bool {
-        self.shutdown
-    }
-
-    pub fn handle(&mut self, msg: RequestMessage) -> ResponseMessage {
-        let id = msg.id;
-        let result = match msg.request {
-            Request::Init(params) => self.handle_init(params),
-            Request::Sync(params) => self.handle_sync(params),
-            Request::CompileFragments(params) => self.handle_compile_fragments(params),
-            Request::CompileLive(params) => self.handle_compile_live(params),
-            Request::DebugSkeleton(params) => self.handle_debug_skeleton(params),
-            Request::Shutdown => self.handle_shutdown(),
-        };
-        ResponseMessage { id, result }
-    }
-
-    fn handle_init(&mut self, params: InitParams) -> ResponseResult {
+    pub fn handle_init(&mut self, params: InitParams) -> ResponseResult {
         let dirs: Vec<&str> = params.font_dirs.iter().map(|s| s.as_str()).collect();
         self.world = TipWorld::with_font_dirs(&dirs);
         ResponseResult::Init { ok: true }
     }
 
-    fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
+    pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
         // Set project root by walking up from the file to find a project marker
         if let Some(parent) = Path::new(&params.uri).parent() {
             let root = Self::find_project_root(parent).unwrap_or_else(|| parent.to_path_buf());
@@ -73,7 +54,7 @@ impl Handler {
         }
     }
 
-    fn handle_compile_fragments(&mut self, params: CompileFragmentsParams) -> ResponseResult {
+    pub fn handle_compile_fragments(&mut self, params: CompileFragmentsParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),
             None => {
@@ -141,7 +122,7 @@ impl Handler {
         ResponseResult::Fragments { fragments: results }
     }
 
-    fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
+    pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),
             None => {
@@ -177,7 +158,7 @@ impl Handler {
         }
     }
 
-    fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
+    pub fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),
             None => return ResponseResult::Error {
@@ -190,9 +171,10 @@ impl Handler {
         }
     }
 
-    fn handle_shutdown(&mut self) -> ResponseResult {
-        self.shutdown = true;
-        ResponseResult::Shutdown { ok: true }
+    /// Fonts discovered by the underlying `TipWorld`.  Used by the
+    /// `health_check` handler.
+    pub fn fonts_found(&self) -> usize {
+        self.world.font_count()
     }
 }
 
@@ -200,47 +182,42 @@ impl Handler {
 mod tests {
     use super::*;
 
-    fn make_handler() -> Handler {
-        Handler::new()
+    fn sync_params(uri: &str, content: &str) -> SyncParams {
+        SyncParams {
+            backend: BackendId::Typst,
+            uri: uri.into(),
+            content: content.into(),
+        }
+    }
+
+    fn fragments_params(uri: &str, fragments: Vec<FragmentLocation>) -> CompileFragmentsParams {
+        CompileFragmentsParams {
+            backend: BackendId::Typst,
+            uri: uri.into(),
+            fragments,
+            color: "#000000".into(),
+            page_setup: None,
+            preamble: None,
+            display_math_width: None,
+        }
     }
 
     #[test]
     fn init_returns_ok() {
-        let mut h = make_handler();
-        let resp = h.handle(RequestMessage {
-            id: 1,
-            request: Request::Init(InitParams {
-                font_dirs: vec![],
-            }),
-        });
-        assert_eq!(resp.result, ResponseResult::Init { ok: true });
+        let mut b = TypstBackend::new();
+        let resp = b.handle_init(InitParams { font_dirs: vec![] });
+        assert_eq!(resp, ResponseResult::Init { ok: true });
     }
 
     #[test]
     fn sync_then_compile_returns_svg() {
-        let mut h = make_handler();
-
-        h.handle(RequestMessage {
-            id: 1,
-            request: Request::Sync(SyncParams {
-                uri: "/test.typ".into(),
-                content: "$a + b$".into(),
-            }),
-        });
-
-        let resp = h.handle(RequestMessage {
-            id: 2,
-            request: Request::CompileFragments(CompileFragmentsParams {
-                uri: "/test.typ".into(),
-                fragments: vec![FragmentLocation { start: 0, end: 7 }],
-                color: "#000000".into(),
-                page_setup: None,
-                preamble: None,
-                display_math_width: None,
-            }),
-        });
-        assert_eq!(resp.id, 2);
-        match &resp.result {
+        let mut b = TypstBackend::new();
+        b.handle_sync(sync_params("/test.typ", "$a + b$"));
+        let resp = b.handle_compile_fragments(fragments_params(
+            "/test.typ",
+            vec![FragmentLocation { start: 0, end: 7 }],
+        ));
+        match resp {
             ResponseResult::Fragments { fragments } => {
                 assert_eq!(fragments.len(), 1);
                 assert!(fragments[0].svg.contains("<svg"));
@@ -252,67 +229,33 @@ mod tests {
 
     #[test]
     fn compile_without_sync_errors() {
-        let mut h = make_handler();
-        let resp = h.handle(RequestMessage {
-            id: 1,
-            request: Request::CompileFragments(CompileFragmentsParams {
-                uri: "/missing.typ".into(),
-                fragments: vec![],
-                color: "#000000".into(),
-                page_setup: None,
-                preamble: None,
-            display_math_width: None,
-            }),
-        });
-        match resp.result {
-            ResponseResult::Error { error } => {
-                assert!(error.contains("not synced"));
-            }
+        let mut b = TypstBackend::new();
+        let resp = b.handle_compile_fragments(fragments_params("/missing.typ", vec![]));
+        match resp {
+            ResponseResult::Error { error } => assert!(error.contains("not synced")),
             other => panic!("expected error, got {:?}", other),
         }
     }
 
     #[test]
     fn compile_live_returns_svg() {
-        let mut h = make_handler();
-
-        h.handle(RequestMessage {
-            id: 1,
-            request: Request::Sync(SyncParams {
-                uri: "/test.typ".into(),
-                content: "$x^2$".into(),
-            }),
+        let mut b = TypstBackend::new();
+        b.handle_sync(sync_params("/test.typ", "$x^2$"));
+        let resp = b.handle_compile_live(CompileLiveParams {
+            backend: BackendId::Typst,
+            uri: "/test.typ".into(),
+            start: 0,
+            end: 5,
+            color: "#000000".into(),
+            page_setup: None,
+            preamble: None,
         });
-
-        let resp = h.handle(RequestMessage {
-            id: 2,
-            request: Request::CompileLive(CompileLiveParams {
-                uri: "/test.typ".into(),
-                start: 0,
-                end: 5,
-                color: "#000000".into(),
-                page_setup: None,
-                preamble: None,
-            }),
-        });
-        match &resp.result {
+        match resp {
             ResponseResult::Live { fragment } => {
                 assert!(fragment.svg.contains("<svg"));
                 assert!(fragment.height_pt > 0.0);
             }
-            other => panic!("expected live result, got {:?}", other),
+            other => panic!("expected live, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn shutdown_sets_flag() {
-        let mut h = make_handler();
-        assert!(!h.should_shutdown());
-        let resp = h.handle(RequestMessage {
-            id: 1,
-            request: Request::Shutdown,
-        });
-        assert_eq!(resp.result, ResponseResult::Shutdown { ok: true });
-        assert!(h.should_shutdown());
     }
 }

@@ -9,7 +9,7 @@ fn bin_path() -> String {
         .parent()
         .unwrap()
         .to_path_buf();
-    path.push("tip-server-typst");
+    path.push("tip-server");
     path.to_str().unwrap().to_string()
 }
 
@@ -19,7 +19,7 @@ fn sync_and_shutdown() {
 
     let resp = server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams {
+        request: Request::Sync(SyncParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             content: "$a + b$".into(),
         }),
@@ -37,7 +37,7 @@ fn compile_without_sync_returns_error() {
 
     let resp = server.request(&RequestMessage {
         id: 1,
-        request: Request::CompileFragments(CompileFragmentsParams {
+        request: Request::CompileFragments(CompileFragmentsParams { backend: BackendId::Typst,
             uri: "/missing.typ".into(),
             fragments: vec![],
             color: "#000000".into(),
@@ -62,7 +62,7 @@ fn compile_fragment_returns_svg() {
 
     server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams {
+        request: Request::Sync(SyncParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             content: "$a + b$".into(),
         }),
@@ -70,7 +70,7 @@ fn compile_fragment_returns_svg() {
 
     let resp = server.request(&RequestMessage {
         id: 2,
-        request: Request::CompileFragments(CompileFragmentsParams {
+        request: Request::CompileFragments(CompileFragmentsParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             fragments: vec![FragmentLocation { start: 0, end: 7 }],
             color: "#000000".into(),
@@ -98,7 +98,7 @@ fn compile_live_returns_svg() {
 
     server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams {
+        request: Request::Sync(SyncParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             content: "$x^2$".into(),
         }),
@@ -106,7 +106,7 @@ fn compile_live_returns_svg() {
 
     let resp = server.request(&RequestMessage {
         id: 2,
-        request: Request::CompileLive(CompileLiveParams {
+        request: Request::CompileLive(CompileLiveParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             start: 0,
             end: 5,
@@ -133,7 +133,7 @@ fn multiple_fragments_in_one_batch() {
     let content = "some text $a+b$ more text $x^2$ end";
     server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams {
+        request: Request::Sync(SyncParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             content: content.into(),
         }),
@@ -147,7 +147,7 @@ fn multiple_fragments_in_one_batch() {
 
     let resp = server.request(&RequestMessage {
         id: 2,
-        request: Request::CompileFragments(CompileFragmentsParams {
+        request: Request::CompileFragments(CompileFragmentsParams { backend: BackendId::Typst,
             uri: "/test.typ".into(),
             fragments: vec![
                 FragmentLocation {

@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+/// Which backend handles a request.  The client picks this from its
+/// buffer's active backend (derived from `major-mode`), not from the
+/// URI extension — buffers may have nonstandard extensions or no file
+/// at all.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendId {
+    Typst,
+    Latex,
+}
+
+impl Default for BackendId {
+    fn default() -> Self {
+        BackendId::Typst
+    }
+}
+
 /// A fragment location in the source buffer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentLocation {
@@ -82,6 +99,8 @@ pub enum Request {
     CompileLive(CompileLiveParams),
     #[serde(rename = "debug_skeleton")]
     DebugSkeleton(DebugSkeletonParams),
+    #[serde(rename = "health_check")]
+    HealthCheck,
     #[serde(rename = "shutdown")]
     Shutdown,
 }
@@ -94,6 +113,8 @@ pub struct InitParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DebugSkeletonParams {
+    #[serde(default)]
+    pub backend: BackendId,
     pub uri: String,
     pub start: usize,
     pub end: usize,
@@ -101,12 +122,16 @@ pub struct DebugSkeletonParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SyncParams {
+    #[serde(default)]
+    pub backend: BackendId,
     pub uri: String,
     pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompileFragmentsParams {
+    #[serde(default)]
+    pub backend: BackendId,
     pub uri: String,
     pub fragments: Vec<FragmentLocation>,
     pub color: String,
@@ -132,6 +157,8 @@ pub struct CompileFragmentsParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompileLiveParams {
+    #[serde(default)]
+    pub backend: BackendId,
     pub uri: String,
     pub start: usize,
     pub end: usize,
@@ -170,8 +197,67 @@ pub enum ResponseResult {
     Shutdown { ok: bool },
     #[serde(rename = "debug_skeleton")]
     DebugSkeleton { source: String },
+    #[serde(rename = "health")]
+    Health { report: HealthReport },
     #[serde(rename = "error")]
     Error { error: String },
+}
+
+/// Diagnostic snapshot of the server and its optional external
+/// dependencies.  Returned by `health_check`.  Also used as the body
+/// of a bug report (server version + OS + dep versions + warnings is
+/// exactly what we'd want a user to paste into a Github issue).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HealthReport {
+    /// tip-server crate version (set at compile time from CARGO_PKG_VERSION).
+    pub server_version: String,
+    /// Target triple the binary was built for.
+    pub target_triple: String,
+    /// OS as reported by `std::env::consts::OS`.
+    pub os: String,
+    /// CPU arch as reported by `std::env::consts::ARCH`.
+    pub arch: String,
+    /// Per-backend probe results.  A backend is only probed if its
+    /// core can run at all; missing keys mean "not compiled in".
+    pub typst: Option<TypstHealth>,
+    pub latex: Option<LatexHealth>,
+    /// Non-fatal warnings (e.g. "dvisvgm 2.8 detected; 2.14+ recommended").
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TypstHealth {
+    pub ok: bool,
+    pub typst_version: String,
+    /// Number of fonts discovered by the FontSearcher.
+    pub fonts_found: usize,
+}
+
+/// A probed external binary (path + version string + ok-flag).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BinaryProbe {
+    pub found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// For binaries with a minimum-version requirement: whether the
+    /// found version meets it.  `true` if no minimum applies.
+    pub meets_min_version: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LatexHealth {
+    /// Overall: all mandatory deps found and meet version floors.
+    pub ok: bool,
+    /// `latex` command (pdflatex/xelatex/lualatex probed separately
+    /// in the future if we add an engine picker).
+    pub latex: BinaryProbe,
+    /// `dvisvgm`; we require >= 2.14 for stable `--bbox=preview`.
+    pub dvisvgm: BinaryProbe,
+    /// `preview.sty`; probed via `kpsewhich preview.sty`.
+    pub preview_sty: BinaryProbe,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -212,6 +298,7 @@ mod tests {
         let msg = RequestMessage {
             id: 1,
             request: Request::Sync(SyncParams {
+                backend: BackendId::Typst,
                 uri: "/tmp/test.typ".into(),
                 content: "$a + b$".into(),
             }),
@@ -226,12 +313,13 @@ mod tests {
         let msg = RequestMessage {
             id: 2,
             request: Request::CompileFragments(CompileFragmentsParams {
+                backend: BackendId::Typst,
                 uri: "/tmp/test.typ".into(),
                 fragments: vec![FragmentLocation { start: 10, end: 20 }],
                 color: "#ffffff".into(),
                 page_setup: None,
                 preamble: None,
-            display_math_width: None,
+                display_math_width: None,
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -281,6 +369,7 @@ mod tests {
         assert_eq!(
             msg.request,
             Request::Sync(SyncParams {
+                backend: BackendId::Typst,
                 uri: "/test.typ".into(),
                 content: "hello".into(),
             })

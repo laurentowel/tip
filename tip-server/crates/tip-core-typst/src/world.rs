@@ -91,6 +91,12 @@ impl TipWorld {
         self.main
     }
 
+    /// How many fonts the FontSearcher discovered.  Used by the
+    /// server's `health_check` handler for diagnostic reporting.
+    pub fn font_count(&self) -> usize {
+        self.fonts.len()
+    }
+
     /// Reset compilation state (evict stale memoization entries).
     pub fn reset(&mut self) {
         comemo::evict(10);
@@ -174,7 +180,7 @@ impl TipWorldBuilder {
 
         let main = FileId::new_fake(VirtualPath::new("tip-main.typ"));
 
-        let downloader = Downloader::new("tip-server-typst/0.1.0");
+        let downloader = Downloader::new("tip-server/0.1.0");
         let packages = PackageStorage::new(None, None, downloader);
 
         TipWorld {

@@ -11,5 +11,5 @@ COPY testkit/ testkit/
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
 FROM scratch
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/tip-server-typst /tip-server-typst
-ENTRYPOINT ["/tip-server-typst"]
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/tip-server /tip-server
+ENTRYPOINT ["/tip-server"]
