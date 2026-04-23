@@ -379,6 +379,22 @@ the backend — collect returns nil, bounds-at-point returns nil."
       (search-forward "$x$")
       (should (null (tip-latex-bounds-at-point (1- (point))))))))
 
+(ert-deftest tip-latex-test-skip-blank-fragments ()
+  "Whitespace-only math (`$ $', `\\[ \\]', empty env) must not produce fragments."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "Real $a$\nblank1 $ $\nblank2 \\[  \\]\n"
+            "blank3 \\(  \\)\n"
+            "blank4 \\begin{equation}  \\end{equation}\nreal2 $b$\n")
+    (let ((texts (mapcar
+                  (lambda (frag)
+                    (let ((sb (1+ (alist-get "start" frag nil nil #'equal)))
+                          (eb (1+ (alist-get "end"   frag nil nil #'equal))))
+                      (buffer-substring-no-properties
+                       (byte-to-position sb) (byte-to-position eb))))
+                  (tip-latex-collect-fragments (point-min) (point-max)))))
+      (should (equal texts '("$a$" "$b$"))))))
+
 (ert-deftest tip-latex-test-commented-include-allowed ()
   "A \\input inside a comment must NOT disable previewing."
   (with-temp-buffer

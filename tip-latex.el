@@ -176,6 +176,31 @@ really a math opener (e.g. \\$ escape)."
       (match-beginning 4)
       (match-beginning 5)))
 
+;;; * blank-content guard
+
+(defun tip-latex--fragment-blank-p (kind start fend)
+  "Return non-nil if the fragment at START..FEND of the given KIND has
+only whitespace between its delimiters.  Used to skip empty math like
+`$ $', `\\[ \\]', `\\(  \\)', `\\begin{equation}  \\end{equation}'."
+  (let ((inner-beg
+         (cond
+          ((eq kind 'dollar1) (1+ start))
+          ((eq kind 'dollar2) (+ start 2))
+          ((memq kind '(bracket paren)) (+ start 2))
+          ((and (consp kind) (eq (car kind) 'env))
+           (+ start 1 (length "\\begin{") (length (cdr kind)) 1))
+          (t start)))
+        (inner-end
+         (cond
+          ((eq kind 'dollar1) (1- fend))
+          ((eq kind 'dollar2) (- fend 2))
+          ((memq kind '(bracket paren)) (- fend 2))
+          ((and (consp kind) (eq (car kind) 'env))
+           (- fend 1 (length "\\end{") (length (cdr kind)) 1))
+          (t fend))))
+    (and (<= inner-beg inner-end)
+         (string-blank-p (buffer-substring-no-properties inner-beg inner-end)))))
+
 ;;; * outermost filter
 
 (defun tip-latex--outermost (ranges)
@@ -227,18 +252,19 @@ Returns nil (and emits a one-time warning) when the buffer contains
                      (save-excursion (not (nth 4 (syntax-ppss start))))
                      (not (tip-latex--in-ranges-p start verbatim)))
             (let ((fend (tip-latex--find-close kind start)))
-              (when (and fend
-                         (or (null avoid-pos)
-                             (not (and (>= avoid-pos start)
-                                       (<= avoid-pos fend)))))
-                (push (cons start fend) ranges)
-                ;; Resume past the close so we don't match inside it.
-                ;; If the close is past our scan bound, stop the loop
-                ;; — otherwise the next re-search-forward signals
-                ;; "Invalid search bound (wrong side of point)".
-                (if (>= fend end)
-                    (goto-char end)
-                  (goto-char fend))))))))
+              (when fend
+                (let ((blank (tip-latex--fragment-blank-p kind start fend))
+                      (within-avoid (and avoid-pos
+                                         (>= avoid-pos start)
+                                         (<= avoid-pos fend))))
+                  (unless (or blank within-avoid)
+                    (push (cons start fend) ranges))
+                  ;; Always advance past the close, even for skipped blanks
+                  ;; — otherwise the next re-search-forward may re-match
+                  ;; the blank fragment's closer and produce garbage.
+                  (if (>= fend end)
+                      (goto-char end)
+                    (goto-char fend)))))))))
     (let ((outer (tip-latex--outermost (nreverse ranges))))
       (mapcar (lambda (pair)
                 `(("start" . ,(1- (position-bytes (car pair))))
