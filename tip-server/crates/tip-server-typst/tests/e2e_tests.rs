@@ -9,7 +9,7 @@ fn bin_path() -> String {
         .parent()
         .unwrap()
         .to_path_buf();
-    path.push("tip-server");
+    path.push("tip-server-typst");
     path.to_str().unwrap().to_string()
 }
 

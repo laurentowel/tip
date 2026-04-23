@@ -6,7 +6,7 @@
 
 (let ((base (file-name-directory load-file-name)))
   (find-file (expand-file-name
-              "../tip-server/crates/tip-core/tests/fixtures/diagrams.typ" base)))
+              "../tip-server/crates/tip-core-typst/tests/fixtures/diagrams.typ" base)))
 (typst-ts-mode)
 (sleep-for 0.5)
 

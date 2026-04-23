@@ -1,5 +1,5 @@
-use tip_core::compiler::FragmentCompiler;
-use tip_core::world::TipWorld;
+use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::world::TipWorld;
 
 #[test]
 fn dump_frame_structures() {

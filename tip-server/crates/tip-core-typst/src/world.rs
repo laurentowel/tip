@@ -174,7 +174,7 @@ impl TipWorldBuilder {
 
         let main = FileId::new_fake(VirtualPath::new("tip-main.typ"));
 
-        let downloader = Downloader::new("tip-server/0.1.0");
+        let downloader = Downloader::new("tip-server-typst/0.1.0");
         let packages = PackageStorage::new(None, None, downloader);
 
         TipWorld {

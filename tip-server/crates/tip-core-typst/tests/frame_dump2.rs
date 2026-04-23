@@ -1,6 +1,6 @@
 use typst::compile;
 use typst::layout::{PagedDocument, Frame, FrameItem};
-use tip_core::world::TipWorld;
+use tip_core_typst::world::TipWorld;
 
 fn dump(frame: &Frame, depth: usize, y_offset: f64) {
     let indent = " ".repeat(depth * 2);

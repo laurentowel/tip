@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/tip-core",
+    "crates/tip-core-typst",
     "crates/tip-protocol",
-    "crates/tip-server",
+    "crates/tip-server-typst",
     "testkit",
 ]
 

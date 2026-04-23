@@ -1,5 +1,5 @@
-use tip_core::compiler::FragmentCompiler;
-use tip_core::world::TipWorld;
+use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::world::TipWorld;
 
 fn fixtures_dir() -> String {
     format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"))
@@ -7,7 +7,7 @@ fn fixtures_dir() -> String {
 
 fn write_svg(name: &str, svg: &str) {
     let path = format!("{}/test-output/{}.svg",
-        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core", ""), name);
+        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core-typst", ""), name);
     std::fs::write(&path, svg).unwrap();
     eprintln!("wrote {path}");
 }

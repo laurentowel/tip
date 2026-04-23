@@ -1,10 +1,10 @@
-use tip_core::compiler::FragmentCompiler;
-use tip_core::world::TipWorld;
+use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
     let path = format!(
         "{}/test-output/{}.svg",
-        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core", ""),
+        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core-typst", ""),
         name
     );
     std::fs::write(&path, svg).expect("write SVG");
@@ -63,7 +63,7 @@ fn visual_scope_nested_blocks() {
 fn visual_scope_show_rule() {
     let font_dir = format!(
         "{}/ref/Pennstander-ref/fonts/otf",
-        env!("CARGO_MANIFEST_DIR").replace("/tip-server/crates/tip-core", ""),
+        env!("CARGO_MANIFEST_DIR").replace("/tip-server/crates/tip-core-typst", ""),
     );
     let mut world = TipWorld::with_font_dirs(&[font_dir.as_str()]);
     let doc = "#show math.equation: set text(font: \"Pennstander Math\")\n$a + b = c$";

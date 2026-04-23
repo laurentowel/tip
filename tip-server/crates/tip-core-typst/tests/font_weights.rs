@@ -1,10 +1,10 @@
-use tip_core::compiler::FragmentCompiler;
-use tip_core::world::TipWorld;
+use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
     let path = format!(
         "{}/test-output/{}.svg",
-        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core", ""),
+        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core-typst", ""),
         name
     );
     std::fs::write(&path, svg).expect("write SVG");
@@ -14,7 +14,7 @@ fn write_svg(name: &str, svg: &str) {
 fn font_dir() -> String {
     format!(
         "{}/ref/Pennstander-ref/fonts/otf",
-        env!("CARGO_MANIFEST_DIR").replace("/tip-server/crates/tip-core", ""),
+        env!("CARGO_MANIFEST_DIR").replace("/tip-server/crates/tip-core-typst", ""),
     )
 }
 

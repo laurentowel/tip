@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use tip_core::compiler::FragmentCompiler;
-use tip_core::document::DocumentStore;
-use tip_core::world::TipWorld;
+use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::document::DocumentStore;
+use tip_core_typst::world::TipWorld;
 use tip_protocol::messages::*;
 
 pub struct Handler {

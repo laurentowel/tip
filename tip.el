@@ -64,7 +64,7 @@ If nil, auto-detected from PATH, local build, or user prompted."
   :type 'boolean
   :group 'tip)
 
-(defcustom tip-docker-image "tip-server:latest"
+(defcustom tip-docker-image "tip-server-typst:latest"
   "Docker image name for tip-server."
   :type 'string
   :group 'tip)
@@ -205,15 +205,15 @@ Returns the path, or nil if Docker mode (handled separately)."
   (when tip-use-docker
     (cl-return-from tip--find-server nil))
   (or tip-server-executable
-      (executable-find "tip-server")
+      (executable-find "tip-server-typst")
       ;; Check local build beside tip.el
       (let ((local (expand-file-name
-                    "tip-server/target/release/tip-server"
+                    "tip-server/target/release/tip-server-typst"
                     (tip--package-dir))))
         (when (file-executable-p local) local))
       ;; Check in elpaca build dir (source repo)
       (let ((elpaca-src (expand-file-name
-                         "tip-server/target/release/tip-server"
+                         "tip-server/target/release/tip-server-typst"
                          (file-name-directory
                           (or (locate-library "tip") "")))))
         (when (file-executable-p elpaca-src) elpaca-src))

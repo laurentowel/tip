@@ -79,7 +79,7 @@
   "Should spawn tip-server, communicate, and shut down cleanly."
   (let* ((tip-server-executable
           (expand-file-name
-           "tip-server/target/debug/tip-server"
+           "tip-server/target/debug/tip-server-typst"
            (file-name-directory load-file-name)))
          (tip-use-docker nil)
          (tip--server-process nil)

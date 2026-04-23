@@ -1,10 +1,10 @@
 [package]
-name = "tip-server"
+name = "tip-server-typst"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tip-core = { path = "../tip-core" }
+tip-core-typst = { path = "../tip-core-typst" }
 tip-protocol = { path = "../tip-protocol" }
 serde_json = "1"
 openssl = { workspace = true }

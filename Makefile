@@ -2,7 +2,7 @@
 
 CARGO ?= cargo
 DOCKER ?= docker
-DOCKER_IMAGE ?= tip-server:latest
+DOCKER_IMAGE ?= tip-server-typst:latest
 
 server:
 	cd tip-server && $(CARGO) build --release
