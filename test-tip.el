@@ -92,7 +92,7 @@
   "Should spawn tip-server, communicate, and shut down cleanly."
   (let* ((tip-server-executable
           (expand-file-name
-           "tip-server/target/debug/tip-server-typst"
+           "tip-server/target/debug/tip-server"
            (file-name-directory load-file-name)))
          (tip-use-docker nil)
          (tip--server-process nil)
@@ -725,6 +725,49 @@ should keep the whole expression as one fragment."
       (should (string-prefix-p "$$" (car texts)))
       (should (string-suffix-p "$$" (car texts))))))
 
+(ert-deftest tip-latex-test-nested-paren-in-text ()
+  "`\\(x\\)' nested inside `\\text{}' inside an outer `\\(...\\)'.
+Compilable LaTeX; must collect as ONE whole fragment, not close at
+the inner `\\)'."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "pre \\(a + \\text{\\(x + 1\\)} + b\\) post\n")
+    (let ((texts (mapcar (lambda (f)
+                           (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                                 (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                             (buffer-substring-no-properties
+                              (byte-to-position sb) (byte-to-position eb))))
+                         (tip-latex-collect-fragments (point-min) (point-max)))))
+      (should (equal texts '("\\(a + \\text{\\(x + 1\\)} + b\\)"))))))
+
+(ert-deftest tip-latex-test-comment-skip-in-closer ()
+  "A `%'-comment inside a math fragment can contain a fake closer
+(e.g. `\\)' or `\\end{equation}') and must be skipped by the closer
+scanner, not mistaken for the real end."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "pre \\(a % fake \\) close\n + b\\) post\n")
+    (let ((texts (mapcar (lambda (f)
+                           (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                                 (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                             (buffer-substring-no-properties
+                              (byte-to-position sb) (byte-to-position eb))))
+                         (tip-latex-collect-fragments (point-min) (point-max)))))
+      (should (= 1 (length texts)))
+      (should (string-suffix-p "+ b\\)" (car texts))))))
+
+(ert-deftest tip-latex-test-env-with-inner-aligned ()
+  "`\\begin{aligned}...\\end{aligned}' nested inside `\\[...\\]' or
+`\\begin{equation}...\\end{equation}' is a compilable LaTeX pattern.
+`aligned' is NOT a top-level math opener, so the detector must not
+split it out — one outer fragment, inner aligned stays inside."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "\\[\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n\\]\n")
+    (insert "\\begin{equation}\n\\begin{aligned} x &= y \\end{aligned}\n\\end{equation}\n")
+    (let ((frags (tip-latex-collect-fragments (point-min) (point-max))))
+      (should (= 2 (length frags))))))
+
 (ert-deftest tip-latex-test-regression-subrange-midfragment ()
   "When collect-fragments is called with a range that starts INSIDE
 an existing `$...$' fragment, the first `$' seen must NOT be treated
@@ -778,7 +821,7 @@ a position before the most recent match-end."
     (should (memq 'LaTeX-mode (tip-backend-major-modes b)))
     (should (eq (tip-backend-collect-fragments-fn b)
                 #'tip-latex-collect-fragments))
-    (should (equal (tip-backend-server-executable b) "tip-server-latex"))))
+    (should (equal (tip-backend-server-executable b) "tip-server"))))
 
 ;;; Run tests
 

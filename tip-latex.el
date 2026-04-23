@@ -119,67 +119,80 @@ between BEG and END."
 
 ;;; * finding fragment ends
 
-(defun tip-latex--find-close-dollar (start double-p)
-  "Find the closing `$' (or `$$' when DOUBLE-P) for a fragment at START.
-Scans forward from past the opener while tracking brace depth;
-skips any `$' that sits inside `{...}' (so `\\text{$a$}' does NOT
-close an outer `$...$').  Honors `\\'-escaping and line comments.
-Returns the position AFTER the closing delimiter, or nil."
+(defun tip-latex--scan-for-closer (from check-fn)
+  "Walk forward from FROM, honoring `\\'-escapes, `%'-comments, and
+`{...}' brace nesting.  At each position where brace depth is zero and
+we're not inside an escape/comment, call CHECK-FN with point at the
+candidate.  If CHECK-FN returns a position, that is the result; else
+scanning continues.  Returns nil if end-of-buffer is reached."
   (save-excursion
-    (goto-char (+ start (if double-p 2 1)))
+    (goto-char from)
     (let ((depth 0) found)
       (while (and (not found) (< (point) (point-max)))
-        (let ((c (char-after)))
-          (cond
-           ;; Escape: consume next char unconditionally.
-           ((eq c ?\\)
-            (forward-char 2))
-           ;; Line comment: skip to end of line.
-           ((eq c ?%)
-            (end-of-line)
-            (unless (eobp) (forward-char)))
-           ((eq c ?{)
-            (cl-incf depth) (forward-char))
-           ((eq c ?})
-            (cl-decf depth) (forward-char))
-           ((and (eq c ?$) (zerop depth))
-            (let ((p (point)))
+        ;; At brace depth 0, give CHECK-FN first crack — so closers like
+        ;; `\)' or `\]' aren't swallowed by the escape branch below.
+        (let ((r (and (zerop depth) (funcall check-fn))))
+          (if r
+              (setq found r)
+            (let ((c (char-after)))
               (cond
-               ;; $$ close for dollar2.
-               ((and double-p (eq (char-after (1+ p)) ?$))
-                (setq found (+ p 2)))
-               ;; $ close for dollar1 (but not a $$ pair).
-               ((and (not double-p) (not (eq (char-after (1+ p)) ?$)))
-                (setq found (1+ p)))
-               (t (forward-char)))))
-           (t (forward-char)))))
+               ((eq c ?\\)
+                (forward-char (if (< (1+ (point)) (point-max)) 2 1)))
+               ((eq c ?%)
+                (end-of-line)
+                (unless (eobp) (forward-char)))
+               ((eq c ?{)
+                (cl-incf depth) (forward-char))
+               ((eq c ?})
+                (cl-decf depth) (forward-char))
+               (t (forward-char)))))))
       found)))
+
+(defun tip-latex--find-close-dollar (start double-p)
+  "Find the closing `$' (or `$$' when DOUBLE-P) for a fragment at START.
+Returns the position AFTER the closing delimiter, or nil."
+  (tip-latex--scan-for-closer
+   (+ start (if double-p 2 1))
+   (lambda ()
+     (when (eq (char-after) ?$)
+       (let ((p (point)))
+         (cond
+          ((and double-p (eq (char-after (1+ p)) ?$)) (+ p 2))
+          ((and (not double-p) (not (eq (char-after (1+ p)) ?$))) (1+ p))))))))
 
 (defun tip-latex--find-close (opener-kind start)
   "Find the end of a fragment starting at START with given OPENER-KIND.
 OPENER-KIND is one of the symbols `bracket' (\\[), `paren' (\\(),
 `dollar2' ($$), `dollar1' (single $), or `env:NAME' (cons cell).
-Returns end position (after the closer) or nil if unterminated."
-  (save-excursion
-    (cond
-     ((eq opener-kind 'bracket)
-      (goto-char start)
-      (when (search-forward "\\]" nil t)
-        (point)))
-     ((eq opener-kind 'paren)
-      (goto-char start)
-      (when (search-forward "\\)" nil t)
-        (point)))
-     ((eq opener-kind 'dollar2)
-      (tip-latex--find-close-dollar start t))
-     ((eq opener-kind 'dollar1)
-      (tip-latex--find-close-dollar start nil))
-     ((and (consp opener-kind) (eq (car opener-kind) 'env))
-      (goto-char start)
-      (when (re-search-forward
-             (concat "\\\\end{" (regexp-quote (cdr opener-kind)) "}")
-             nil t)
-        (match-end 0))))))
+Returns end position (after the closer) or nil if unterminated.
+Honors `\\'-escapes, `%'-comments, and skips inside `{...}' groups."
+  (cond
+   ((eq opener-kind 'bracket)
+    (tip-latex--scan-for-closer
+     (+ start 2)
+     (lambda ()
+       (when (and (eq (char-after) ?\\) (eq (char-after (1+ (point))) ?\]))
+         (+ (point) 2)))))
+   ((eq opener-kind 'paren)
+    (tip-latex--scan-for-closer
+     (+ start 2)
+     (lambda ()
+       (when (and (eq (char-after) ?\\) (eq (char-after (1+ (point))) ?\)))
+         (+ (point) 2)))))
+   ((eq opener-kind 'dollar2)
+    (tip-latex--find-close-dollar start t))
+   ((eq opener-kind 'dollar1)
+    (tip-latex--find-close-dollar start nil))
+   ((and (consp opener-kind) (eq (car opener-kind) 'env))
+    (let ((end-re (concat "\\\\end{" (regexp-quote (cdr opener-kind)) "}")))
+      (tip-latex--scan-for-closer
+       (save-excursion (goto-char start)
+                       (if (re-search-forward "\\\\begin{[^}]+}" nil t)
+                           (match-end 0)
+                         (point-max)))
+       (lambda ()
+         (when (looking-at end-re)
+           (match-end 0))))))))
 
 (defun tip-latex--opener-kind-at-match ()
   "Classify the current match (produced by `tip-latex--math-begin-re')
@@ -429,7 +442,7 @@ LaTeX has no `block' analogue in v1."
   :bounds-at-point-fn #'tip-latex-bounds-at-point
   :build-preamble-fn #'tip-latex-build-preamble
   :classify-fragment-fn #'tip-latex-classify-fragment
-  :server-executable "tip-server-latex"))
+  :server-executable "tip-server"))
 
 (provide 'tip-latex)
 
