@@ -259,6 +259,119 @@ a figure returns nil (nothing renderable there)."
       (search-forward "node")
       (should (null (tip--get-bounds-of-math-at-point (point)))))))
 
+;;; * LaTeX backend (tip-latex.el)
+
+(defun tip-latex-test--frag-texts (beg end)
+  (mapcar (lambda (frag)
+            (let* ((sb (1+ (alist-get "start" frag nil nil #'equal)))
+                   (eb (1+ (alist-get "end"   frag nil nil #'equal))))
+              (buffer-substring-no-properties
+               (byte-to-position sb) (byte-to-position eb))))
+          (tip-latex-collect-fragments beg end)))
+
+(ert-deftest tip-latex-test-inline-and-display ()
+  (with-temp-buffer
+    (insert "Text $a+b$ more \\[ x^2 \\] and \\( y \\) done.\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (equal texts '("$a+b$" "\\[ x^2 \\]" "\\( y \\)"))))))
+
+(ert-deftest tip-latex-test-escaped-dollar ()
+  "\\$ must not open a math fragment."
+  (with-temp-buffer
+    (insert "Price \\$5 and $x$ here.\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (equal texts '("$x$"))))))
+
+(ert-deftest tip-latex-test-double-dollar ()
+  (with-temp-buffer
+    (insert "Before $$ a+b $$ after $c$.\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (equal (length texts) 2))
+      (should (string-match-p "\\$\\$ a\\+b \\$\\$" (car texts)))
+      (should (equal (cadr texts) "$c$")))))
+
+(ert-deftest tip-latex-test-skip-comments ()
+  (with-temp-buffer
+    (latex-mode)
+    (insert "Real $x$\n% fake $y$\nmore $z$.\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (equal texts '("$x$" "$z$"))))))
+
+(ert-deftest tip-latex-test-skip-verbatim ()
+  (with-temp-buffer
+    (insert "Before $x$\n")
+    (insert "\\begin{verbatim}\ninside $y$ nope\n\\end{verbatim}\n")
+    (insert "After $z$.\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (equal texts '("$x$" "$z$"))))))
+
+(ert-deftest tip-latex-test-named-environments ()
+  (with-temp-buffer
+    (insert "\\begin{equation}\n  a + b = c\n\\end{equation}\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (= 1 (length texts)))
+      (should (string-prefix-p "\\begin{equation}" (car texts)))
+      (should (string-match-p "\\\\end{equation}$" (car texts))))))
+
+(ert-deftest tip-latex-test-nested-math-filtered ()
+  "Inner $x$ inside \\[...\\] should not appear as a separate fragment."
+  (with-temp-buffer
+    (insert "\\[ \\text{foo $x$ bar} \\]\n")
+    (let ((texts (tip-latex-test--frag-texts (point-min) (point-max))))
+      (should (= 1 (length texts)))
+      (should (string-prefix-p "\\[" (car texts))))))
+
+(ert-deftest tip-latex-test-bounds-at-point ()
+  (with-temp-buffer
+    (insert "Text $a+b$ more.")
+    (goto-char (point-min))
+    (search-forward "a+b")
+    (let ((bounds (tip-latex-bounds-at-point (point))))
+      (should bounds)
+      (should (equal (buffer-substring-no-properties (car bounds) (cdr bounds))
+                     "$a+b$")))))
+
+(ert-deftest tip-latex-test-bounds-at-point-outside ()
+  (with-temp-buffer
+    (insert "Text $a+b$ more.")
+    (goto-char (point-min))
+    (should (null (tip-latex-bounds-at-point (point))))))
+
+(ert-deftest tip-latex-test-preamble-extraction ()
+  (with-temp-buffer
+    (insert "\\documentclass{article}\n")
+    (insert "\\usepackage{amsmath}\n")
+    (insert "\\newcommand{\\R}{\\mathbb{R}}\n")
+    (insert "\\begin{document}\n")
+    (insert "$x \\in \\R$\n")
+    (insert "\\end{document}\n")
+    (let ((preamble (tip-latex-build-preamble)))
+      (should (string-match-p "amsmath" preamble))
+      (should (string-match-p "\\\\R" preamble))
+      (should-not (string-match-p "\\\\begin{document}" preamble)))))
+
+(ert-deftest tip-latex-test-preamble-default-when-no-document ()
+  (with-temp-buffer
+    (insert "$x$\n")
+    (should (equal (tip-latex-build-preamble) tip-latex-default-preamble))))
+
+(ert-deftest tip-latex-test-classify ()
+  (should (eq (tip-latex-classify-fragment "$a+b$") 'inline))
+  (should (eq (tip-latex-classify-fragment "\\(a\\)") 'inline))
+  (should (eq (tip-latex-classify-fragment "\\[x\\]") 'display-single))
+  (should (eq (tip-latex-classify-fragment "$$x$$") 'display-single))
+  (should (eq (tip-latex-classify-fragment "\\begin{equation}\nx\n\\end{equation}")
+              'display-multi)))
+
+(ert-deftest tip-latex-test-backend-registered ()
+  (let ((b (alist-get 'latex tip-backends)))
+    (should b)
+    (should (memq 'latex-mode (tip-backend-major-modes b)))
+    (should (memq 'LaTeX-mode (tip-backend-major-modes b)))
+    (should (eq (tip-backend-collect-fragments-fn b)
+                #'tip-latex-collect-fragments))
+    (should (equal (tip-backend-server-executable b) "tip-server-latex"))))
+
 ;;; Run tests
 
 (when noninteractive

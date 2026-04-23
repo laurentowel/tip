@@ -30,6 +30,7 @@
 (require 'tip-server-proc)
 (require 'tip-render)
 (require 'tip-typst)
+(require 'tip-latex)
 (require 'tip-live)
 
 ;;; * custom settings
