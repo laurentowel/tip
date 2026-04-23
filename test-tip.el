@@ -512,14 +512,14 @@ user has narrowed to a section below \\begin{document}."
       (should (string-match-p "\\[error\\]" captured)))))
 
 (ert-deftest tip-test-flymake-backend-reports-all-errors ()
-  "`tip--flymake-backend' emits one flymake-diagnostic per error overlay."
+  "The Flymake backend emits one flymake-diagnostic per error overlay."
   (require 'flymake)
   (with-temp-buffer
     (insert "aaaaa bbbbb ccccc")
     (tip-test--mk-error-overlay 1 6 'error "E1" "hint-1")
     (tip-test--mk-error-overlay 7 12 'warning "W1" nil)
     (let (captured)
-      (tip--flymake-backend (lambda (diags) (setq captured diags)))
+      (tip-compile-diagnostics (lambda (diags) (setq captured diags)))
       (should (= 2 (length captured)))
       (let ((d1 (car captured)))
         (should (eq :error (flymake-diagnostic-type d1)))
@@ -603,9 +603,9 @@ user has narrowed to a section below \\begin{document}."
   (require 'flymake)
   (with-temp-buffer
     (tip-flymake-mode 1)
-    (should (memq #'tip--flymake-backend flymake-diagnostic-functions))
+    (should (memq #'tip-compile-diagnostics flymake-diagnostic-functions))
     (tip-flymake-mode -1)
-    (should-not (memq #'tip--flymake-backend flymake-diagnostic-functions))))
+    (should-not (memq #'tip-compile-diagnostics flymake-diagnostic-functions))))
 
 (ert-deftest tip-test-compile-cache-basic-roundtrip ()
   "put → get should return the same plist with an updated :ts."

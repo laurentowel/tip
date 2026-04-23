@@ -241,10 +241,14 @@ other eldoc providers (flymake, etc.) can still contribute."
 
 ;;; * Flymake backend
 
-(defun tip--flymake-backend (report-fn &rest _args)
+(defun tip-compile-diagnostics (report-fn &rest _args)
   "Flymake diagnostic backend that surfaces tip compile errors.
 Walks the tip error overlays in the buffer, converts each to a
-`flymake-diagnostic', reports them in one batch."
+`flymake-diagnostic', reports them in one batch.
+
+Named without the `--' convention so Flymake's diagnostics list
+shows a readable abbreviation (`tcd') instead of the double-hyphen
+form that loses meaning after abbreviation."
   (funcall
    report-fn
    (mapcar
@@ -286,11 +290,11 @@ working regardless."
   (if tip-flymake-mode
       (progn
         (require 'flymake)
-        (add-hook 'flymake-diagnostic-functions #'tip--flymake-backend nil t)
+        (add-hook 'flymake-diagnostic-functions #'tip-compile-diagnostics nil t)
         (unless (bound-and-true-p flymake-mode)
           (flymake-mode 1))
         (tip--flymake-refresh))
-    (remove-hook 'flymake-diagnostic-functions #'tip--flymake-backend t)
+    (remove-hook 'flymake-diagnostic-functions #'tip-compile-diagnostics t)
     (tip--flymake-refresh)))
 
 (provide 'tip-errors)
