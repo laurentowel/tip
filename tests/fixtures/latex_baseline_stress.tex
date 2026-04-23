@@ -1,0 +1,167 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+
+% Custom operators to stress scoped compilation.
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator{\Tr}{Tr}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert#1\right\rvert}
+\newcommand{\inner}[2]{\left\langle#1,#2\right\rangle}
+\newcommand{\opnorm}[1]{\norm{#1}_{\text{op}}}
+
+\begin{document}
+
+% --- Baseline alignment group 1: simple → deep sub/superscripts ---
+
+Plain math should sit on the baseline like this: $a$, $a+b$, $a=b+c$,
+and with operators: $a \cdot b$, $a \times b$, $a \bmod b$.
+
+Ascenders: $b, d, f, h, k, l, t$ vs descenders: $g, j, p, q, y$.  Put them
+together: $b_j$, $h_p$, $f_q$, $k_y$ — the subscript hangs below baseline.
+
+Deep subscripts: $a_b$, $a_{b_c}$, $a_{b_{c_d}}$, $a_{b_{c_{d_e}}}$.
+Deep superscripts: $a^b$, $a^{b^c}$, $a^{b^{c^d}}$, $a^{b^{c^{d^e}}}$.
+Both: $x^{y^z}_{i_j}$, $x_{i_j}^{y^z}$ — baseline should not drift.
+
+% --- Group 2: nested fractions and roots ---
+
+Inline fractions: $\tfrac{1}{2}$, $\tfrac{a}{b}$, and compare with display
+$\frac{1}{2}$, $\frac{a+b}{c-d}$.
+
+Nested fractions: $\frac{a}{\frac{b}{c}}$, $\frac{\frac{a}{b}}{\frac{c}{d}}$,
+and the continued fraction $\frac{1}{1 + \frac{1}{1 + \frac{1}{1+x}}}$.
+
+Roots: $\sqrt{x}$, $\sqrt[3]{x}$, $\sqrt{\sqrt{x}}$,
+$\sqrt{x^2 + y^2 + z^2}$, $\sqrt[n]{\frac{a}{b}}$.
+
+% --- Group 3: big operators with limits (these produce Group frames in Typst) ---
+
+Big-op inline: $\sum_{i=0}^n i^2$, $\prod_{k=1}^n k$, $\int_0^1 f(x)\,dx$,
+$\bigcup_{i \in I} A_i$, $\lim_{n \to \infty} a_n$.
+
+Display sums:
+\[
+\sum_{i=1}^{n} \frac{1}{i^2} = \frac{\pi^2}{6} - \sum_{i=n+1}^{\infty} \frac{1}{i^2}
+\]
+\[
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+\]
+\[
+\prod_{p \text{ prime}} \frac{1}{1 - p^{-s}} = \sum_{n=1}^{\infty} \frac{1}{n^s}
+\]
+
+% --- Group 4: sized delimiters and norms ---
+
+Sized brackets: $\left(\frac{a}{b}\right)$, $\left[\frac{x+1}{x-1}\right]$,
+$\left\{\, x : x^2 < 1 \,\right\}$, $\left\langle u, v\right\rangle$.
+
+Norms and absolute values: $\norm{x}$, $\abs{f(x)}$, $\norm{Tx}_{\text{op}}$,
+$\opnorm{A}$, $\inner{u}{v}$.
+
+% --- Group 5: matrices and arrays ---
+
+Inline matrix: $\bigl(\begin{smallmatrix} a & b \\ c & d \end{smallmatrix}\bigr)$.
+
+Display matrix:
+\[
+A = \begin{pmatrix}
+  a_{11} & a_{12} & \cdots & a_{1n} \\
+  a_{21} & a_{22} & \cdots & a_{2n} \\
+  \vdots & \vdots & \ddots & \vdots \\
+  a_{m1} & a_{m2} & \cdots & a_{mn}
+\end{pmatrix}
+\]
+
+% --- Group 6: cases and aligned ---
+
+\[
+|x| = \begin{cases}
+  x  & \text{if } x \ge 0 \\
+  -x & \text{otherwise}
+\end{cases}
+\]
+
+\begin{align*}
+  (a + b)^2 &= a^2 + 2ab + b^2 \\
+  (a - b)^2 &= a^2 - 2ab + b^2 \\
+  (a + b)(a - b) &= a^2 - b^2
+\end{align*}
+
+\begin{align}
+  \nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\
+  \nabla \cdot \mathbf{B} &= 0 \\
+  \nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+  \nabla \times \mathbf{B} &= \mu_0 \mathbf{J} + \mu_0 \varepsilon_0 \frac{\partial \mathbf{E}}{\partial t}
+\end{align}
+
+% --- Group 7: accents, bars, hats on tall content ---
+
+Single-char accents: $\hat{a}$, $\tilde{a}$, $\bar{a}$, $\vec{a}$, $\dot{a}$,
+$\ddot{a}$.
+Wide accents: $\hat{abc}$ vs $\widehat{abc}$, $\tilde{xyz}$ vs $\widetilde{xyz}$.
+Bars on symbols: $\bar{x}$, $\overline{x + y}$, $\overline{\overline{z}}$.
+
+% --- Group 8: mixed inline in prose ---
+
+The function $f: \R^n \to \R$ is \emph{continuous} at $x_0$ when
+$\lim_{x \to x_0} f(x) = f(x_0)$.  Its derivative, if it exists, is
+$f'(x_0) = \lim_{h \to 0} \frac{f(x_0 + h) - f(x_0)}{h}$.  For smooth $f$,
+the $n$-th order Taylor expansion reads
+$f(x) = \sum_{k=0}^{n} \frac{f^{(k)}(x_0)}{k!}(x - x_0)^k + R_n(x)$.
+
+% --- Group 9: functional analysis (ported from Typst real_world.typ) ---
+
+Let $V$ be a Hilbert space over $\C$ with inner product $\inner{\cdot}{\cdot}$.
+A bounded linear operator $T\colon V \to V$ satisfies
+\[
+\opnorm{T} = \sup_{\norm{x} \le 1} \norm{T x} < \infty.
+\]
+The spectrum of $T$ is
+\[
+\sigma(T) = \{\,\lambda \in \C : T - \lambda I \text{ is not invertible}\,\}.
+\]
+The spectral radius satisfies
+\[
+\rho(T) = \lim_{n \to \infty} \opnorm{T^n}^{1/n}.
+\]
+
+% --- Group 10: probability / information theory ---
+
+Information entropy: $H(X) = -\sum_{x \in \mathcal{X}} p(x) \log p(x)$.
+
+KL divergence: $\displaystyle D_{\mathrm{KL}}(P \,\|\, Q) = \sum_{x} p(x)
+\log\frac{p(x)}{q(x)}$.
+
+MLE: $\hat{\theta}_{\text{MLE}} = \argmax_{\theta \in \Theta} \prod_{i=1}^{n}
+p(x_i \mid \theta)$.
+
+Gaussian: $\mathcal{N}(x \mid \mu, \sigma^2) = \frac{1}{\sqrt{2\pi\sigma^2}}
+\exp\!\left(-\frac{(x-\mu)^2}{2\sigma^2}\right)$.
+
+% --- Group 11: escapes and edge cases ---
+
+Escaped dollar for a price: \$42.  Comment with math: % this $x$ is a comment
+Not rendered.
+
+Short fragments adjacent: $a$ $b$ $c$ — three separate overlays.
+
+Empty-ish (whitespace-only) is skipped: $ $  ← not a fragment.
+
+% --- Group 12: physics-style ---
+
+Schrödinger: $i \hbar \frac{\partial}{\partial t}\Psi = \hat{H}\Psi$.
+
+Lorentz factor: $\gamma = \frac{1}{\sqrt{1 - v^2/c^2}}$.
+
+Stress-energy: $T^{\mu\nu} = \frac{2}{\sqrt{-g}}\frac{\delta(\sqrt{-g}\,
+\mathcal{L})}{\delta g_{\mu\nu}}$.
+
+Einstein field: $R_{\mu\nu} - \tfrac{1}{2}R g_{\mu\nu} + \Lambda g_{\mu\nu} =
+\frac{8\pi G}{c^4} T_{\mu\nu}$.
+
+\end{document}

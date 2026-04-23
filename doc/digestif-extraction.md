@@ -317,6 +317,65 @@ shared with Feature 1).
 | `get_context` / local scope inference | preview.sty inherits the preamble via `\input`; no per-fragment scope logic needed |
 | Snippets / pretty-printing | editor-assist concerns, not preview          |
 
+## Future: markdown support
+
+Markdown-with-math is common (GFM, Pandoc, Quarto, Hugo, Obsidian, Jupyter
+notebooks).  The syntax is a subset of LaTeX — `$...$`, `$$...$$`,
+sometimes `\(...\)` / `\[...\]`, rarely full `\begin{equation}` envs.
+
+**Shape of tip-markdown (future)**:
+
+- New `tip-markdown.el` backend registered for `markdown-mode` /
+  `gfm-mode` / `markdown-ts-mode`.
+- Delegates to `tip-latex.el` for `build-preamble-fn`,
+  `classify-fragment-fn`, and `server-executable` (`"tip-server-latex"`).
+- Overrides only `collect-fragments-fn` / `bounds-at-point-fn` with a
+  narrower detector (no `\begin{}` envs, no `\input` worries — markdown
+  is single-file by construction).
+- Preamble default: amsmath + amssymb.  Optional YAML-frontmatter
+  `header-includes:` support is v2.
+
+**Important caveat**: most markdown-with-math users don't need full
+LaTeX capability.  For them, **KaTeX** (client-side JS rendering) is
+dramatically faster than a latex+dvisvgm roundtrip:
+
+- KaTeX: ~1 ms per fragment, no subprocess spawn.
+- Our LaTeX pipeline: ~50-100 ms per fragment after amortisation.
+
+If a markdown backend happens, it should have a `tip-markdown-engine`
+defcustom that can point at a KaTeX-compatible renderer (e.g., a
+headless-node shim) for the common case, falling back to full LaTeX
+only when the fragment uses features KaTeX can't handle
+(`\newcommand` scopes, obscure packages, TikZ etc.).  The protocol is
+already engine-agnostic; a `tip-server-katex` binary is a strictly
+smaller problem than tip-server-latex.
+
+## Future: LaTeX engine choice
+
+tip-latex v1 hardcodes plain `latex` (DVI route).  Real buffers may
+need `pdflatex`, `xelatex`, or `lualatex` — e.g. a preamble with
+`\usepackage{fontspec}` requires xelatex or lualatex.
+
+Planned surface:
+```elisp
+(defcustom tip-latex-engine 'latex
+  "LaTeX engine used by tip-server-latex: latex, pdflatex, xelatex, lualatex.
+Buffer-local — set via dir-locals.el or a file-local variable."
+  :type '(choice (const latex) (const pdflatex) (const xelatex) (const lualatex))
+  :local t)
+```
+
+Wire-up:
+- `CompileFragmentsParams` gains `engine: Option<String>`.
+- `tip-server-latex` dispatches to the named binary.  xelatex/lualatex
+  need `dvisvgm --pdf` instead of reading a DVI.
+- Opt-in auto-detect: if preamble contains `\usepackage{fontspec}` or
+  `\directlua`, promote to `lualatex`.  Off by default (fragile); pure
+  defcustom configuration is the main interface.
+
+No need to implement until a user hits the limitation.  Noted here
+so the API shape is fixed.
+
 ## Future: error handling
 
 LaTeX is much easier to write wrongly than Typst.  Missing braces, undefined
