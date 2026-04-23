@@ -119,6 +119,19 @@ background color (and swapped on theme change)."
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-cache-max-entries 500
+  "Maximum fragments kept in the buffer-local compile cache.
+When the cache grows past this, the least-recently-accessed entry is
+evicted.  ~5 KB per SVG × 500 ≈ 2.5 MB per buffer — negligible for
+typical papers (50-200 fragments) but caps memory on pathologically
+large buffers.  Set to nil to disable eviction.
+
+The cache is in-memory only; it does not survive Emacs restart.
+Persistent cache is future work (see doc/latex-preview-survey.md)."
+  :type '(choice (const :tag "Unbounded (not recommended)" nil)
+                 (integer :tag "Max entries"))
+  :group 'tip)
+
 (defcustom tip-display-math-width nil
   "Target width for displayed math overlays, in em.
 Applies to block math, numbered equations, multi-line aligns,
@@ -176,23 +189,44 @@ Buffer-local."
          (frag-locs (tip-collect-fragments beg end avoid-pos))
          (n (length frag-locs))
          (display-width-em (tip--resolve-display-width-em))
-         (params `(("uri" . ,(buffer-file-name))
-                   ("fragments" . ,(vconcat frag-locs))
-                   ("color" . ,fg)
-                   ("preamble" . ,preamble))))
-    (when display-width-em
-      (setq params
-            (append params
-                    `(("display_math_width"
-                       . ,(format "%sem" display-width-em))))))
-    (when (> n 0)
-      (tip--sync-buffer)
-      (tip--send-request
-       "compile_fragments" params
-       (lambda (result)
-         (with-current-buffer buf
-           (tip--apply-fragment-results
-            (alist-get 'fragments result))))))))
+         ;; Partition into cache hits (create overlays immediately) and
+         ;; cache misses (send to the server).
+         (misses nil)
+         (cache-hits 0))
+    (dolist (frag frag-locs)
+      (let* ((sb (1+ (alist-get "start" frag nil nil #'equal)))
+             (eb (1+ (alist-get "end"   frag nil nil #'equal)))
+             (p1 (byte-to-position sb))
+             (p2 (byte-to-position eb))
+             (content (buffer-substring-no-properties p1 p2))
+             (cached (tip--cache-get content fg)))
+        (if cached
+            (progn
+              (tip--apply-cached-fragment p1 p2 cached)
+              (cl-incf cache-hits))
+          (push frag misses))))
+    (setq misses (nreverse misses))
+    (when (and tip-enable-debug (> cache-hits 0))
+      (message "tip: cache hits=%d misses=%d" cache-hits (length misses)))
+    (when misses
+      (let ((params `(("uri" . ,(buffer-file-name))
+                      ("fragments" . ,(vconcat misses))
+                      ("color" . ,fg)
+                      ("preamble" . ,preamble))))
+        (when display-width-em
+          (setq params
+                (append params
+                        `(("display_math_width"
+                           . ,(format "%sem" display-width-em))))))
+        (tip--sync-buffer)
+        (tip--send-request
+         "compile_fragments" params
+         (lambda (result)
+           (with-current-buffer buf
+             (tip--apply-fragment-results
+              (alist-get 'fragments result)))))))
+    ;; Return value unused; keep n for the interactive case.
+    n))
 
 ;;; * public commands
 

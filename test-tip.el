@@ -379,6 +379,53 @@ the backend — collect returns nil, bounds-at-point returns nil."
       (search-forward "$x$")
       (should (null (tip-latex-bounds-at-point (1- (point))))))))
 
+(ert-deftest tip-test-compile-cache-basic-roundtrip ()
+  "put → get should return the same plist with an updated :ts."
+  (with-temp-buffer
+    (tip-clear-compile-cache)
+    (tip--cache-put "$x$" "#000000" '(:svg "<svg/>" :height-pt 7.0))
+    (let ((got (tip--cache-get "$x$" "#000000")))
+      (should got)
+      (should (equal (plist-get got :svg) "<svg/>"))
+      (should (numberp (plist-get got :ts))))))
+
+(ert-deftest tip-test-compile-cache-miss-different-color ()
+  "Color changes should miss the cache."
+  (with-temp-buffer
+    (tip-clear-compile-cache)
+    (tip--cache-put "$x$" "#000000" '(:svg "black"))
+    (should (null (tip--cache-get "$x$" "#ffffff")))))
+
+(ert-deftest tip-test-compile-cache-lru-eviction ()
+  "Exceeding tip-cache-max-entries drops the LRU entry."
+  (with-temp-buffer
+    (tip-clear-compile-cache)
+    (let ((tip-cache-max-entries 3))
+      (tip--cache-put "a" "#000" '(:svg "A"))
+      (tip--cache-put "b" "#000" '(:svg "B"))
+      (tip--cache-put "c" "#000" '(:svg "C"))
+      ;; Touch "a" so it's not the LRU.
+      (tip--cache-get "a" "#000")
+      (tip--cache-put "d" "#000" '(:svg "D"))
+      ;; "b" was the LRU at insertion time → evicted.
+      (should (tip--cache-get "a" "#000"))
+      (should (null (tip--cache-get "b" "#000")))
+      (should (tip--cache-get "c" "#000"))
+      (should (tip--cache-get "d" "#000")))))
+
+(ert-deftest tip-test-compile-cache-is-buffer-local ()
+  "Each buffer has its own cache."
+  (let ((bufA (generate-new-buffer " tip-cache-A"))
+        (bufB (generate-new-buffer " tip-cache-B")))
+    (unwind-protect
+        (progn
+          (with-current-buffer bufA
+            (tip--cache-put "$x$" "#000" '(:svg "A")))
+          (with-current-buffer bufB
+            (should (null (tip--cache-get "$x$" "#000")))))
+      (kill-buffer bufA)
+      (kill-buffer bufB))))
+
 (ert-deftest tip-latex-test-skip-blank-fragments ()
   "Whitespace-only math (`$ $', `\\[ \\]', empty env) must not produce fragments."
   (with-temp-buffer

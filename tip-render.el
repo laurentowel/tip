@@ -18,6 +18,127 @@
 (require 'subr-x)
 (require 'tip-backend)
 
+;;; * in-buffer compile cache (LRU)
+
+(defvar-local tip--compile-cache nil
+  "Buffer-local hash-table mapping cache-key → plist.
+Key:   (CONTENT . FG-COLOR) cons.
+Value: plist with :svg :height-pt :depth-pt :width-pt :font-size-pt :ts .
+:ts is an integer access timestamp used for LRU eviction.
+
+In-memory only; not persisted across Emacs restarts.  See
+`tip-cache-max-entries' for eviction behaviour.  Populated by
+`tip--apply-fragment-results', consulted by callers before sending
+requests to the server so moving the cursor through an unchanged
+fragment costs no compile.")
+
+(defvar-local tip--compile-cache-clock 0
+  "Monotonic counter used to order cache entries by access recency.")
+
+(defvar tip-cache-max-entries)
+
+(defun tip--compile-cache ()
+  "Ensure the buffer-local cache is initialised and return it."
+  (or tip--compile-cache
+      (setq tip--compile-cache (make-hash-table :test 'equal))))
+
+(defun tip--cache-key (content fg)
+  (cons content fg))
+
+(defun tip--cache-next-ts ()
+  (cl-incf tip--compile-cache-clock))
+
+(defun tip--cache-evict-lru ()
+  "Drop the single least-recently-used entry from the cache."
+  (when tip--compile-cache
+    (let (min-ts min-key)
+      (maphash (lambda (k v)
+                 (let ((ts (plist-get v :ts)))
+                   (when (or (null min-ts) (< ts min-ts))
+                     (setq min-ts ts min-key k))))
+               tip--compile-cache)
+      (when min-key (remhash min-key tip--compile-cache)))))
+
+(defun tip--cache-put (content fg plist)
+  "Insert PLIST for (CONTENT . FG) into the cache.
+Stamps the entry with the current clock, then enforces
+`tip-cache-max-entries' by evicting the LRU entry when exceeded."
+  (let ((cache (tip--compile-cache)))
+    (puthash (tip--cache-key content fg)
+             (plist-put (copy-sequence plist) :ts (tip--cache-next-ts))
+             cache)
+    (when (and (bound-and-true-p tip-cache-max-entries)
+               (> (hash-table-count cache) tip-cache-max-entries))
+      (tip--cache-evict-lru))))
+
+(defun tip--cache-get (content fg)
+  "Return cached plist for (CONTENT . FG), or nil.
+On hit, bumps the entry's timestamp so it survives eviction longer."
+  (when tip--compile-cache
+    (when-let* ((entry (gethash (tip--cache-key content fg)
+                                tip--compile-cache)))
+      ;; Touch: update :ts in place.
+      (plist-put entry :ts (tip--cache-next-ts))
+      entry)))
+
+;;;###autoload
+(defun tip-clear-compile-cache ()
+  "Clear this buffer's in-memory compile cache.
+Next render request will go to the server even for previously-seen
+fragments.  Useful after preamble edits that don't change fragment
+text (e.g. swapping a custom command definition)."
+  (interactive)
+  (when tip--compile-cache
+    (clrhash tip--compile-cache))
+  (setq tip--compile-cache-clock 0)
+  (message "tip: compile cache cleared"))
+
+(defun tip--apply-cached-fragment (frag-beg frag-end cached)
+  "Create an overlay for cached PLIST at buffer FRAG-BEG..FRAG-END.
+Returns non-nil on success.  Equivalent to one iteration of
+`tip--apply-fragment-results' but skips the server round-trip."
+  (when (and frag-beg frag-end cached)
+    (dolist (ov (overlays-in frag-beg frag-end))
+      (when (eq (overlay-get ov 'tip) 'tip)
+        (delete-overlay ov)))
+    (let* ((svg-data (plist-get cached :svg))
+           (height-pt (plist-get cached :height-pt))
+           (depth-pt (plist-get cached :depth-pt))
+           (width-pt (plist-get cached :width-pt))
+           (font-size-pt (plist-get cached :font-size-pt))
+           (frag-text (buffer-substring-no-properties frag-beg frag-end))
+           (class (tip-classify-fragment frag-text))
+           (is-single-line-display (eq class 'display-single))
+           (is-display (memq class '(display-single display-multi block)))
+           (img-spec (tip--make-image-spec svg-data height-pt depth-pt
+                                           is-display font-size-pt))
+           (ov-beg (if (and is-display
+                            (> frag-beg (point-min))
+                            (eq (char-before frag-beg) ?\n)
+                            (or (= (1- frag-beg) (point-min))
+                                (eq (char-before (1- frag-beg)) ?\n)))
+                       (1- frag-beg)
+                     frag-beg))
+           (ov (make-overlay ov-beg frag-end)))
+      (overlay-put ov 'tip 'tip)
+      (overlay-put ov 'view-text nil)
+      (overlay-put ov 'tip-height-pt height-pt)
+      (overlay-put ov 'tip-depth-pt depth-pt)
+      (overlay-put ov 'tip-width-pt (or width-pt 0))
+      (overlay-put ov 'tip-font-size-pt font-size-pt)
+      (overlay-put ov 'tip-svg svg-data)
+      (overlay-put ov 'tip-fg (tip--color-to-hex
+                               (face-attribute 'default :foreground)))
+      (unless tip-transparent-bg
+        (overlay-put ov 'tip-bg (tip--color-to-hex
+                                 (face-attribute 'default :background))))
+      (overlay-put ov 'display img-spec)
+      (overlay-put ov 'modification-hooks
+                   (list #'tip--invalidate-on-modification))
+      (when (and is-single-line-display tip-display-indicator)
+        (overlay-put ov 'before-string tip-display-indicator))
+      t)))
+
 ;; Customs and helpers that live in tip.el — forward-declared.
 (defvar tip-scale)
 (defvar tip-baseline-offset)
@@ -227,6 +348,13 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
             (overlay-put ov 'tip-width-pt (or width-pt 0))
             (overlay-put ov 'tip-font-size-pt font-size-pt)
             (overlay-put ov 'tip-svg svg-data)
+            ;; Populate the compile cache so moving the cursor through
+            ;; this fragment (without editing) won't cost a round-trip.
+            (tip--cache-put
+             frag-text
+             (tip--color-to-hex (face-attribute 'default :foreground))
+             (list :svg svg-data :height-pt height-pt :depth-pt depth-pt
+                   :width-pt (or width-pt 0) :font-size-pt font-size-pt))
             (overlay-put ov 'tip-fg (tip--color-to-hex
                                      (face-attribute 'default :foreground)))
             (unless tip-transparent-bg
