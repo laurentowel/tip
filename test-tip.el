@@ -528,6 +528,77 @@ user has narrowed to a section below \\begin{document}."
       (let ((d2 (cadr captured)))
         (should (eq :warning (flymake-diagnostic-type d2)))))))
 
+;;; * cascade detection
+
+(defun tip-test--mk-frag-result (start end &optional err-msg)
+  "Construct a fake FragmentResult alist for cascade-detection tests."
+  `((start . ,start) (end . ,end)
+    (svg . "<svg/>") (height_pt . 7.0) (depth_pt . 0.0) (width_pt . 10.0)
+    ,@(when err-msg
+        `((error . ,err-msg)
+          (error_detail . ((severity . error) (message . ,err-msg)))))))
+
+(ert-deftest tip-test-cascade-all-same-message ()
+  "Dominant-message + high error rate → cascade detected at first error."
+  (let ((results
+         (list
+          (tip-test--mk-frag-result 0 10)                         ; ok
+          (tip-test--mk-frag-result 11 20 "Missing $ inserted")
+          (tip-test--mk-frag-result 21 30 "Missing $ inserted")
+          (tip-test--mk-frag-result 31 40 "Missing $ inserted")
+          (tip-test--mk-frag-result 41 50 "Missing $ inserted"))))
+    ;; 4/5 errored (> 0.4), all same message (1.0 > 0.7) → cascade, root = 1.
+    (should (equal 1 (tip--detect-cascade results)))))
+
+(ert-deftest tip-test-cascade-heterogeneous-errors-not-cascade ()
+  "Different error messages in each fragment → not a cascade."
+  (let ((results
+         (list
+          (tip-test--mk-frag-result 0 10 "Undefined control sequence")
+          (tip-test--mk-frag-result 11 20 "Missing } inserted")
+          (tip-test--mk-frag-result 21 30 "LaTeX Error: some env")
+          (tip-test--mk-frag-result 31 40 "Extra \\right")
+          (tip-test--mk-frag-result 41 50 "Font not found"))))
+    ;; 5/5 errored BUT all different messages → no dominant pattern → nil.
+    (should (null (tip--detect-cascade results)))))
+
+(ert-deftest tip-test-cascade-low-error-rate-not-cascade ()
+  "Only one error in a large batch → no cascade."
+  (let ((results
+         (list
+          (tip-test--mk-frag-result 0 10)
+          (tip-test--mk-frag-result 11 20)
+          (tip-test--mk-frag-result 21 30)
+          (tip-test--mk-frag-result 31 40)
+          (tip-test--mk-frag-result 41 50 "Missing $ inserted"))))
+    (should (null (tip--detect-cascade results)))))
+
+(ert-deftest tip-test-cascade-tiny-batch-not-cascade ()
+  "Even 100% errors in a batch of 2-3 isn't treated as cascade."
+  (let ((results
+         (list (tip-test--mk-frag-result 0 10 "Missing $ inserted")
+               (tip-test--mk-frag-result 11 20 "Missing $ inserted"))))
+    (should (null (tip--detect-cascade results)))))
+
+(ert-deftest tip-test-next-error-skips-cascade-victims ()
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc ddddd")
+    ;; Root at 1; victims at 7, 13.
+    (let ((ov1 (tip-test--mk-error-overlay 1 6 'error "Missing $"))
+          (ov2 (tip-test--mk-error-overlay 7 12 'error "Missing $"))
+          (ov3 (tip-test--mk-error-overlay 13 18 'error "Missing $")))
+      (overlay-put ov2 'tip-cascade t)
+      (overlay-put ov3 'tip-cascade t))
+    (goto-char 1)
+    ;; With default (skip cascades) and no non-cascade errors after root → wrap.
+    (tip-next-error)
+    (should (= 1 (point)))
+    ;; With include-cascade, victims are visited.
+    (let ((tip-next-error-include-cascade t))
+      (goto-char 1)
+      (tip-next-error)
+      (should (= 7 (point))))))
+
 (ert-deftest tip-test-flymake-mode-toggles-backend ()
   (require 'flymake)
   (with-temp-buffer

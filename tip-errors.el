@@ -35,6 +35,7 @@
 
 (require 'seq)
 (require 'subr-x)
+(require 'cl-lib)
 
 (declare-function flymake-make-diagnostic "flymake" (buffer beg end type text))
 (declare-function flymake-mode "flymake" (&optional arg))
@@ -60,16 +61,109 @@ Wavy underline in amber.  Overrides `tip-error-face' when the
 fragment's `error_detail.severity' is `warning'."
   :group 'tip)
 
+(defface tip-cascade-face
+  '((((background light)) :underline (:style dots :color "#9ca3af"))
+    (((background dark))  :underline (:style dots :color "#6b7280")))
+  "Face for fragments suppressed as likely cascade victims.
+Gray dotted underline — visible enough to know something's off,
+subdued enough not to claim attention meant for the root error."
+  :group 'tip)
+
+;;; * cascade detection
+
+(defcustom tip-error-cascade-rate-threshold 0.4
+  "Fraction of errored fragments above which cascade detection runs.
+When a compile batch returns errors on more than this fraction of its
+fragments AND those errors share a dominant message signature (see
+`tip-error-cascade-dominant-share'), tip treats the downstream errors
+as cascade victims of an upstream structural defect.  Only the first
+error is shown prominently; later ones get `tip-cascade-face' and
+are excluded from `tip-next-error' navigation.
+
+Nil or 1.0 disables the heuristic (every error shown full-fidelity).
+
+Backend-agnostic.  Same mechanism applies to LaTeX (\"Missing $
+inserted\" on every fragment after an unbalanced delimiter) and to
+Typst (\"unexpected\" / \"unclosed\" cascades from a broken preamble)."
+  :type '(choice (const :tag "Never suppress" nil)
+                 (float :tag "Fraction (0.0–1.0)"))
+  :group 'tip)
+
+(defcustom tip-error-cascade-dominant-share 0.7
+  "Share of errored fragments with the SAME message that triggers cascade mode.
+If most of a batch's errors repeat an identical string, they're almost
+certainly consequences of one upstream cause.  Conversely, a batch
+with heterogeneous error messages is usually a set of genuinely
+independent mistakes and we show them all.  This check is what makes
+cascade detection backend-agnostic — it looks at message identity,
+not language-specific content."
+  :type 'float
+  :group 'tip)
+
+(defcustom tip-next-error-include-cascade nil
+  "When non-nil, `tip-next-error' visits cascade-suspect errors too.
+Default skips them — the root error is what matters; fixing it
+usually clears the cascade."
+  :type 'boolean
+  :group 'tip)
+
+(defun tip--detect-cascade (fragment-results)
+  "Return the root fragment index when FRAGMENT-RESULTS looks like a cascade.
+
+Input is the fragment-result vector/list from `compile_fragments'.
+Returns nil if no cascade is suspected, or the 0-based index of the
+first errored fragment (the \"root\" — only this one gets full
+presentation).
+
+Two-check heuristic, backend-agnostic:
+
+  1. RATE: at least `tip-error-cascade-rate-threshold' of fragments
+     have errors, and there are more than 2 errors total (below that
+     a cascade isn't meaningful).
+  2. DOMINANCE: `tip-error-cascade-dominant-share' or more of the
+     errored fragments carry the SAME `message' string (i.e., the
+     errors are repeats of one signature).
+
+Passing both is strong evidence one upstream defect produced many
+parse-recovery false positives.  Independent genuine errors would
+produce heterogeneous messages and fail check (2)."
+  (when (and (numberp tip-error-cascade-rate-threshold)
+             (< tip-error-cascade-rate-threshold 1.0))
+    (let* ((frags (append fragment-results nil))
+           (total (length frags))
+           (errored (seq-filter (lambda (f) (alist-get 'error_detail f)) frags))
+           (n-errored (length errored))
+           (first-root
+            (cl-position-if (lambda (f) (alist-get 'error_detail f)) frags)))
+      (when (and (> total 3)
+                 (> n-errored 2)
+                 (> (/ (float n-errored) total)
+                    tip-error-cascade-rate-threshold))
+        ;; Histogram messages; check dominance.
+        (let ((hist (make-hash-table :test 'equal)))
+          (dolist (f errored)
+            (let ((msg (alist-get 'message (alist-get 'error_detail f))))
+              (when msg
+                (puthash msg (1+ (gethash msg hist 0)) hist))))
+          (let ((max-count 0))
+            (maphash (lambda (_ v) (setq max-count (max max-count v))) hist)
+            (when (> (/ (float max-count) n-errored)
+                     tip-error-cascade-dominant-share)
+              first-root)))))))
+
 ;;; * overlay enumeration
 
-(defun tip--error-overlays (&optional buffer)
+(defun tip--error-overlays (&optional buffer include-cascade)
   "Return tip error overlays in BUFFER (default current), sorted by start.
-Picks up both error- and warning-severity overlays."
+Picks up both error- and warning-severity overlays.  Skips
+cascade-suspect overlays unless INCLUDE-CASCADE is non-nil."
   (with-current-buffer (or buffer (current-buffer))
     (sort (seq-filter
            (lambda (o)
              (and (eq (overlay-get o 'tip) 'tip)
-                  (overlay-get o 'tip-error-severity)))
+                  (overlay-get o 'tip-error-severity)
+                  (or include-cascade
+                      (not (overlay-get o 'tip-cascade)))))
            (overlays-in (point-min) (point-max)))
           (lambda (a b) (< (overlay-start a) (overlay-start b))))))
 
@@ -96,9 +190,11 @@ Picks up both error- and warning-severity overlays."
 ;;;###autoload
 (defun tip-next-error (&optional no-wrap)
   "Jump to the next tip error overlay after point.
-With a prefix arg (NO-WRAP non-nil), don't wrap around."
+With a prefix arg (NO-WRAP non-nil), don't wrap around.
+Cascade-suspect errors are skipped unless
+`tip-next-error-include-cascade' is non-nil."
   (interactive "P")
-  (let* ((ovs (tip--error-overlays))
+  (let* ((ovs (tip--error-overlays nil tip-next-error-include-cascade))
          (next (seq-find (lambda (o) (> (overlay-start o) (point))) ovs)))
     (cond
      (next
@@ -112,9 +208,11 @@ With a prefix arg (NO-WRAP non-nil), don't wrap around."
 ;;;###autoload
 (defun tip-prev-error (&optional no-wrap)
   "Jump to the previous tip error overlay before point.
-With a prefix arg (NO-WRAP non-nil), don't wrap around."
+With a prefix arg (NO-WRAP non-nil), don't wrap around.
+Cascade-suspect errors are skipped unless
+`tip-next-error-include-cascade' is non-nil."
   (interactive "P")
-  (let* ((ovs (nreverse (tip--error-overlays)))
+  (let* ((ovs (nreverse (tip--error-overlays nil tip-next-error-include-cascade)))
          (prev (seq-find (lambda (o) (< (overlay-start o) (point))) ovs)))
     (cond
      (prev

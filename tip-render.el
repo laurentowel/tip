@@ -324,10 +324,23 @@ the image displayed over now-mismatched source."
 FRAGMENT-RESULTS is a vector of alists with start, end, svg,
 height_pt, depth_pt, width_pt, optional error, and optional
 error_detail (severity, message, hint, line_in_fragment, detail).
-Handles narrowed buffers: `byte-to-position' needs full buffer access."
+Handles narrowed buffers: `byte-to-position' needs full buffer access.
+
+Cascade-suspect errors are demoted to `tip-cascade-face' — see
+`tip--detect-cascade'.  When a cascade is detected, a one-line
+diagnostic is echoed and later errors get minimal visual weight."
+  (let* ((cascade-root (and (fboundp 'tip--detect-cascade)
+                            (tip--detect-cascade fragment-results)))
+         (frag-idx -1))
+    (when cascade-root
+      (let ((errs (seq-filter (lambda (f) (alist-get 'error_detail f))
+                              (append fragment-results nil))))
+        (message "tip: %d/%d errors look like a cascade — fix the first one"
+                 (length errs) (length (append fragment-results nil)))))
   (save-restriction
     (widen)
     (seq-doseq (frag fragment-results)
+      (cl-incf frag-idx)
       (let* ((byte-start (alist-get 'start frag))
              (byte-end (alist-get 'end frag))
              (frag-beg (byte-to-position (1+ byte-start)))
@@ -359,10 +372,13 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
               (delete-overlay ov)))
           (let* ((hint-range (tip--locate-error-hint frag-beg frag-end
                                                      err-hint err-line))
-                 (face (if (eq err-severity 'warning)
-                           'tip-warning-face
-                         'tip-error-face))
-                 (marker (cond ((eq err-severity 'warning) "⚑ ")
+                 (is-cascade-victim
+                  (and cascade-root (/= frag-idx cascade-root)))
+                 (face (cond (is-cascade-victim 'tip-cascade-face)
+                             ((eq err-severity 'warning) 'tip-warning-face)
+                             (t 'tip-error-face)))
+                 (marker (cond (is-cascade-victim "")
+                               ((eq err-severity 'warning) "⚑ ")
                                (t "⚠ ")))
                  ;; Underline overlay: whole fragment if hint can't be
                  ;; located, else just the hint region.
@@ -371,8 +387,12 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
                  (ov (make-overlay under-beg under-end)))
             (overlay-put ov 'tip 'tip)
             (overlay-put ov 'face face)
+            (when is-cascade-victim
+              (overlay-put ov 'tip-cascade t))
             (overlay-put ov 'before-string
-                         (propertize marker 'face face))
+                         (if (string-empty-p marker)
+                             nil
+                           (propertize marker 'face face)))
             (overlay-put ov 'help-echo
                          (if err-full
                              (format "%s\n\n%s"
@@ -437,7 +457,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
             (overlay-put ov 'modification-hooks
                          (list #'tip--invalidate-on-modification))
             (when (and is-single-line-display tip-display-indicator)
-              (overlay-put ov 'before-string tip-display-indicator))))))))
+              (overlay-put ov 'before-string tip-display-indicator)))))))))
 
 ;;; * theme change: fast SVG color substitution
 
