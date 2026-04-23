@@ -280,14 +280,6 @@ RENDERED-PT is the backend's native render size (see
 
 ;;; * error-overlay helpers
 
-(defface tip-warning-face
-  '((((background light)) :underline (:style wave :color "#d97706"))
-    (((background dark))  :underline (:style wave :color "#f59e0b")))
-  "Face for fragments that compiled with a warning.
-Wavy underline in amber.  Overrides `tip-error-face' when the
-fragment's `error_detail.severity' is `warning'."
-  :group 'tip)
-
 (defun tip--locate-error-hint (frag-beg frag-end hint &optional line-in-fragment)
   "Search for HINT (a substring) inside (FRAG-BEG..FRAG-END) and return
 \(BEG . END) of the first match, or nil if HINT is nil/empty/not found.
