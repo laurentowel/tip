@@ -119,6 +119,17 @@ background color (and swapped on theme change)."
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-verbose nil
+  "When non-nil, log per-operation progress messages.
+Specifically `tip-render-all' / `tip-send-nbd' emit a \"tip: N/N
+rendered (K cached)\" message once all fragments land.  Cache-hit
+and cache-miss totals are shown in debug mode regardless.
+
+Useful for tracking progress on large documents or verifying the
+cache is working.  Disabled by default to keep the echo area quiet."
+  :type 'boolean
+  :group 'tip)
+
 (defcustom tip-cache-max-entries 500
   "Maximum fragments kept in the buffer-local compile cache.
 When the cache grows past this, the least-recently-accessed entry is
@@ -208,7 +219,13 @@ Buffer-local."
     (setq misses (nreverse misses))
     (when (and tip-enable-debug (> cache-hits 0))
       (message "tip: cache hits=%d misses=%d" cache-hits (length misses)))
-    (when misses
+    (cond
+     ;; All cached — report and done.
+     ((null misses)
+      (when (and tip-verbose (> n 0))
+        (message "tip: %d/%d rendered (all from cache)" n n)))
+     ;; Send misses to the server, report on response.
+     (t
       (let ((params `(("uri" . ,(buffer-file-name))
                       ("fragments" . ,(vconcat misses))
                       ("color" . ,fg)
@@ -223,9 +240,18 @@ Buffer-local."
          "compile_fragments" params
          (lambda (result)
            (with-current-buffer buf
-             (tip--apply-fragment-results
-              (alist-get 'fragments result)))))))
-    ;; Return value unused; keep n for the interactive case.
+             (let* ((frags (alist-get 'fragments result))
+                    (got (if frags (length frags) 0))
+                    (errors (and frags
+                                 (cl-count-if
+                                  (lambda (f) (alist-get 'error f))
+                                  (append frags nil)))))
+               (tip--apply-fragment-results frags)
+               (when tip-verbose
+                 (message "tip: %d/%d rendered (%d cached, %d error%s)"
+                          (+ cache-hits got) n cache-hits
+                          (or errors 0)
+                          (if (= (or errors 0) 1) "" "s"))))))))))
     n))
 
 ;;; * public commands

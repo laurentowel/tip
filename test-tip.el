@@ -379,6 +379,53 @@ the backend — collect returns nil, bounds-at-point returns nil."
       (search-forward "$x$")
       (should (null (tip-latex-bounds-at-point (1- (point))))))))
 
+(ert-deftest tip-latex-test-preamble-under-narrowing ()
+  "Narrowing to a section shouldn't hide the preamble from extraction."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "\\documentclass{article}\n"
+            "\\usepackage{amsmath}\n"
+            "\\newcommand{\\R}{\\mathbb{R}}\n"
+            "\\begin{document}\n"
+            "Section body with $x \\in \\R$ math.\n"
+            "\\end{document}\n")
+    (let ((body-start (save-excursion
+                        (goto-char (point-min))
+                        (search-forward "Section body")
+                        (line-beginning-position)))
+          (body-end (save-excursion
+                      (goto-char (point-min))
+                      (search-forward "\\end{document}")
+                      (line-beginning-position))))
+      (narrow-to-region body-start body-end)
+      ;; Preamble extraction must ignore narrowing.
+      (let ((preamble (tip-latex-build-preamble)))
+        (should (string-match-p "\\\\R" preamble))
+        (should (string-match-p "amsmath" preamble)))
+      ;; Fragment collection respects narrowing — only finds math in the
+      ;; narrowed range.
+      (should (= 1 (length (tip-latex-collect-fragments
+                            (point-min) (point-max))))))))
+
+(ert-deftest tip-latex-test-includes-detected-outside-narrowing ()
+  "A \\input in the preamble should still trigger refuse even when the
+user has narrowed to a section below \\begin{document}."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "\\documentclass{article}\n"
+            "\\input{macros}\n"
+            "\\begin{document}\n"
+            "Just math: $a+b$.\n"
+            "\\end{document}\n")
+    (let ((body-start (save-excursion (goto-char (point-min))
+                                       (search-forward "Just math")
+                                       (line-beginning-position)))
+          (body-end (point-max)))
+      (narrow-to-region body-start body-end)
+      ;; Refuse must fire even though `\input' lies outside the narrow.
+      (should (tip-latex--buffer-has-includes-p))
+      (should (null (tip-latex-collect-fragments (point-min) (point-max)))))))
+
 (ert-deftest tip-test-compile-cache-basic-roundtrip ()
   "put → get should return the same plist with an updated :ts."
   (with-temp-buffer

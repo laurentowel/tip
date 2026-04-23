@@ -307,18 +307,22 @@ when the buffer is modified (see `tip-latex--on-change').")
 
 (defun tip-latex--buffer-has-includes-p ()
   "Return non-nil if the buffer contains a live \\input/\\include/\\subimport.
-Skips matches inside comments.  Cached in `tip-latex--has-includes'."
+Scans the WHOLE buffer (ignoring narrowing) so a narrow-to-section
+doesn't hide an include lurking in the preamble.  Skips matches inside
+comments.  Cached in `tip-latex--has-includes'."
   (if (not (eq tip-latex--has-includes 'unknown))
       tip-latex--has-includes
     (setq tip-latex--has-includes
-          (save-excursion
-            (goto-char (point-min))
-            (catch 'found
-              (while (re-search-forward (tip-latex--include-re) nil t)
-                (save-excursion
-                  (unless (nth 4 (syntax-ppss (match-beginning 0)))
-                    (throw 'found t))))
-              nil)))))
+          (save-restriction
+            (widen)
+            (save-excursion
+              (goto-char (point-min))
+              (catch 'found
+                (while (re-search-forward (tip-latex--include-re) nil t)
+                  (save-excursion
+                    (unless (nth 4 (syntax-ppss (match-beginning 0)))
+                      (throw 'found t))))
+                nil))))))
 
 (defun tip-latex--on-change (&rest _)
   "Invalidate the include-scan cache when the buffer changes."
@@ -339,19 +343,27 @@ multi-file support is v2; previews disabled in this buffer."))
 ;;; * preamble extraction
 
 (defun tip-latex--preamble-end ()
-  "Return position of `\\begin{document}' or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (when (re-search-forward "\\\\begin{document}" nil t)
-      (match-beginning 0))))
+  "Return position of `\\begin{document}' (buffer-wide) or nil.
+Ignores narrowing — a narrow-to-section should still see the real
+preamble."
+  (save-restriction
+    (widen)
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward "\\\\begin{document}" nil t)
+        (match-beginning 0)))))
 
 (defun tip-latex-build-preamble ()
   "Return the document preamble as a string.
-If the buffer has no `\\begin{document}', return `tip-latex-default-preamble'."
-  (let ((pend (tip-latex--preamble-end)))
-    (if pend
-        (buffer-substring-no-properties (point-min) pend)
-      tip-latex-default-preamble)))
+Reads from buffer start (widened) to `\\begin{document}' — a
+narrow-to-section leaves preamble extraction intact.  If there's no
+`\\begin{document}' anywhere, returns `tip-latex-default-preamble'."
+  (save-restriction
+    (widen)
+    (let ((pend (tip-latex--preamble-end)))
+      (if pend
+          (buffer-substring-no-properties (point-min) pend)
+        tip-latex-default-preamble))))
 
 ;;; * classification
 
