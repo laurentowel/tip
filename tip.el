@@ -76,18 +76,12 @@ Set to nil to disable the indicator."
   :type '(choice string (const nil))
   :group 'tip)
 
-(defcustom tip-diagram-functions
-  '("cetz.canvas" "canvas" "diagram" "comm-diag" "fletcher.diagram")
-  "List of function names recognized as diagram calls for preview.
-These are previewed as block elements (centered, no baseline alignment)."
-  :type '(repeat string)
-  :group 'tip)
-
 (defcustom tip-render-figure nil
   "If non-nil, render `#figure(...)' calls as whole-block previews.
 When enabled, the entire figure (body + caption) is treated as a single
-fragment; any diagram or math inside is not rendered separately.
-Buffer-local — set with `setq-local' per buffer."
+fragment; any math inside is swallowed.  Non-math content outside figures
+(e.g. bare diagram calls, images) is never rendered — wrap it in a figure
+or display math to opt in.  Buffer-local."
   :type 'boolean
   :group 'tip
   :local t)
@@ -421,15 +415,6 @@ Always sends the full buffer, ignoring narrowing."
 
 ;;; * fragment collection
 
-(defun tip--diagram-node-p (node)
-  "Return non-nil if NODE is a function call matching `tip-diagram-functions'."
-  (when-let* ((node)
-              (ntype (treesit-node-type node))
-              ((equal "call" (if (symbolp ntype) (symbol-name ntype) ntype)))
-              (first-child (treesit-node-child node 0))
-              (name (treesit-node-text first-child t)))
-    (member name tip-diagram-functions)))
-
 (defun tip--figure-node-p (node)
   "Return non-nil if NODE is a `figure' function call."
   (when-let* ((node)
@@ -439,17 +424,13 @@ Always sends the full buffer, ignoring narrowing."
               (name (treesit-node-text first-child t)))
     (equal name "figure")))
 
-(defun tip--renderable-call-p (node)
-  "Return non-nil if NODE is a diagram call or (when enabled) a figure call."
-  (or (tip--diagram-node-p node)
-      (and tip-render-figure (tip--figure-node-p node))))
-
 (defun tip-collect-fragment-locations (beg end &optional avoid-pos)
-  "Collect math and diagram fragment byte positions in region BEG..END.
+  "Collect math (and figure) fragment byte positions in region BEG..END.
 Returns a list of alists with start/end keys.
 Skips fragment containing AVOID-POS if given.
-Filters out nested math — only keeps outermost fragments.
-Diagrams (matching `tip-diagram-functions') are included as fragments."
+Filters out nested ranges — only keeps outermost fragments.
+When `tip-render-figure' is non-nil, top-level `#figure(...)' calls are
+also included (and any math inside them is filtered as nested)."
   (let (ranges fragments)
     ;; Collect math ranges (skip empty, skip inside #let bindings)
     (dolist (pair (treesit-query-range 'typst "((math) @math)"))
@@ -467,12 +448,12 @@ Diagrams (matching `tip-diagram-functions') are included as fragments."
                  (not (and (>= avoid-pos (car pair))
                            (<= avoid-pos (cdr pair))))))
         (push pair ranges)))
-    ;; Collect diagram ranges (and figure ranges when enabled) by walking the tree
-    (when (or tip-diagram-functions tip-render-figure)
+    ;; Collect figure ranges when enabled
+    (when tip-render-figure
       (let ((root (treesit-buffer-root-node 'typst)))
         (when root
           (setq ranges (nconc ranges
-                              (tip--collect-diagram-ranges root beg end avoid-pos))))))
+                              (tip--collect-figure-ranges root beg end avoid-pos))))))
     ;; Filter out nested: skip any range contained within another
     (setq ranges (nreverse ranges))
     (let (outer)
@@ -498,24 +479,25 @@ Diagrams (matching `tip-diagram-functions') are included as fragments."
       (setq parent (treesit-node-parent parent)))
     (not (null parent))))
 
-(defun tip--collect-diagram-ranges (node beg end avoid-pos)
-  "Recursively find diagram function calls under NODE.
+(defun tip--collect-figure-ranges (node beg end avoid-pos)
+  "Recursively find `#figure(...)' calls under NODE.
 Skips calls inside #let bindings (function definitions, not invocations).
+Does not descend into a matched figure, so nested figures are not emitted.
 Returns a list of (BEG . END) ranges."
   (let ((node-start (treesit-node-start node))
         (node-end (treesit-node-end node))
         (result nil))
     (when (and (<= node-start end) (>= node-end beg))
-      (if (and (tip--renderable-call-p node)
+      (if (and (tip--figure-node-p node)
                (not (tip--inside-let-binding-p node)))
           (let ((start (max beg (1- node-start)))
-                (dend (min end node-end)))
+                (fend (min end node-end)))
             (when (or (null avoid-pos)
-                      (not (and (>= avoid-pos start) (<= avoid-pos dend))))
-              (push (cons start dend) result)))
+                      (not (and (>= avoid-pos start) (<= avoid-pos fend))))
+              (push (cons start fend) result)))
         (dotimes (i (treesit-node-child-count node))
           (setq result (nconc result
-                              (tip--collect-diagram-ranges
+                              (tip--collect-figure-ranges
                                (treesit-node-child node i) beg end avoid-pos))))))
     result))
 
@@ -612,18 +594,19 @@ Handles narrowed buffers: byte-to-position needs full buffer access."
         (dolist (ov (overlays-in frag-beg frag-end))
           (when (eq (overlay-get ov 'tip) 'tip)
             (delete-overlay ov)))
-        ;; Detect single-line display math for indicator
+        ;; Detect single-line display math for indicator.  Fragments starting
+        ;; with `#' are figures (block elements).
         (let* ((frag-text (buffer-substring-no-properties frag-beg frag-end))
-               (is-diagram (eq (aref frag-text 0) ?#))
+               (is-block-call (eq (aref frag-text 0) ?#))
                (is-single-line-display
-                (and (not is-diagram)
+                (and (not is-block-call)
                      (>= (length frag-text) 3)
                      (eq (aref frag-text 0) ?$)
                      (memq (aref frag-text 1) '(?\s ?\t))
                      (not (string-match-p "\n" (substring frag-text 1 -1)))))
-               (is-display (or is-diagram
+               (is-display (or is-block-call
                               is-single-line-display
-                              (and (not is-diagram)
+                              (and (not is-block-call)
                                    (string-match-p "\n" (substring frag-text 1 -1)))))
                (img-spec (tip--make-image-spec svg-data height-pt depth-pt is-display))
                (display img-spec)
@@ -785,7 +768,7 @@ including all scope-defining statements visible at this position."
   (interactive)
   (let ((bounds (tip--get-bounds-of-math-at-point (point))))
     (unless bounds
-      (user-error "No math or diagram fragment at point"))
+      (user-error "No math or figure fragment at point"))
     (let ((byte-start (1- (position-bytes (car bounds))))
           (byte-end (1- (position-bytes (cdr bounds))))
           (buf (current-buffer)))
@@ -823,14 +806,13 @@ including all scope-defining statements visible at this position."
 ;;; * fragment detection
 
 (defun tip--get-bounds-of-math-at-point (x)
-  "Return (BEG . END) of math or diagram fragment at position X, or nil.
+  "Return (BEG . END) of math (or figure, when enabled) fragment at X.
 Uses local tree-sitter node walk — O(depth) not O(buffer).
 Half-open interval: returns bounds only if BEG <= X < END."
   (let ((node (treesit-node-at x 'typst)))
     (or
      ;; When figure rendering is on, prefer the enclosing figure call so that
-     ;; positions inside inner math/diagrams resolve to the fragment that was
-     ;; actually rendered.
+     ;; positions inside inner math resolve to the fragment actually rendered.
      (when tip-render-figure
        (let ((n node) (found nil))
          (while (and n (not found))
@@ -848,8 +830,8 @@ Half-open interval: returns bounds only if BEG <= X < END."
                  (end (treesit-node-end found)))
              (when (and (<= beg x) (< x end))
                (cons beg end))))))
-     ;; Check if we're inside a math node (walk up)
-     ;; Skip math inside #let bindings (definitions, not rendered)
+     ;; Check if we're inside a math node (walk up).
+     ;; Skip math inside #let bindings (definitions, not rendered).
      (let ((n node))
        (while (and n (not (equal "math" (treesit-node-type n))))
          (setq n (treesit-node-parent n)))
@@ -857,25 +839,7 @@ Half-open interval: returns bounds only if BEG <= X < END."
                   (<= (treesit-node-start n) x)
                   (< x (treesit-node-end n))
                   (not (tip--inside-let-binding-p n)))
-         (cons (treesit-node-start n) (treesit-node-end n))))
-     ;; Check diagram ranges (walk up for call node)
-     (let ((n node) (found nil))
-       (while (and n (not found))
-         (if (tip--diagram-node-p n)
-             (setq found n)
-           (setq n (treesit-node-parent n))))
-       ;; If at # prefix, the call node is a sibling — check x+1
-       (when (and (not found) (< x (point-max)) (eq (char-after x) ?#))
-         (setq n (treesit-node-at (1+ x) 'typst))
-         (while (and n (not found))
-           (if (tip--diagram-node-p n)
-               (setq found n)
-             (setq n (treesit-node-parent n)))))
-       (when found
-         (let ((beg (1- (treesit-node-start found)))
-               (end (treesit-node-end found)))
-           (when (and (<= beg x) (< x end))
-             (cons beg end))))))))
+         (cons (treesit-node-start n) (treesit-node-end n)))))))
 
 ;;; * echo-area error feedback (while editing inside a fragment)
 
@@ -1181,7 +1145,7 @@ Home row first for qwerty ergonomics."
 
 ;;;###autoload
 (defun tip-jump ()
-  "Jump to a math/diagram fragment using avy-style tree selection.
+  "Jump to a math/figure fragment using avy-style tree selection.
 Shows labels on visible fragments. Press a key to narrow candidates;
 if one remains, jump. Otherwise show next level and read again."
   (interactive)
@@ -1405,13 +1369,13 @@ Called from `after-change-functions'."
 
 ;;;###autoload
 (defun tip-edit ()
-  "Open an indirect edit buffer for the math/diagram at point.
+  "Open an indirect edit buffer for the math/figure at point.
 Like `org-edit-special' (C-c ').  Shows live preview while editing.
 \\[tip-edit-commit] saves back, \\[tip-edit-abort] cancels."
   (interactive)
   (let ((bounds (tip--get-bounds-of-math-at-point (point))))
     (unless bounds
-      (user-error "No math or diagram at point"))
+      (user-error "No math or figure at point"))
     (let* ((beg (car bounds))
            (end (cdr bounds))
            (text (buffer-substring-no-properties beg end))
