@@ -95,6 +95,7 @@ impl Handler {
                     width_pt: 0.0,
                             font_size_pt: Some(11.0),
                     error: Some("invalid fragment range".into()),
+                            error_detail: None,
                 });
                 continue;
             }
@@ -118,6 +119,7 @@ impl Handler {
                         width_pt: output.width_pt,
                             font_size_pt: Some(11.0),
                         error: None,
+                            error_detail: None,
                     });
                 }
                 Err(err) => {
@@ -130,6 +132,7 @@ impl Handler {
                         width_pt: 0.0,
                             font_size_pt: Some(11.0),
                         error: Some(err),
+                            error_detail: None,
                     });
                 }
             }
@@ -167,6 +170,7 @@ impl Handler {
                     width_pt: output.width_pt,
                             font_size_pt: Some(11.0),
                     error: None,
+                            error_detail: None,
                 },
             },
             Err(err) => ResponseResult::Error { error: err },
@@ -232,6 +236,7 @@ mod tests {
                 color: "#000000".into(),
                 page_setup: None,
                 preamble: None,
+                display_math_width: None,
             }),
         });
         assert_eq!(resp.id, 2);
@@ -256,6 +261,7 @@ mod tests {
                 color: "#000000".into(),
                 page_setup: None,
                 preamble: None,
+            display_math_width: None,
             }),
         });
         match resp.result {

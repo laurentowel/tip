@@ -43,6 +43,7 @@ fn compile_without_sync_returns_error() {
             color: "#000000".into(),
             page_setup: None,
             preamble: None,
+            display_math_width: None,
         }),
     });
     match &resp.result {
@@ -75,6 +76,7 @@ fn compile_fragment_returns_svg() {
             color: "#000000".into(),
             page_setup: None,
             preamble: None,
+            display_math_width: None,
         }),
     });
     assert_eq!(resp.id, 2);
@@ -160,6 +162,7 @@ fn multiple_fragments_in_one_batch() {
             color: "#000000".into(),
             page_setup: None,
             preamble: None,
+            display_math_width: None,
         }),
     });
     match &resp.result {

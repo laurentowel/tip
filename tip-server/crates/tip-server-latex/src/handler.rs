@@ -104,16 +104,27 @@ impl Handler {
                 let mut results = Vec::with_capacity(batch.len());
                 for (loc, out) in params.fragments.iter().zip(batch.into_iter()) {
                     match out {
-                        Ok(frag) => results.push(FragmentResult {
-                            start: loc.start,
-                            end: loc.end,
-                            svg: ensure_svg_fill(&frag.svg, &params.color),
-                            height_pt: frag.height_pt,
-                            depth_pt: frag.depth_pt,
-                            width_pt: frag.width_pt,
-                            font_size_pt: frag.font_size_pt,
-                            error: None,
-                        }),
+                        Ok(frag) => {
+                            // Post-process the error so line offsets and hint
+                            // text reflect the user's fragment, not our
+                            // `\begin{preview}\n<color><fragment>\n\end{preview}`
+                            // wrapping.  See write_batch_tex in compiler.rs.
+                            let error_detail =
+                                frag.error_detail.map(|e| adjust_fragment_error(e, &color_cmd));
+                            let err_msg =
+                                error_detail.as_ref().map(|e| e.message.clone());
+                            results.push(FragmentResult {
+                                start: loc.start,
+                                end: loc.end,
+                                svg: ensure_svg_fill(&frag.svg, &params.color),
+                                height_pt: frag.height_pt,
+                                depth_pt: frag.depth_pt,
+                                width_pt: frag.width_pt,
+                                font_size_pt: frag.font_size_pt,
+                                error: err_msg,
+                                error_detail,
+                            });
+                        }
                         Err(e) => results.push(FragmentResult {
                             start: loc.start,
                             end: loc.end,
@@ -123,6 +134,7 @@ impl Handler {
                             width_pt: 0.0,
                             font_size_pt: None,
                             error: Some(e),
+                            error_detail: None,
                         }),
                     }
                 }
@@ -156,6 +168,31 @@ impl Handler {
             other => other,
         }
     }
+}
+
+/// Re-map a `FragmentError`'s line/hint so they reflect the user's original
+/// fragment, not the batch with our `\begin{preview}` + `\color[HTML]{...}`
+/// wrapping injected.
+///
+/// Specifically:
+///   - `line_in_fragment` is decremented by 1 to skip the `\begin{preview}`
+///     line that sits above every fragment in the batch.
+///   - `hint` has the leading `\color[HTML]{...}` stripped when present.
+///   - Same stripping applied to the `detail` block for clarity.
+fn adjust_fragment_error(
+    mut e: tip_protocol::messages::FragmentError,
+    color_cmd: &str,
+) -> tip_protocol::messages::FragmentError {
+    e.line_in_fragment = e.line_in_fragment.and_then(|l| l.checked_sub(1));
+    if let Some(h) = e.hint.as_ref() {
+        if let Some(stripped) = h.strip_prefix(color_cmd) {
+            e.hint = Some(stripped.to_string());
+        }
+    }
+    if let Some(d) = e.detail.as_ref() {
+        e.detail = Some(d.replace(color_cmd, ""));
+    }
+    e
 }
 
 /// Convert `#RRGGBB` or a named color to a LaTeX `\color[HTML]{RRGGBB}`.
@@ -289,6 +326,7 @@ mod tests {
                 color: "#000000".into(),
                 page_setup: None,
                 preamble: None,
+                display_math_width: None,
             }),
         });
         match resp.result {

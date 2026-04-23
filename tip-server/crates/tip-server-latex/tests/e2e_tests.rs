@@ -76,6 +76,7 @@ fn compile_fragment_returns_svg() {
             color: "#000000".into(),
             page_setup: None,
             preamble: Some("\\documentclass{article}\n\\usepackage{amsmath}\n".into()),
+            display_math_width: None,
         }),
     });
     match resp.result {
@@ -121,6 +122,7 @@ fn multiple_fragments_in_one_batch() {
             color: "#000000".into(),
             page_setup: None,
             preamble: None,
+            display_math_width: None,
         }),
     });
     match resp.result {

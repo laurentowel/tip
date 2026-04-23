@@ -46,6 +46,7 @@ fn bench(label: &str, preamble: &str, fragment_src: &str, fragments: Vec<(usize,
             color: "#000000".into(),
             page_setup: None,
             preamble: Some(preamble.into()),
+            display_math_width: None,
         }),
     });
     let elapsed = t0.elapsed();
@@ -85,6 +86,7 @@ fn bench_warm(label: &str, preamble: &str, src: &str, frags: Vec<(usize, usize)>
         color: "#000000".into(),
         page_setup: None,
         preamble: Some(preamble.into()),
+            display_math_width: None,
     };
     let t0 = Instant::now();
     server.request(&RequestMessage { id: 2, request: Request::CompileFragments(mk()) });

@@ -7,6 +7,37 @@ pub struct FragmentLocation {
     pub end: usize,
 }
 
+/// Severity of a fragment compilation error.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ErrorSeverity {
+    Error,
+    Warning,
+}
+
+/// Structured compilation error attached to a fragment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FragmentError {
+    pub severity: ErrorSeverity,
+    /// Single-line human-readable message.  E.g. "Undefined control
+    /// sequence: \\foo" or "Missing } inserted".
+    pub message: String,
+    /// Multi-line context / surrounding log lines if any.  Clients
+    /// present this as an expandable detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Line offset within the fragment (0-based).  For a one-line
+    /// fragment this is 0; for a multi-line display math it's the
+    /// offset from the fragment's first line.  Computed as
+    /// (l.M reported by LaTeX) − (fragment start line in batch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_in_fragment: Option<u32>,
+    /// The source text reported on the `l.M HINT` line.  Useful for
+    /// clients to locate the exact character range in the buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
 /// A compiled fragment result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentResult {
@@ -26,9 +57,14 @@ pub struct FragmentResult {
     /// when the backend can't report it reliably.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_pt: Option<f64>,
-    /// Compilation error message, if any.
+    /// Compilation error message, if any (one-line summary — mirrors
+    /// `error_detail.message` when the latter is present).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Structured error information (severity, hint, line).
+    /// When present, clients should prefer this over `error`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<FragmentError>,
 }
 
 // --- Requests ---
@@ -195,6 +231,7 @@ mod tests {
                 color: "#ffffff".into(),
                 page_setup: None,
                 preamble: None,
+            display_math_width: None,
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();
@@ -227,6 +264,7 @@ mod tests {
                     width_pt: 24.0,
                     font_size_pt: Some(11.0),
                     error: None,
+                    error_detail: None,
                 }],
             },
         };

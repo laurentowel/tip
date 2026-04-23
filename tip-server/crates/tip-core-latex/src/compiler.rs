@@ -50,6 +50,8 @@ pub struct FragmentOutput {
     /// across all fragments in a batch — it reflects the document class
     /// option (10pt / 11pt / 12pt).  None when the line was absent.
     pub font_size_pt: Option<f64>,
+    /// Structured error info (if LaTeX reported one for this snippet).
+    pub error_detail: Option<tip_protocol::messages::FragmentError>,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +148,7 @@ impl LatexCompiler {
         // Step 2: parse preview.sty markers from stdout
         let metrics = parse_preview_output(&stdout, fragments.len());
         let font_size_pt = parse_preview_fontsize(&stdout);
+        let errors_per_snippet = parse_preview_errors(&stdout, fragments.len());
 
         // Step 3: dvisvgm → N svg files
         //
@@ -198,6 +201,7 @@ impl LatexCompiler {
                             width_pt: m.width_pt,
                         })
                     });
+                    let error_detail = errors_per_snippet.get(i).cloned().flatten();
                     match dims {
                         Some(d) => results.push(Ok(FragmentOutput {
                             svg,
@@ -205,11 +209,23 @@ impl LatexCompiler {
                             depth_pt: d.depth_pt,
                             width_pt: d.width_pt,
                             font_size_pt,
+                            error_detail,
                         })),
-                        None => results.push(Err(format!(
-                            "fragment {} has no dimensions (svg viewBox missing, no log entry)",
-                            i + 1
-                        ))),
+                        None => {
+                            // If we have structured error info, surface that
+                            // as the failure message — much more useful than
+                            // "viewBox missing".
+                            let msg = error_detail
+                                .as_ref()
+                                .map(|e| e.message.clone())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "fragment {} has no dimensions (svg viewBox missing, no log entry)",
+                                        i + 1
+                                    )
+                                });
+                            results.push(Err(msg));
+                        }
                     }
                 }
                 Err(e) => results.push(Err(format!(
@@ -412,6 +428,199 @@ fn parse_snippet_ended(line: &str) -> Option<(usize, f64, f64, f64)> {
     Some((n, h, d, w))
 }
 
+/// Parse per-snippet error/warning blocks from preview.sty's stdout.
+///
+/// Returns a vector of length `n_fragments`, with `Some(FragmentError)`
+/// at index i when the i-th snippet had an error or warning.  Only the
+/// *first* error per snippet is retained (the most specific one; later
+/// cascades usually mask the root cause).
+///
+/// Format (with -file-line-error + auctex option):
+///
+/// ```text
+/// PATH:N: Preview: Snippet K started.
+/// ... (lines of source echo) ...
+/// PATH:M: Undefined control sequence.            ← error line
+/// <recently read> \undefinedcommand
+/// l.M $\undefinedcommand                          ← hint
+///                       $
+/// PATH:P: Preview: Snippet K ended.(H+DxW).
+/// ```
+///
+/// Warnings (no `path:line:` prefix):
+///
+/// ```text
+/// LaTeX Warning: ...
+/// Package hyperref Warning: ...
+/// ```
+fn parse_preview_errors(
+    stdout: &str,
+    n_fragments: usize,
+) -> Vec<Option<tip_protocol::messages::FragmentError>> {
+    use tip_protocol::messages::{ErrorSeverity, FragmentError};
+
+    let mut out: Vec<Option<FragmentError>> = vec![None; n_fragments];
+
+    let start_re = "Preview: Snippet ";
+    let ended_re = "ended.";
+
+    // State.
+    let mut current: Option<usize> = None;
+    let mut start_line: Option<u32> = None;
+    let mut pending_err: Option<(String, Option<u32>, String)> = None; // (msg, line, accumulated-detail)
+
+    let commit = |cur: &mut Option<(String, Option<u32>, String)>,
+                  out: &mut Vec<Option<FragmentError>>,
+                  idx: Option<usize>,
+                  start_line: Option<u32>| {
+        if let (Some((msg, line, detail)), Some(i)) = (cur.take(), idx) {
+            if i < out.len() && out[i].is_none() {
+                let severity = if is_warning(&msg) {
+                    ErrorSeverity::Warning
+                } else {
+                    ErrorSeverity::Error
+                };
+                let line_in_fragment = match (line, start_line) {
+                    (Some(l), Some(s)) if l >= s => Some(l - s),
+                    _ => None,
+                };
+                // Detail: the non-empty accumulated lines, joined.
+                let detail_opt = if detail.trim().is_empty() {
+                    None
+                } else {
+                    Some(detail.trim().to_string())
+                };
+                // Hint: try to extract from the `l.N HINT` line inside detail.
+                let hint = extract_hint(&detail);
+                out[i] = Some(FragmentError {
+                    severity,
+                    message: msg,
+                    detail: detail_opt,
+                    line_in_fragment,
+                    hint,
+                });
+            }
+        }
+    };
+
+    for line in stdout.lines() {
+        // Strip optional `PATH:N: ` prefix.
+        let (prefix_line, rest) = split_file_line_prefix(line);
+
+        // Snippet boundary?
+        if let Some(rest) = rest.strip_prefix(start_re) {
+            // Commit any pending error to the previous snippet.
+            commit(&mut pending_err, &mut out, current, start_line);
+            if let Some((k_str, tail)) = rest.split_once(' ') {
+                if let Ok(k) = k_str.parse::<usize>() {
+                    if tail.starts_with("started") {
+                        current = Some(k - 1);
+                        start_line = prefix_line;
+                        continue;
+                    } else if tail.starts_with(ended_re)
+                        || tail.starts_with("ended.")
+                    {
+                        // `ended.(H+DxW).` — just close the snippet.
+                        current = None;
+                        start_line = None;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Skip preview.sty's own annotations inside a snippet.
+        if rest.starts_with("Preview:") {
+            continue;
+        }
+
+        // Error line — the MESSAGE of a `path:line: MSG.` form, but only
+        // when we have a path:line: prefix (indicates a compiler event
+        // rather than a verbatim stdout line).
+        if prefix_line.is_some() && current.is_some() && !rest.is_empty() {
+            // Treat as a new error.  Commit any previous pending one first.
+            commit(&mut pending_err, &mut out, current, start_line);
+            pending_err = Some((rest.trim_end_matches('.').to_string(), prefix_line, String::new()));
+            continue;
+        }
+
+        // Warning line (no path:line: prefix).
+        if current.is_some() && is_warning(rest) {
+            commit(&mut pending_err, &mut out, current, start_line);
+            pending_err = Some((rest.trim().to_string(), None, String::new()));
+            continue;
+        }
+
+        // Accumulate detail for the current pending error.
+        if let Some((_, _, detail)) = pending_err.as_mut() {
+            if !line.is_empty() {
+                detail.push_str(line);
+                detail.push('\n');
+            }
+        }
+    }
+
+    // Close out any trailing error.
+    commit(&mut pending_err, &mut out, current, start_line);
+    out
+}
+
+/// If LINE starts with `PATH:N:`, return (Some(N), rest-after-colon-space).
+/// Otherwise (None, LINE).
+fn split_file_line_prefix(line: &str) -> (Option<u32>, &str) {
+    // We need to find the FIRST `:` then a digit sequence, then `: `.
+    // The path itself may contain colons on Windows; but in practice
+    // LaTeX file-line-error uses forward slashes.  Simple heuristic:
+    // scan for `:\d+: `.
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b':' {
+            let num_start = i + 1;
+            let mut j = num_start;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > num_start && j + 1 < bytes.len() && bytes[j] == b':' && bytes[j + 1] == b' ' {
+                let n_str = &line[num_start..j];
+                if let Ok(n) = n_str.parse::<u32>() {
+                    return (Some(n), &line[j + 2..]);
+                }
+            }
+        }
+        i += 1;
+    }
+    (None, line)
+}
+
+fn is_warning(msg: &str) -> bool {
+    msg.starts_with("LaTeX Warning:") || {
+        // Package NAME Warning: ...
+        if let Some(rest) = msg.strip_prefix("Package ") {
+            rest.find(" Warning:").is_some()
+        } else {
+            false
+        }
+    }
+}
+
+fn extract_hint(detail: &str) -> Option<String> {
+    // Look for a line `l.N HINT` and return HINT.
+    for line in detail.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("l.") {
+            if let Some(sp) = rest.find(' ') {
+                // Skip the line number, return the rest.
+                let hint = rest[sp + 1..].trim();
+                if !hint.is_empty() {
+                    return Some(hint.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parse `Preview: Fontsize 10pt` (or 11pt / 12pt) from preview.sty's stdout.
 /// Tolerates a file:line: prefix from file-line-error.
 fn parse_preview_fontsize(stdout: &str) -> Option<f64> {
@@ -482,6 +691,72 @@ Preview: Tightpage -32891 -32891 32891 32891
         assert!((m.depth_pt - 2.50).abs() < 0.01, "got {}", m.depth_pt);
         // width  = (1310720 + 32891 - (-32891)) / 65536 ≈ 21.00 pt
         assert!((m.width_pt - 21.00).abs() < 0.01, "got {}", m.width_pt);
+    }
+
+    #[test]
+    fn parses_file_line_prefix() {
+        assert_eq!(split_file_line_prefix("./x.tex:9: Undefined control sequence."),
+                   (Some(9), "Undefined control sequence."));
+        assert_eq!(split_file_line_prefix("/tmp/a.tex:42: Missing } inserted."),
+                   (Some(42), "Missing } inserted."));
+        assert_eq!(split_file_line_prefix("no prefix here"), (None, "no prefix here"));
+        assert_eq!(split_file_line_prefix("l.9 $\\undefinedcommand"),
+                   (None, "l.9 $\\undefinedcommand"));
+    }
+
+    #[test]
+    fn detects_warnings() {
+        assert!(is_warning("LaTeX Warning: Label `x' multiply defined"));
+        assert!(is_warning("Package hyperref Warning: ..."));
+        assert!(!is_warning("Undefined control sequence."));
+        assert!(!is_warning("Missing } inserted."));
+    }
+
+    #[test]
+    fn extracts_hint_from_detail() {
+        let detail = "<recently read> \\undefinedcommand\n\nl.9 $\\undefinedcommand\n$\n";
+        assert_eq!(extract_hint(detail).as_deref(), Some("$\\undefinedcommand"));
+    }
+
+    #[test]
+    fn parses_real_preview_error_block() {
+        use tip_protocol::messages::ErrorSeverity;
+        // Two snippets: first OK, second undefined cs.  Realistic stdout
+        // captured from a hand-run compile with auctex + file-line-error.
+        let stdout = r#"Preview: Fontsize 10pt
+./batch.tex:5: Preview: Snippet 1 started.
+<-><->
+
+l.5 \begin{preview}
+
+Preview: Tightpage -32891 -32891 32891 32891
+./batch.tex:7: Preview: Snippet 1 ended.(455111+54613x2586081).
+<-><->
+
+l.7 \end{preview}
+
+[1]
+./batch.tex:8: Preview: Snippet 2 started.
+<-><->
+
+l.8 \begin{preview}
+
+./batch.tex:9: Undefined control sequence.
+<recently read> \undefinedcommand
+
+l.9 $\undefinedcommand
+                      $
+./batch.tex:10: Preview: Snippet 2 ended.(0+0x0).
+"#;
+        let errs = parse_preview_errors(stdout, 2);
+        assert!(errs[0].is_none(), "snippet 1 should be clean, got {:?}", errs[0]);
+        let e = errs[1].as_ref().expect("snippet 2 should have an error");
+        assert_eq!(e.severity, ErrorSeverity::Error);
+        assert!(e.message.starts_with("Undefined control sequence"),
+                "got {:?}", e.message);
+        // Snippet 2 starts at line 8; error at line 9 → offset 1.
+        assert_eq!(e.line_in_fragment, Some(1));
+        assert_eq!(e.hint.as_deref(), Some("$\\undefinedcommand"));
     }
 
     #[test]
