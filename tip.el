@@ -83,6 +83,15 @@ These are previewed as block elements (centered, no baseline alignment)."
   :type '(repeat string)
   :group 'tip)
 
+(defcustom tip-render-figure nil
+  "If non-nil, render `#figure(...)' calls as whole-block previews.
+When enabled, the entire figure (body + caption) is treated as a single
+fragment; any diagram or math inside is not rendered separately.
+Buffer-local — set with `setq-local' per buffer."
+  :type 'boolean
+  :group 'tip
+  :local t)
+
 (defcustom tip-scale 'auto
   "Scaling factor for inline preview images.
 When `auto' (default), computed as emacs-font-size / 11.0 so that
@@ -421,6 +430,20 @@ Always sends the full buffer, ignoring narrowing."
               (name (treesit-node-text first-child t)))
     (member name tip-diagram-functions)))
 
+(defun tip--figure-node-p (node)
+  "Return non-nil if NODE is a `figure' function call."
+  (when-let* ((node)
+              (ntype (treesit-node-type node))
+              ((equal "call" (if (symbolp ntype) (symbol-name ntype) ntype)))
+              (first-child (treesit-node-child node 0))
+              (name (treesit-node-text first-child t)))
+    (equal name "figure")))
+
+(defun tip--renderable-call-p (node)
+  "Return non-nil if NODE is a diagram call or (when enabled) a figure call."
+  (or (tip--diagram-node-p node)
+      (and tip-render-figure (tip--figure-node-p node))))
+
 (defun tip-collect-fragment-locations (beg end &optional avoid-pos)
   "Collect math and diagram fragment byte positions in region BEG..END.
 Returns a list of alists with start/end keys.
@@ -444,8 +467,8 @@ Diagrams (matching `tip-diagram-functions') are included as fragments."
                  (not (and (>= avoid-pos (car pair))
                            (<= avoid-pos (cdr pair))))))
         (push pair ranges)))
-    ;; Collect diagram ranges by walking the tree
-    (when tip-diagram-functions
+    ;; Collect diagram ranges (and figure ranges when enabled) by walking the tree
+    (when (or tip-diagram-functions tip-render-figure)
       (let ((root (treesit-buffer-root-node 'typst)))
         (when root
           (setq ranges (nconc ranges
@@ -483,7 +506,7 @@ Returns a list of (BEG . END) ranges."
         (node-end (treesit-node-end node))
         (result nil))
     (when (and (<= node-start end) (>= node-end beg))
-      (if (and (tip--diagram-node-p node)
+      (if (and (tip--renderable-call-p node)
                (not (tip--inside-let-binding-p node)))
           (let ((start (max beg (1- node-start)))
                 (dend (min end node-end)))
@@ -805,6 +828,26 @@ Uses local tree-sitter node walk — O(depth) not O(buffer).
 Half-open interval: returns bounds only if BEG <= X < END."
   (let ((node (treesit-node-at x 'typst)))
     (or
+     ;; When figure rendering is on, prefer the enclosing figure call so that
+     ;; positions inside inner math/diagrams resolve to the fragment that was
+     ;; actually rendered.
+     (when tip-render-figure
+       (let ((n node) (found nil))
+         (while (and n (not found))
+           (if (tip--figure-node-p n)
+               (setq found n)
+             (setq n (treesit-node-parent n))))
+         (when (and (not found) (< x (point-max)) (eq (char-after x) ?#))
+           (setq n (treesit-node-at (1+ x) 'typst))
+           (while (and n (not found))
+             (if (tip--figure-node-p n)
+                 (setq found n)
+               (setq n (treesit-node-parent n)))))
+         (when (and found (not (tip--inside-let-binding-p found)))
+           (let ((beg (1- (treesit-node-start found)))
+                 (end (treesit-node-end found)))
+             (when (and (<= beg x) (< x end))
+               (cons beg end))))))
      ;; Check if we're inside a math node (walk up)
      ;; Skip math inside #let bindings (definitions, not rendered)
      (let ((n node))

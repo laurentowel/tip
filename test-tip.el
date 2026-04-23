@@ -152,6 +152,113 @@
     (tip-clear-buffer)
     (should (= (length (overlays-in (point-min) (point-max))) 0))))
 
+;;; * Figure rendering (tip-render-figure)
+
+(defun tip-test--setup-typst-buffer (content)
+  "Insert CONTENT into the current buffer and attach a typst treesit parser.
+Caller is responsible for being inside a `with-temp-buffer'."
+  (unless (treesit-language-available-p 'typst)
+    (ert-skip "typst tree-sitter grammar not installed"))
+  (insert content)
+  (treesit-parser-create 'typst))
+
+(defun tip-test--fragment-texts ()
+  "Return list of fragment substrings from `tip-collect-fragment-locations'.
+Converts byte offsets back to character positions."
+  (mapcar (lambda (frag)
+            (let* ((sbyte (1+ (alist-get "start" frag nil nil #'equal)))
+                   (ebyte (1+ (alist-get "end" frag nil nil #'equal)))
+                   (s (byte-to-position sbyte))
+                   (e (byte-to-position ebyte)))
+              (buffer-substring-no-properties s e)))
+          (tip-collect-fragment-locations (point-min) (point-max))))
+
+(ert-deftest tip-test-figure-with-diagram-flag-off ()
+  "With `tip-render-figure' nil, the inner diagram inside #figure is the
+fragment and the surrounding figure is NOT rendered."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  diagram(node((0,0), [A])),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure nil)
+          (tip-diagram-functions '("diagram")))
+      (let ((texts (tip-test--fragment-texts)))
+        (should (= 1 (length texts)))
+        (should (string-match-p "\\`[[:space:]]*diagram(" (car texts)))
+        (should-not (string-match-p "caption" (car texts)))))))
+
+(ert-deftest tip-test-figure-with-diagram-flag-on ()
+  "With `tip-render-figure' t, the whole #figure is the fragment and the
+inner diagram is swallowed (filtered as nested)."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  diagram(node((0,0), [A])),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure t)
+          (tip-diagram-functions '("diagram")))
+      (let ((texts (tip-test--fragment-texts)))
+        (should (= 1 (length texts)))
+        (should (string-prefix-p "#figure(" (car texts)))
+        (should (string-match-p "caption" (car texts)))))))
+
+(ert-deftest tip-test-figure-with-image-flag-off ()
+  "With `tip-render-figure' nil, a figure wrapping an image produces no
+fragments (image isn't in `tip-diagram-functions')."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  image(\"foo.png\"),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure nil)
+          (tip-diagram-functions '("diagram" "canvas" "cetz.canvas")))
+      (should (null (tip-collect-fragment-locations (point-min) (point-max)))))))
+
+(ert-deftest tip-test-figure-with-image-flag-on ()
+  "With `tip-render-figure' t, a figure wrapping an image IS rendered as a
+single fragment — the body type doesn't matter."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  image(\"foo.png\"),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure t)
+          (tip-diagram-functions '("diagram" "canvas" "cetz.canvas")))
+      (let ((texts (tip-test--fragment-texts)))
+        (should (= 1 (length texts)))
+        (should (string-prefix-p "#figure(" (car texts)))
+        (should (string-match-p "image(" (car texts)))))))
+
+(ert-deftest tip-test-figure-bounds-at-point-flag-on ()
+  "With `tip-render-figure' t, a position inside the inner diagram should
+resolve to the enclosing figure's bounds (so preview-toggle targets the
+actually-rendered fragment)."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  diagram(node((0,0), [A])),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure t)
+          (tip-diagram-functions '("diagram")))
+      (goto-char (point-min))
+      (search-forward "node")
+      (let* ((pos (point))
+             (bounds (tip--get-bounds-of-math-at-point pos))
+             (text (and bounds
+                        (buffer-substring-no-properties (car bounds) (cdr bounds)))))
+        (should bounds)
+        (should (string-prefix-p "#figure(" text))
+        (should (string-match-p "caption" text))))))
+
+(ert-deftest tip-test-figure-bounds-at-point-flag-off ()
+  "With `tip-render-figure' nil, a position inside the inner diagram
+resolves to the diagram bounds, not the enclosing figure."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#figure(\n  diagram(node((0,0), [A])),\n  caption: [c],\n)\n")
+    (let ((tip-render-figure nil)
+          (tip-diagram-functions '("diagram")))
+      (goto-char (point-min))
+      (search-forward "node")
+      (let* ((pos (point))
+             (bounds (tip--get-bounds-of-math-at-point pos))
+             (text (and bounds
+                        (buffer-substring-no-properties (car bounds) (cdr bounds)))))
+        (should bounds)
+        (should (string-match-p "\\`[[:space:]]*diagram(" text))
+        (should-not (string-match-p "caption" text))))))
+
 ;;; Run tests
 
 (when noninteractive
