@@ -2296,6 +2296,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tip-core-latex"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "tip-protocol",
+]
+
+[[package]]
 name = "tip-core-typst"
 version = "0.1.0"
 dependencies = [
@@ -2315,6 +2323,17 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "tip-server-latex"
+version = "0.1.0"
+dependencies = [
+ "openssl",
+ "serde_json",
+ "testkit",
+ "tip-core-latex",
+ "tip-protocol",
 ]
 
 [[package]]

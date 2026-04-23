@@ -1,0 +1,13 @@
+[package]
+name = "tip-server-latex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tip-core-latex = { path = "../tip-core-latex" }
+tip-protocol = { path = "../tip-protocol" }
+serde_json = "1"
+openssl = { workspace = true }
+
+[dev-dependencies]
+testkit = { path = "../../testkit" }
