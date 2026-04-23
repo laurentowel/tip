@@ -363,6 +363,34 @@ a figure returns nil (nothing renderable there)."
   (should (eq (tip-latex-classify-fragment "\\begin{equation}\nx\n\\end{equation}")
               'display-multi)))
 
+(ert-deftest tip-latex-test-refuse-when-includes-present ()
+  "Any live \\input/\\include/\\subimport anywhere in the buffer disables
+the backend — collect returns nil, bounds-at-point returns nil."
+  (dolist (cmd '("\\input{macros}" "\\include{chap1}" "\\subimport{sub}{file}"))
+    (with-temp-buffer
+      (delay-mode-hooks (latex-mode))
+      (insert "\\documentclass{article}\n")
+      (insert "\\begin{document}\n")
+      (insert "$x$ before " cmd " $y$ after.\n")
+      (insert "\\end{document}\n")
+      ;; Both entry points must short-circuit.
+      (should (null (tip-latex-collect-fragments (point-min) (point-max))))
+      (goto-char (point-min))
+      (search-forward "$x$")
+      (should (null (tip-latex-bounds-at-point (1- (point))))))))
+
+(ert-deftest tip-latex-test-commented-include-allowed ()
+  "A \\input inside a comment must NOT disable previewing."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "\\documentclass{article}\n")
+    (insert "% \\input{macros}  -- disabled\n")
+    (insert "\\begin{document}\n")
+    (insert "$x + y$\n")
+    (insert "\\end{document}\n")
+    (let ((frags (tip-latex-collect-fragments (point-min) (point-max))))
+      (should (= 1 (length frags))))))
+
 (ert-deftest tip-latex-test-regression-syntax-ppss-moves-point ()
   "Buffer mixing fragments + commented-out environments must not hang.
 Regression for the `syntax-ppss' side-effect bug: when called with a POS

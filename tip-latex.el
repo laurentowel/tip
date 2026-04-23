@@ -189,7 +189,11 @@ really a math opener (e.g. \\$ escape)."
 (defun tip-latex-collect-fragments (beg end &optional avoid-pos)
   "Collect math fragments in BEG..END.
 Returns a list of alists with \"start\"/\"end\" byte offsets, matching
-`tip-collect-fragments's contract."
+`tip-collect-fragments's contract.
+
+Returns nil (and emits a one-time warning) when the buffer contains
+`\\input', `\\include', or `\\subimport' — multi-file support is v2."
+  (unless (tip-latex--refuse-if-includes)
   (let ((verbatim (tip-latex--verbatim-ranges beg end))
         (re (tip-latex--math-begin-re))
         ranges)
@@ -221,13 +225,17 @@ Returns a list of alists with \"start\"/\"end\" byte offsets, matching
       (mapcar (lambda (pair)
                 `(("start" . ,(1- (position-bytes (car pair))))
                   ("end"   . ,(1- (position-bytes (cdr pair))))))
-              outer))))
+              outer)))))
 
 ;;; * bounds at point
 
 (defun tip-latex-bounds-at-point (pos)
   "Return (BEG . END) of the math fragment at POS, or nil.
-Half-open: valid only when BEG <= POS < END."
+Half-open: valid only when BEG <= POS < END.
+
+Returns nil when the buffer has live `\\input'/`\\include'/`\\subimport'
+(see `tip-latex-collect-fragments')."
+  (unless (tip-latex--refuse-if-includes)
   (let* ((scan-beg (max (point-min) (- pos 4096)))
          (scan-end (min (point-max) (+ pos 4096)))
          (frags (tip-latex-collect-fragments scan-beg scan-end)))
@@ -237,12 +245,54 @@ Half-open: valid only when BEG <= POS < END."
              (e (byte-to-position (1+ (alist-get "end"   frag nil nil #'equal)))))
          (when (and (<= b pos) (< pos e))
            (cons b e))))
-     frags)))
+     frags))))
 
-;;; * preamble extraction
+;;; * multi-file detection
 
 (defvar-local tip-latex--include-warned nil
-  "t once we've warned about \\input/\\include in this buffer's preamble.")
+  "t once we've warned about \\input/\\include/\\subimport in this buffer.")
+
+(defvar-local tip-latex--has-includes 'unknown
+  "Buffer-local cache: `t', `nil', or the sentinel `unknown'.
+Set by `tip-latex--buffer-has-includes-p' on first check; invalidated
+when the buffer is modified (see `tip-latex--on-change').")
+
+(defun tip-latex--include-re ()
+  "Regex matching `\\input', `\\include', or `\\subimport' commands."
+  "\\\\\\(input\\|include\\|subimport\\)\\b")
+
+(defun tip-latex--buffer-has-includes-p ()
+  "Return non-nil if the buffer contains a live \\input/\\include/\\subimport.
+Skips matches inside comments.  Cached in `tip-latex--has-includes'."
+  (if (not (eq tip-latex--has-includes 'unknown))
+      tip-latex--has-includes
+    (setq tip-latex--has-includes
+          (save-excursion
+            (goto-char (point-min))
+            (catch 'found
+              (while (re-search-forward (tip-latex--include-re) nil t)
+                (save-excursion
+                  (unless (nth 4 (syntax-ppss (match-beginning 0)))
+                    (throw 'found t))))
+              nil)))))
+
+(defun tip-latex--on-change (&rest _)
+  "Invalidate the include-scan cache when the buffer changes."
+  (setq tip-latex--has-includes 'unknown))
+
+(add-hook 'after-change-functions #'tip-latex--on-change)
+
+(defun tip-latex--refuse-if-includes ()
+  "If the buffer has \\input/\\include, warn once and return t.
+Callers that refuse to produce previews use the return value to short-circuit."
+  (when (tip-latex--buffer-has-includes-p)
+    (unless tip-latex--include-warned
+      (setq tip-latex--include-warned t)
+      (message "tip-latex: buffer contains \\input/\\include/\\subimport — \
+multi-file support is v2; previews disabled in this buffer."))
+    t))
+
+;;; * preamble extraction
 
 (defun tip-latex--preamble-end ()
   "Return position of `\\begin{document}' or nil."
@@ -251,27 +301,13 @@ Half-open: valid only when BEG <= POS < END."
     (when (re-search-forward "\\\\begin{document}" nil t)
       (match-beginning 0))))
 
-(defun tip-latex--preamble-contains-includes (str)
-  "Return non-nil if STR looks like it contains \\input/\\include/\\subimport."
-  (string-match-p "\\\\\\(input\\|include\\|subimport\\)\\b" str))
-
 (defun tip-latex-build-preamble ()
   "Return the document preamble as a string.
-If the buffer has no `\\begin{document}', return
-`tip-latex-default-preamble'.  If the preamble contains `\\input',
-`\\include', or `\\subimport', emit a one-time warning — multi-file
-support is v2+."
-  (let* ((pend (tip-latex--preamble-end))
-         (preamble (if pend
-                       (buffer-substring-no-properties (point-min) pend)
-                     tip-latex-default-preamble)))
-    (when (and pend
-               (not tip-latex--include-warned)
-               (tip-latex--preamble-contains-includes preamble))
-      (setq tip-latex--include-warned t)
-      (message "tip-latex: preamble contains \\input/\\include; multi-file \
-support is v2 — previews may fail until then."))
-    preamble))
+If the buffer has no `\\begin{document}', return `tip-latex-default-preamble'."
+  (let ((pend (tip-latex--preamble-end)))
+    (if pend
+        (buffer-substring-no-properties (point-min) pend)
+      tip-latex-default-preamble)))
 
 ;;; * classification
 
