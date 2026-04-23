@@ -426,6 +426,116 @@ user has narrowed to a section below \\begin{document}."
       (should (tip-latex--buffer-has-includes-p))
       (should (null (tip-latex-collect-fragments (point-min) (point-max)))))))
 
+;;; * Error navigation, eldoc, and Flymake backend
+
+(defun tip-test--mk-error-overlay (beg end severity message &optional hint)
+  "Create a tip error overlay in the current buffer for tests."
+  (let ((ov (make-overlay beg end)))
+    (overlay-put ov 'tip 'tip)
+    (overlay-put ov 'tip-error-severity severity)
+    (overlay-put ov 'tip-error-message message)
+    (overlay-put ov 'tip-error-hint hint)
+    (overlay-put ov 'tip-frag-beg beg)
+    (overlay-put ov 'tip-frag-end end)
+    (overlay-put ov 'face 'tip-error-face)
+    ov))
+
+(ert-deftest tip-test-error-overlays-sorted ()
+  "`tip--error-overlays' returns error overlays sorted by start."
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc ddddd")
+    ;; Create overlays out of order.
+    (tip-test--mk-error-overlay 13 18 'error "C-error")
+    (tip-test--mk-error-overlay 1 6 'error "A-error")
+    (tip-test--mk-error-overlay 7 12 'warning "B-warning")
+    ;; Non-error tip overlay shouldn't appear.
+    (let ((ov (make-overlay 19 23))) (overlay-put ov 'tip 'tip))
+    (let ((ovs (tip--error-overlays)))
+      (should (= 3 (length ovs)))
+      (should (equal (mapcar (lambda (o) (overlay-get o 'tip-error-message)) ovs)
+                     '("A-error" "B-warning" "C-error"))))))
+
+(ert-deftest tip-test-next-error-moves-forward-and-wraps ()
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc ddddd")
+    (tip-test--mk-error-overlay 1 6 'error "A")
+    (tip-test--mk-error-overlay 13 18 'error "C")
+    (goto-char 1)
+    (tip-next-error)
+    (should (= 13 (point)))
+    ;; Past the last → wrap back to first.
+    (tip-next-error)
+    (should (= 1 (point)))))
+
+(ert-deftest tip-test-next-error-no-wrap-errors ()
+  (with-temp-buffer
+    (insert "aaaaa bbbbb")
+    (tip-test--mk-error-overlay 1 6 'error "A")
+    (goto-char 1)
+    ;; With NO-WRAP, walking past the last fragment should user-error.
+    (should-error (tip-next-error t) :type 'user-error)))
+
+(ert-deftest tip-test-prev-error-moves-backward ()
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc")
+    (tip-test--mk-error-overlay 1 6 'error "A")
+    (tip-test--mk-error-overlay 13 18 'error "C")
+    (goto-char 13)
+    (tip-prev-error)
+    (should (= 1 (point)))
+    ;; Before the first → wrap to last.
+    (goto-char 1)
+    (tip-prev-error)
+    (should (= 13 (point)))))
+
+(ert-deftest tip-test-next-error-empty-buffer ()
+  (with-temp-buffer
+    (insert "no errors here")
+    (should-error (tip-next-error) :type 'user-error)
+    (should-error (tip-prev-error) :type 'user-error)))
+
+(ert-deftest tip-test-eldoc-returns-error-at-point ()
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc")
+    (tip-test--mk-error-overlay 7 12 'error "Undefined control sequence" "$\\foo")
+    ;; Outside overlay → no message.
+    (goto-char 2)
+    (let (captured)
+      (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+      (should (null captured)))
+    ;; Inside overlay → callback receives the message.
+    (goto-char 9)
+    (let (captured)
+      (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+      (should captured)
+      (should (string-match-p "Undefined control sequence" captured))
+      (should (string-match-p "\\[error\\]" captured)))))
+
+(ert-deftest tip-test-flymake-backend-reports-all-errors ()
+  "`tip--flymake-backend' emits one flymake-diagnostic per error overlay."
+  (require 'flymake)
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc")
+    (tip-test--mk-error-overlay 1 6 'error "E1" "hint-1")
+    (tip-test--mk-error-overlay 7 12 'warning "W1" nil)
+    (let (captured)
+      (tip--flymake-backend (lambda (diags) (setq captured diags)))
+      (should (= 2 (length captured)))
+      (let ((d1 (car captured)))
+        (should (eq :error (flymake-diagnostic-type d1)))
+        (should (string-match-p "E1" (flymake-diagnostic-text d1)))
+        (should (string-match-p "hint-1" (flymake-diagnostic-text d1))))
+      (let ((d2 (cadr captured)))
+        (should (eq :warning (flymake-diagnostic-type d2)))))))
+
+(ert-deftest tip-test-flymake-mode-toggles-backend ()
+  (require 'flymake)
+  (with-temp-buffer
+    (tip-flymake-mode 1)
+    (should (memq #'tip--flymake-backend flymake-diagnostic-functions))
+    (tip-flymake-mode -1)
+    (should-not (memq #'tip--flymake-backend flymake-diagnostic-functions))))
+
 (ert-deftest tip-test-compile-cache-basic-roundtrip ()
   "put → get should return the same plist with an updated :ts."
   (with-temp-buffer
