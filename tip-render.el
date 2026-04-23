@@ -18,6 +18,18 @@
 (require 'subr-x)
 (require 'tip-backend)
 
+;; Customs and helpers that live in tip.el / tip-live.el — forward-declared.
+(defvar tip-transparent-bg)
+(defvar tip-display-indicator)
+(defvar tip-scale)
+(defvar tip-baseline-offset)
+(defvar tip-display-math-padding)
+(defvar tip-echo-errors)
+(defvar tip-mode)
+(defvar tip-live--content-cache)
+(defvar tip-echo--content-cache)
+(declare-function tip--color-to-hex "tip" (color))
+
 ;;; * in-buffer compile cache (LRU)
 
 (defvar-local tip--compile-cache nil
@@ -139,17 +151,7 @@ Returns non-nil on success.  Equivalent to one iteration of
         (overlay-put ov 'before-string tip-display-indicator))
       t)))
 
-;; Customs and helpers that live in tip.el — forward-declared.
-(defvar tip-scale)
-(defvar tip-baseline-offset)
-(defvar tip-display-math-padding)
-(defvar tip-transparent-bg)
-(defvar tip-display-indicator)
-(defvar tip-echo-errors)
-(defvar tip-mode)
-(defvar tip-live--content-cache)
-(defvar tip-echo--content-cache)
-(declare-function tip--color-to-hex "tip" (color))
+;; (Forward declarations at top of file.)
 
 ;;; * SVG utilities
 

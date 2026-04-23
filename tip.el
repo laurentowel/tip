@@ -34,6 +34,8 @@
 (require 'tip-live)
 (require 'tip-errors)
 
+(declare-function tip-kodama-mode "tip-kodama" (&optional arg))
+
 ;;; * custom settings
 
 (defcustom tip-enable-debug nil
@@ -305,8 +307,7 @@ including all scope-defining statements visible at this position."
     (unless bounds
       (user-error "No math or figure fragment at point"))
     (let ((byte-start (1- (position-bytes (car bounds))))
-          (byte-end (1- (position-bytes (cdr bounds))))
-          (buf (current-buffer)))
+          (byte-end (1- (position-bytes (cdr bounds)))))
       (tip--sync-buffer)
       (tip--send-request
        "debug_skeleton"

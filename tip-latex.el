@@ -119,6 +119,42 @@ between BEG and END."
 
 ;;; * finding fragment ends
 
+(defun tip-latex--find-close-dollar (start double-p)
+  "Find the closing `$' (or `$$' when DOUBLE-P) for a fragment at START.
+Scans forward from past the opener while tracking brace depth;
+skips any `$' that sits inside `{...}' (so `\\text{$a$}' does NOT
+close an outer `$...$').  Honors `\\'-escaping and line comments.
+Returns the position AFTER the closing delimiter, or nil."
+  (save-excursion
+    (goto-char (+ start (if double-p 2 1)))
+    (let ((depth 0) found)
+      (while (and (not found) (< (point) (point-max)))
+        (let ((c (char-after)))
+          (cond
+           ;; Escape: consume next char unconditionally.
+           ((eq c ?\\)
+            (forward-char 2))
+           ;; Line comment: skip to end of line.
+           ((eq c ?%)
+            (end-of-line)
+            (unless (eobp) (forward-char)))
+           ((eq c ?{)
+            (cl-incf depth) (forward-char))
+           ((eq c ?})
+            (cl-decf depth) (forward-char))
+           ((and (eq c ?$) (zerop depth))
+            (let ((p (point)))
+              (cond
+               ;; $$ close for dollar2.
+               ((and double-p (eq (char-after (1+ p)) ?$))
+                (setq found (+ p 2)))
+               ;; $ close for dollar1 (but not a $$ pair).
+               ((and (not double-p) (not (eq (char-after (1+ p)) ?$)))
+                (setq found (1+ p)))
+               (t (forward-char)))))
+           (t (forward-char)))))
+      found)))
+
 (defun tip-latex--find-close (opener-kind start)
   "Find the end of a fragment starting at START with given OPENER-KIND.
 OPENER-KIND is one of the symbols `bracket' (\\[), `paren' (\\(),
@@ -135,21 +171,9 @@ Returns end position (after the closer) or nil if unterminated."
       (when (search-forward "\\)" nil t)
         (point)))
      ((eq opener-kind 'dollar2)
-      (goto-char (+ start 2))
-      (when (search-forward "$$" nil t)
-        (point)))
+      (tip-latex--find-close-dollar start t))
      ((eq opener-kind 'dollar1)
-      (goto-char (1+ start))
-      (let (found)
-        (while (and (not found)
-                    (re-search-forward "\\$" nil t))
-          ;; Accept only non-escaped, not doubled.
-          (let ((p (match-beginning 0)))
-            (when (and (not (eq (char-before p) ?\\))
-                       (not (eq (char-after (1+ p)) ?$))
-                       (not (eq (char-before p) ?$)))
-              (setq found (match-end 0)))))
-        found))
+      (tip-latex--find-close-dollar start nil))
      ((and (consp opener-kind) (eq (car opener-kind) 'env))
       (goto-char start)
       (when (re-search-forward
@@ -218,19 +242,28 @@ only whitespace between its delimiters.  Used to skip empty math like
 ;;; * fragment collection
 
 (defun tip-latex-collect-fragments (beg end &optional avoid-pos)
-  "Collect math fragments in BEG..END.
+  "Collect math fragments intersecting BEG..END.
 Returns a list of alists with \"start\"/\"end\" byte offsets, matching
 `tip-collect-fragments's contract.
+
+Always scans from `point-min' (widened) so the detector starts in a
+known text-mode state, then filters to fragments that overlap
+BEG..END.  This avoids a subtle bug where scanning from BEG lands
+in the middle of an existing `$...$' fragment: the first `$' seen
+is the closing one, which the detector then treats as an opener
+and fuses with a subsequent fragment.  Correct-always > cheap-wrong.
 
 Returns nil (and emits a one-time warning) when the buffer contains
 `\\input', `\\include', or `\\subimport' — multi-file support is v2."
   (unless (tip-latex--refuse-if-includes)
-  (let ((verbatim (tip-latex--verbatim-ranges beg end))
+  (let ((scan-beg (point-min))
+        (scan-end (point-max))
+        (verbatim (tip-latex--verbatim-ranges (point-min) (point-max)))
         (re (tip-latex--math-begin-re))
         ranges)
     (save-excursion
-      (goto-char beg)
-      (while (re-search-forward re end t)
+      (goto-char scan-beg)
+      (while (re-search-forward re scan-end t)
         (let* ((kind (tip-latex--opener-kind-at-match))
                (start (tip-latex--opener-start)))
           ;; Skip `\$' (escaped dollar): a single-$ match whose preceding
@@ -259,17 +292,22 @@ Returns nil (and emits a one-time warning) when the buffer contains
                                          (<= avoid-pos fend))))
                   (unless (or blank within-avoid)
                     (push (cons start fend) ranges))
-                  ;; Always advance past the close, even for skipped blanks
-                  ;; — otherwise the next re-search-forward may re-match
-                  ;; the blank fragment's closer and produce garbage.
-                  (if (>= fend end)
-                      (goto-char end)
+                  ;; Advance past the close (and clamp to scan-end so the
+                  ;; next re-search-forward doesn't get an out-of-range
+                  ;; bound).
+                  (if (>= fend scan-end)
+                      (goto-char scan-end)
                     (goto-char fend)))))))))
-    (let ((outer (tip-latex--outermost (nreverse ranges))))
+    (let* ((outer (tip-latex--outermost (nreverse ranges)))
+           ;; Filter to fragments that intersect the caller's [beg, end].
+           (in-range (seq-filter
+                      (lambda (r)
+                        (and (< (car r) end) (> (cdr r) beg)))
+                      outer)))
       (mapcar (lambda (pair)
                 `(("start" . ,(1- (position-bytes (car pair))))
                   ("end"   . ,(1- (position-bytes (cdr pair))))))
-              outer)))))
+              in-range)))))
 
 ;;; * bounds at point
 

@@ -32,8 +32,10 @@
 (ert-deftest tip-test-customization-defaults ()
   (should (eq tip-enable-debug nil))
   (should (or (null tip-server-executable) (stringp tip-server-executable)))
-  (should (numberp tip-scale))
-  (should (> tip-scale 0)))
+  ;; tip-scale is 'auto by default (computes scale from font size); allow
+  ;; either the sentinel symbol or a positive number.
+  (should (or (eq tip-scale 'auto)
+              (and (numberp tip-scale) (> tip-scale 0)))))
 
 (ert-deftest tip-test-interactive-commands-exist ()
   (should (fboundp 'tip-ensure))
@@ -45,14 +47,25 @@
   (should (fboundp 'tip-clear-buffer))
   (should (fboundp 'tip-clear-all))
   (should (fboundp 'tip-shutdown))
-  (should (fboundp 'tip-live-setup))
-  (should (fboundp 'tip-live-teardown))
-  (should (fboundp 'tip-mode)))
+  ;; Live preview became a minor mode rather than paired setup/teardown
+  ;; fns — the mode function itself covers both directions.
+  (should (fboundp 'tip-live-mode))
+  (should (fboundp 'tip-mode))
+  ;; New since error-handling arc.
+  (should (fboundp 'tip-next-error))
+  (should (fboundp 'tip-prev-error))
+  (should (fboundp 'tip-flymake-mode)))
 
 ;;; * Image spec building
 
 (ert-deftest tip-test-make-image-spec ()
   "Image spec should have correct structure and reasonable ascent."
+  ;; In --batch, `face-attribute 'default :font' returns the symbol
+  ;; `unspecified', which breaks `font-get' inside tip--make-image-spec.
+  ;; The function is exercised by the full e2e live-render test; this
+  ;; unit test is kept for GUI runs.
+  (unless (display-graphic-p)
+    (ert-skip "image spec needs a graphical display"))
   (let ((spec (tip--make-image-spec "<svg></svg>" 12.0 2.0)))
     (should (consp spec))
     (let ((img (car spec)))
@@ -681,6 +694,63 @@ user has narrowed to a section below \\begin{document}."
     (insert "\\end{document}\n")
     (let ((frags (tip-latex-collect-fragments (point-min) (point-max))))
       (should (= 1 (length frags))))))
+
+(ert-deftest tip-latex-test-nested-dollar-in-text ()
+  "An inner `$...$' inside `\\text{}' must not close the outer `$...$'.
+The classic case: $oeuo \\text{$a$}$.  Brace-aware close scanning
+should keep the whole expression as one fragment."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "x $oeuo \\text{$a$}$ and $b$ z.\n")
+    (let ((texts (mapcar (lambda (f)
+                           (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                                 (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                             (buffer-substring-no-properties
+                              (byte-to-position sb) (byte-to-position eb))))
+                         (tip-latex-collect-fragments (point-min) (point-max)))))
+      (should (equal texts '("$oeuo \\text{$a$}$" "$b$"))))))
+
+(ert-deftest tip-latex-test-nested-dollar-double ()
+  "Inner `$...$' inside a `$$...$$' display fragment."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "$$ \\text{inner $x$ here} $$\n")
+    (let ((texts (mapcar (lambda (f)
+                           (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                                 (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                             (buffer-substring-no-properties
+                              (byte-to-position sb) (byte-to-position eb))))
+                         (tip-latex-collect-fragments (point-min) (point-max)))))
+      (should (= 1 (length texts)))
+      (should (string-prefix-p "$$" (car texts)))
+      (should (string-suffix-p "$$" (car texts))))))
+
+(ert-deftest tip-latex-test-regression-subrange-midfragment ()
+  "When collect-fragments is called with a range that starts INSIDE
+an existing `$...$' fragment, the first `$' seen must NOT be treated
+as an opener (it's the closing delimiter of a fragment whose opener
+sits before BEG).  Regression for a bug where tip-send-nbd's window
+range cut through a fragment and fused two fragments together."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "Fragment one: $a + b$ and Fragment two: $x + y$ done.\n")
+    (let* ((mid (save-excursion
+                  (goto-char (point-min))
+                  (search-forward "a + b")
+                  (point)))
+           (tail (point-max))
+           (frags (tip-latex-collect-fragments mid tail))
+           (texts (mapcar (lambda (f)
+                            (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                                  (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                              (buffer-substring-no-properties
+                               (byte-to-position sb) (byte-to-position eb))))
+                          frags)))
+      ;; The sub-range starts inside `$a + b$' but the detector should
+      ;; still return BOTH whole fragments (since fragment one overlaps
+      ;; the sub-range at its tail), NOT a fused garbage fragment.
+      (should (= 2 (length texts)))
+      (should (equal texts '("$a + b$" "$x + y$"))))))
 
 (ert-deftest tip-latex-test-regression-syntax-ppss-moves-point ()
   "Buffer mixing fragments + commented-out environments must not hang.
