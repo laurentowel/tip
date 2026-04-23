@@ -363,6 +363,25 @@ a figure returns nil (nothing renderable there)."
   (should (eq (tip-latex-classify-fragment "\\begin{equation}\nx\n\\end{equation}")
               'display-multi)))
 
+(ert-deftest tip-latex-test-regression-syntax-ppss-moves-point ()
+  "Buffer mixing fragments + commented-out environments must not hang.
+Regression for the `syntax-ppss' side-effect bug: when called with a POS
+argument, `syntax-ppss' moves point to POS, which made the collector
+re-match the same regex hit forever if the second call rewound point to
+a position before the most recent match-end."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "Before $a$ and\n"
+            "% \\begin{equation*}\n"
+            "% \\mathrm{commented}\n"
+            "% \\end{equation*}\n"
+            "then $b$ and $c$ end.\n")
+    (let ((t0 (float-time))
+          (frags (tip-latex-collect-fragments (point-min) (point-max))))
+      ;; Must complete quickly (no infinite loop).
+      (should (< (- (float-time) t0) 0.5))
+      (should (= 3 (length frags))))))
+
 (ert-deftest tip-latex-test-backend-registered ()
   (let ((b (alist-get 'latex tip-backends)))
     (should b)

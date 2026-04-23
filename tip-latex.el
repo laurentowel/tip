@@ -206,7 +206,8 @@ Returns a list of alists with \"start\"/\"end\" byte offsets, matching
                      (eq (char-after (1+ start)) ?$))
             (setq kind 'dollar2))
           (when (and kind start
-                     (not (nth 4 (syntax-ppss start)))    ; not in comment
+                     ;; syntax-ppss with POS moves point — save around it.
+                     (save-excursion (not (nth 4 (syntax-ppss start))))
                      (not (tip-latex--in-ranges-p start verbatim)))
             (let ((fend (tip-latex--find-close kind start)))
               (when (and fend
