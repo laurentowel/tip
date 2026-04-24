@@ -273,7 +273,49 @@ the compile-time preamble from `tip-project-root-path'.
 Skips the preamble (text before `\\begin{document}') so math-env
 openers inside `\\newcommand' bodies — e.g. `\\newcommand{\\beq}
 {\\begin{equation}}' — don't get picked up as fragments.  Child
-files (no `\\begin{document}') are scanned from the top."
+files (no `\\begin{document}') are scanned from the top.
+
+Full-buffer results are cached buffer-locally keyed on
+`buffer-chars-modified-tick' — any edit anywhere (point motion
+doesn't count) invalidates.  `avoid-pos' is applied AFTER the
+cache hit, so cursor-movement callers share one scan per buffer
+edit."
+  (let ((cached (tip-latex--fragments-cached beg end avoid-pos)))
+    (if cached
+        cached
+      (tip-latex--fragments-compute beg end avoid-pos))))
+
+(defvar-local tip-latex--fragments-cache nil
+  "(TICK . FRAGMENTS) — buffer-wide fragment list from the last
+successful scan, valid while `buffer-chars-modified-tick' matches
+TICK.  FRAGMENTS covers the whole buffer; callers that ask for a
+narrower window filter it down.")
+
+(defun tip-latex--fragments-cached (beg end avoid-pos)
+  "Serve a buffer-wide cache hit if available.  Returns the filtered
+sublist matching BEG..END / AVOID-POS, or nil when the cache is
+stale (caller recomputes + refreshes the cache)."
+  (when (and tip-latex--fragments-cache
+             (= (car tip-latex--fragments-cache)
+                (buffer-chars-modified-tick)))
+    (tip-latex--fragments-filter (cdr tip-latex--fragments-cache)
+                                  beg end avoid-pos)))
+
+(defun tip-latex--fragments-filter (frags beg end avoid-pos)
+  "Apply the caller's window + avoid-pos to a cached FRAGS list."
+  (let ((beg-byte (1- (position-bytes beg)))
+        (end-byte (1- (position-bytes end))))
+    (seq-filter
+     (lambda (f)
+       (let ((fs (alist-get "start" f nil nil #'equal))
+             (fe (alist-get "end"   f nil nil #'equal)))
+         (and (< fs end-byte) (> fe beg-byte)
+              (not (and avoid-pos
+                        (let ((ap-byte (1- (position-bytes avoid-pos))))
+                          (and (>= ap-byte fs) (< ap-byte fe))))))))
+     frags)))
+
+(defun tip-latex--fragments-compute (beg end avoid-pos)
   (let* ((preamble-end (tip-latex--preamble-end))
          (scan-beg (if preamble-end
                        (max (point-min) preamble-end)
@@ -319,16 +361,15 @@ files (no `\\begin{document}') are scanned from the top."
                   (if (>= fend scan-end)
                       (goto-char scan-end)
                     (goto-char fend)))))))))
+    ;; Compute buffer-wide list, cache it, then filter + avoid for the caller.
     (let* ((outer (tip-latex--outermost (nreverse ranges)))
-           ;; Filter to fragments that intersect the caller's [beg, end].
-           (in-range (seq-filter
-                      (lambda (r)
-                        (and (< (car r) end) (> (cdr r) beg)))
-                      outer)))
-      (mapcar (lambda (pair)
-                `(("start" . ,(1- (position-bytes (car pair))))
-                  ("end"   . ,(1- (position-bytes (cdr pair))))))
-              in-range))))
+           (all (mapcar (lambda (pair)
+                          `(("start" . ,(1- (position-bytes (car pair))))
+                            ("end"   . ,(1- (position-bytes (cdr pair))))))
+                        outer)))
+      (setq tip-latex--fragments-cache
+            (cons (buffer-chars-modified-tick) all))
+      (tip-latex--fragments-filter all beg end avoid-pos))))
 
 ;;; * bounds at point
 

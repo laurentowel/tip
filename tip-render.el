@@ -415,9 +415,12 @@ diagnostic is echoed and later errors get minimal visual weight."
              ;; string (no structured `error_detail'); LaTeX populates
              ;; both.  Synthesize minimal severity/message from `err'
              ;; so navigation/eldoc/flymake don't silently drop Typst
-             ;; errors.
-             (err-severity (or (alist-get 'severity err-detail)
-                               (and err 'error)))
+             ;; errors.  Normalize severity to a symbol: json-parse
+             ;; hands us "warning" / "error" strings, and earlier
+             ;; client code assumed a symbol.
+             (err-severity (let ((s (or (alist-get 'severity err-detail)
+                                        (and err 'error))))
+                             (if (stringp s) (intern s) s)))
              (err-message (or (alist-get 'message err-detail) err))
              (err-hint (alist-get 'hint err-detail))
              (err-line (alist-get 'line_in_fragment err-detail))
