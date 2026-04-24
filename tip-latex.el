@@ -286,20 +286,51 @@ edit."
       (tip-latex--fragments-compute beg end avoid-pos))))
 
 (defvar-local tip-latex--fragments-cache nil
-  "(TICK . FRAGMENTS) — buffer-wide fragment list from the last
-successful scan, valid while `buffer-chars-modified-tick' matches
-TICK.  FRAGMENTS covers the whole buffer; callers that ask for a
-narrower window filter it down.")
+  "(TICK . FRAGMENTS) — buffer-wide fragment list from the most
+recent scan.  TICK records the `buffer-chars-modified-tick' at
+scan time.  The cache is served even when stale: during active
+editing the rescan is idle-debounced (see
+`tip-latex--fragments-schedule-rescan').  Preview-toggle only
+cares whether point is inside SOME fragment; boundary drift of a
+few characters mid-type is invisible because `$' delimiters
+rarely move during ordinary editing.")
+
+(defvar-local tip-latex--fragments-rescan-timer nil
+  "Idle timer scheduled by `tip-latex--fragments-schedule-rescan'.")
+
+(defcustom tip-latex-fragments-rescan-idle 0.3
+  "Seconds of idleness before a buffer-changed LaTeX file gets
+its fragment list recomputed.  Lower = fresher boundaries at the
+cost of more scan work during rapid typing."
+  :type 'number :group 'tip)
 
 (defun tip-latex--fragments-cached (beg end avoid-pos)
-  "Serve a buffer-wide cache hit if available.  Returns the filtered
-sublist matching BEG..END / AVOID-POS, or nil when the cache is
-stale (caller recomputes + refreshes the cache)."
-  (when (and tip-latex--fragments-cache
-             (= (car tip-latex--fragments-cache)
-                (buffer-chars-modified-tick)))
+  "Serve a buffer-wide cache hit if one exists.  Stale cache is
+still served — `after-change-functions' has already kicked off an
+idle rescan to refresh it."
+  (when tip-latex--fragments-cache
     (tip-latex--fragments-filter (cdr tip-latex--fragments-cache)
                                   beg end avoid-pos)))
+
+(defun tip-latex--fragments-schedule-rescan (&rest _)
+  "Registered on `after-change-functions'.  Kicks an idle-timer
+rescan so the cache catches up once the user pauses.  Doesn't
+block the current edit."
+  (when (timerp tip-latex--fragments-rescan-timer)
+    (cancel-timer tip-latex--fragments-rescan-timer))
+  (let ((buf (current-buffer)))
+    (setq tip-latex--fragments-rescan-timer
+          (run-with-idle-timer
+           tip-latex-fragments-rescan-idle nil
+           (lambda ()
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (setq tip-latex--fragments-rescan-timer nil)
+                 (unless (and tip-latex--fragments-cache
+                              (= (car tip-latex--fragments-cache)
+                                 (buffer-chars-modified-tick)))
+                   (tip-latex--fragments-compute
+                    (point-min) (point-max) nil)))))))))
 
 (defun tip-latex--fragments-filter (frags beg end avoid-pos)
   "Apply the caller's window + avoid-pos to a cached FRAGS list."
@@ -423,8 +454,12 @@ comments.  Cached in `tip-latex--has-includes'."
                 nil))))))
 
 (defun tip-latex--on-change (&rest _)
-  "Invalidate the include-scan cache when the buffer changes."
-  (setq tip-latex--has-includes 'unknown))
+  "Invalidate the include-scan cache when the buffer changes.
+Also schedule an idle-debounced fragment-list rescan — the
+fragment cache stays served (slightly stale) until the idle timer
+refreshes it, so continuous typing doesn't re-scan per keystroke."
+  (setq tip-latex--has-includes 'unknown)
+  (tip-latex--fragments-schedule-rescan))
 
 (add-hook 'after-change-functions #'tip-latex--on-change)
 
