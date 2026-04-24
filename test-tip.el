@@ -814,6 +814,25 @@ a position before the most recent match-end."
       (should (< (- (float-time) t0) 0.5))
       (should (= 3 (length frags))))))
 
+(ert-deftest tip-latex-test-preamble-ignores-comments ()
+  "A `%' comment in the preamble mentioning `\\\\begin{document}' must
+NOT terminate preamble extraction early.  Regression for a demo file
+whose header comment described the preamble's span — the literal
+`\\\\begin{document}' inside the comment fooled the scanner, dropping
+every `\\\\newcommand' declared below the comment."
+  (with-temp-buffer
+    (delay-mode-hooks (latex-mode))
+    (insert "\\documentclass{article}\n")
+    (insert "% preamble spans up to \\begin{document}\n")
+    (insert "\\newcommand{\\D}{d}\n")
+    (insert "\\begin{document}\n")
+    (insert "Body: $\\D f$\n")
+    (insert "\\end{document}\n")
+    (let ((pre (tip-latex-build-preamble)))
+      ;; The real \begin{document} is what should terminate the preamble,
+      ;; not the one in the comment — so \newcommand must be captured.
+      (should (string-match-p "\\\\newcommand" pre)))))
+
 (ert-deftest tip-latex-test-backend-registered ()
   (let ((b (alist-get 'latex tip-backends)))
     (should b)

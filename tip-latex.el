@@ -396,13 +396,29 @@ multi-file support is v2; previews disabled in this buffer."))
 (defun tip-latex--preamble-end ()
   "Return position of `\\begin{document}' (buffer-wide) or nil.
 Ignores narrowing — a narrow-to-section should still see the real
-preamble."
+preamble.  Skips matches inside `%'-comments so prose or example
+text in a comment doesn't prematurely terminate the preamble."
   (save-restriction
     (widen)
     (save-excursion
       (goto-char (point-min))
-      (when (re-search-forward "\\\\begin{document}" nil t)
-        (match-beginning 0)))))
+      (let (found)
+        (while (and (not found)
+                    (re-search-forward "\\\\begin{document}" nil t))
+          (let ((ls (line-beginning-position))
+                (mb (match-beginning 0)))
+            ;; Comment if a `%' sits on the same line before the match
+            ;; and isn't itself escaped (`\\%' is a literal percent).
+            (unless (save-excursion
+                      (goto-char ls)
+                      (catch 'comment
+                        (while (re-search-forward "%" mb t)
+                          (unless (and (> (match-beginning 0) ls)
+                                       (eq (char-before (match-beginning 0)) ?\\))
+                            (throw 'comment t)))
+                        nil))
+              (setq found mb))))
+        found))))
 
 (defun tip-latex-build-preamble ()
   "Return the document preamble as a string.

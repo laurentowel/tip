@@ -321,10 +321,76 @@ fn write_batch_tex(
     Ok(())
 }
 
+/// Return the preamble up to (but not including) the real `\begin{document}`
+/// — i.e. skipping any occurrence inside a `%` comment.  Without this,
+/// a preamble comment that mentions the phrase (e.g. "macros between
+/// \documentclass and \begin{document}") prematurely truncates the
+/// preamble and drops every declaration below it.
 fn strip_begin_document(preamble: &str) -> &str {
-    match preamble.find("\\begin{document}") {
-        Some(i) => &preamble[..i],
-        None => preamble,
+    let needle = "\\begin{document}";
+    let mut pos = 0;
+    while let Some(rel) = preamble[pos..].find(needle) {
+        let abs = pos + rel;
+        // Locate the start of the line containing this match.
+        let line_start = preamble[..abs].rfind('\n').map_or(0, |i| i + 1);
+        // Comment if there's an unescaped `%` on the line before `abs`.
+        let prefix = &preamble[line_start..abs];
+        let mut in_comment = false;
+        let bytes = prefix.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                // Escaped character — skip both.
+                i += 2;
+            } else if bytes[i] == b'%' {
+                in_comment = true;
+                break;
+            } else {
+                i += 1;
+            }
+        }
+        if !in_comment {
+            return &preamble[..abs];
+        }
+        pos = abs + needle.len();
+    }
+    preamble
+}
+
+#[cfg(test)]
+mod strip_begin_tests {
+    use super::*;
+
+    #[test]
+    fn strip_begin_document_plain() {
+        let pre = "\\documentclass{article}\n\\begin{document}\nbody\n";
+        assert_eq!(strip_begin_document(pre), "\\documentclass{article}\n");
+    }
+
+    #[test]
+    fn strip_begin_document_skips_comment() {
+        let pre = "\\documentclass{article}\n\
+                   % comment mentioning \\begin{document} should be ignored\n\
+                   \\newcommand{\\D}[2]{\\frac{#1}{#2}}\n\
+                   \\begin{document}\nbody\n";
+        let result = strip_begin_document(pre);
+        assert!(result.contains("\\newcommand"),
+                "newcommand must survive preamble extraction, got: {:?}",
+                result);
+        assert!(!result.contains("body"));
+    }
+
+    #[test]
+    fn strip_begin_document_escaped_percent_is_not_comment() {
+        // `\%` is a literal %, not a comment start.
+        let pre = "\\documentclass{article}\n\
+                   100\\% complete — \\begin{document} here still counts as real\n\
+                   body";
+        // The real \begin{document} on this line should be seen.
+        let result = strip_begin_document(pre);
+        assert!(!result.contains("body"),
+                "unescaped \\begin{{document}} still terminates, got: {:?}",
+                result);
     }
 }
 
