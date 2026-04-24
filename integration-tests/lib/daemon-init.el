@@ -2,24 +2,41 @@
 
 ;;; Commentary:
 ;; Loaded when the test daemon starts.  Sets up load-path, loads
-;; tip.el + the typst-ts-mode environment, then the tip-test
-;; framework.  Spec files under integration-tests/specs/ are loaded
-;; on demand by the runner (not here) so source edits during
-;; development can be picked up without daemon restart.
+;; tip.el, then the tip-test framework.  Spec files under
+;; integration-tests/specs/ are loaded on demand by the runner
+;; (not here) so source edits during development can be picked
+;; up without daemon restart.
+;;
+;; This init is TEST-only.  Showcase-specific setup (fullscreen,
+;; themes, font scaling, i18n, demo-it) lives in showcase/lib/
+;; daemon-init.el and does not pollute the test harness.
 
 ;;; Code:
 
 (setq inhibit-startup-screen t
       make-backup-files nil
       auto-save-default nil
-      create-lockfiles nil
-      ;; No lingering messages buffer spam from package setup.
-      inhibit-message nil)
+      create-lockfiles nil)
 
-;; Locate the repo root + specs dir.  The nix wrapper sets TIP_REPO
-;; and TIP_IT_DIR to absolute store paths since daemon-init's own
-;; file path ends up inside the nix store and can't be used for
-;; sibling lookup.  Outside nix we self-locate.
+;; Hide UI chrome for cleaner test framing.
+(menu-bar-mode -1)
+(when (fboundp 'tool-bar-mode) (tool-bar-mode -1))
+(when (fboundp 'scroll-bar-mode) (scroll-bar-mode -1))
+(push '(menu-bar-lines . 0) default-frame-alist)
+(push '(tool-bar-lines . 0) default-frame-alist)
+(push '(vertical-scroll-bars . nil) default-frame-alist)
+
+;; Keep the echo area to a single line (verbose tip messages
+;; otherwise grow the minibuffer window).
+(setq resize-mini-windows nil
+      max-mini-window-height 1)
+
+;; Locate repo root + specs dir.  Env vars override (set by the
+;; nix wrapper which absolute-paths into the store).
+(defvar tip-test--repo-root nil)
+(defvar tip-test--specs-dir nil)
+(defvar tip-test--lib-dir nil)
+
 (let* ((this-file (or load-file-name buffer-file-name))
        (lib-dir (file-name-directory this-file))
        (default-it-dir (file-name-directory (directory-file-name lib-dir)))
@@ -27,41 +44,36 @@
                            (directory-file-name default-it-dir)))
        (repo-root (or (getenv "TIP_REPO") default-repo-root))
        (it-dir (or (getenv "TIP_IT_DIR") default-it-dir))
-       ;; TIP_IT_SPECS overrides the default specs/ dir — lets the
-       ;; showcase runner point at a different set of files without
-       ;; touching the main suite.
        (specs-override (getenv "TIP_IT_SPECS")))
-  (setq tip-test--repo-root repo-root)
-  (setq tip-test--specs-dir
-        (or specs-override (expand-file-name "specs" it-dir)))
-  (setq tip-test--lib-dir (expand-file-name "lib" it-dir))
+  (setq tip-test--repo-root repo-root
+        tip-test--specs-dir (or specs-override
+                                (expand-file-name "specs" it-dir))
+        tip-test--lib-dir (expand-file-name "lib" it-dir))
   (add-to-list 'load-path repo-root)
   (add-to-list 'load-path lib-dir)
-  ;; Optional: typst tree-sitter grammar path (set by the nix app).
-  ;; Outside nix the grammar is expected to be on the user's default
-  ;; `treesit-extra-load-path' or installed via `treesit-install-
-  ;; language-grammar'.
   (let ((gp (getenv "TIP_IT_GRAMMAR_PATH")))
     (when (and gp (file-directory-p gp))
       (add-to-list 'treesit-extra-load-path (file-name-as-directory gp))))
   (load (expand-file-name "tip.el" repo-root) nil t)
   (require 'tip-test))
 
-(defvar tip-test--repo-root nil)
-(defvar tip-test--specs-dir nil)
-(defvar tip-test--lib-dir nil)
-
-;; Pick up the eyeball-pace from the env so run.sh can pass it in.
+;; Inter-test sleep for eye-balling results.
 (let ((v (getenv "TIP_IT_SLEEP")))
   (when (and v (not (string-empty-p v)))
     (setq tip-test--inter-test-sleep
           (condition-case _ (string-to-number v) (error 0)))))
 
-;; Turn on debug spray so failures have breadcrumbs — the echo area
-;; mirrors into *Messages* and, under run.sh, into stderr via our
-;; `message' advice.
-(setq tip-enable-debug t)
-(setq tip-verbose t)
+;; Debug + verbose ON for the test harness — failures need breadcrumbs.
+(setq tip-enable-debug t
+      tip-verbose t)
+
+;; Optional showcase extensions.  When SHOWCASE_INIT is set, load a
+;; supplemental init file (typically showcase/lib/daemon-init.el) that
+;; adds the demo-it + i18n + fullscreen + recorder bracket.  Tests
+;; without SHOWCASE_INIT keep a minimal surface.
+(let ((extra (getenv "TIP_SHOWCASE_INIT")))
+  (when (and extra (file-readable-p extra))
+    (load extra nil t)))
 
 (defun tip-test-daemon-run ()
   "Load every spec in the specs/ dir, run all tests, return summary string."

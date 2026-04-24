@@ -42,6 +42,9 @@ stalling the whole suite.")
 eye-balling results — with 0 the whole suite can blur past too
 fast to watch.  Set via env TIP_IT_SLEEP read at daemon startup.")
 
+;; i18n + showcase narration helpers moved to `showcase/lib/narrate.el'
+;; so the integration-test harness has no dependency on demo-it.
+
 ;;; ---- spec registration ----
 
 (defmacro tip-test-deftest (name &rest body)
@@ -314,9 +317,7 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
 (defun tip-test-run-all ()
   "Run every registered test in order of registration.  Returns
 a plist (:results LIST :passed N :failed N :skipped N).  Skipped
-tests (via `ert-skip' — e.g. \"no graphical display\") don't count
-as failures; they appear as SKIP in the report and leave the exit
-status clean."
+tests (via `ert-skip') don't count as failures."
   (let ((results nil) (passed 0) (failed 0) (skipped 0))
     (dolist (cell (reverse tip-test--tests))
       (let* ((name (car cell))
