@@ -8,6 +8,8 @@
 
 pub mod compiler;
 pub mod document;
+pub mod project;
 
 pub use compiler::{FragmentOutput, LatexCompiler, LatexError};
 pub use document::DocumentStore;
+pub use project::{ProjectError, Script, TexProject};

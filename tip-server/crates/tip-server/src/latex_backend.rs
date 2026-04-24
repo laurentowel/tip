@@ -7,16 +7,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tip_core_latex::{DocumentStore, LatexCompiler};
+use tip_core_latex::{DocumentStore, LatexCompiler, TexProject};
 use tip_protocol::messages::*;
 
 pub struct LatexBackend {
     documents: DocumentStore,
     /// Per-uri project root, set by `handle_sync` from
-    /// `SyncParams::project_root'.  Used as `cwd' for the latex
-    /// subprocess so `\includegraphics' and `\input' resolve against
-    /// the user's chosen root.
+    /// `SyncParams::project_root'.  Keys are URIs sent by the client
+    /// (currently plain filesystem paths, not `file://`).
     roots: HashMap<String, PathBuf>,
+    /// Loaded `TexProject` per root.  Lazy: created on first sync for
+    /// a given root; kept alive across compiles so the include graph
+    /// walk only happens once per editing session.
+    projects: HashMap<PathBuf, TexProject>,
 }
 
 impl LatexBackend {
@@ -24,12 +27,25 @@ impl LatexBackend {
         Self {
             documents: DocumentStore::new(),
             roots: HashMap::new(),
+            projects: HashMap::new(),
         }
     }
 
     pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
         if let Some(root) = params.project_root.as_deref() {
-            self.roots.insert(params.uri.clone(), PathBuf::from(root));
+            let root_path = PathBuf::from(root);
+            self.roots.insert(params.uri.clone(), root_path.clone());
+            // Materialize the project on first use; then push the dirty
+            // buffer content in so compile-time preamble walks see what
+            // the editor sees, not a stale on-disk copy.
+            if !self.projects.contains_key(&root_path) {
+                if let Ok(p) = TexProject::load(&root_path) {
+                    self.projects.insert(root_path.clone(), p);
+                }
+            }
+            if let Some(project) = self.projects.get_mut(&root_path) {
+                let _ = project.sync(&params.uri, params.content.clone());
+            }
         } else {
             self.roots.remove(&params.uri);
         }
@@ -59,13 +75,27 @@ impl LatexBackend {
             };
         }
 
-        // Preamble comes from the client; default if empty.
-        let preamble = params.preamble.as_deref().unwrap_or_default();
-        let preamble = if preamble.trim().is_empty() {
-            "\\documentclass{article}\n\\usepackage{amsmath,amssymb}\n"
-        } else {
-            preamble
-        };
+        // Preamble: prefer the multi-file project walk when we have
+        // one — that way a fragment in sections/intro.tex picks up the
+        // \documentclass + \newcommand from main.tex automatically.
+        // Fallback chain: client-sent preamble → hardcoded default.
+        let project_preamble = self
+            .roots
+            .get(&params.uri)
+            .and_then(|root| self.projects.get(root))
+            .and_then(|p| p.preamble_for(&params.uri).ok())
+            .filter(|s| !s.trim().is_empty());
+        let client_preamble = params.preamble.as_deref().unwrap_or_default();
+        let preamble: &str = project_preamble
+            .as_deref()
+            .or_else(|| {
+                if client_preamble.trim().is_empty() {
+                    None
+                } else {
+                    Some(client_preamble)
+                }
+            })
+            .unwrap_or("\\documentclass{article}\n\\usepackage{amsmath,amssymb}\n");
 
         // Inject color into the preamble via \color{...} in the body? Simplest:
         // prepend a \color directive to each fragment.  Keep it inline so

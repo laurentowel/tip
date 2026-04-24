@@ -266,9 +266,9 @@ in the middle of an existing `$...$' fragment: the first `$' seen
 is the closing one, which the detector then treats as an opener
 and fuses with a subsequent fragment.  Correct-always > cheap-wrong.
 
-Returns nil (and emits a one-time warning) when the buffer contains
-`\\input', `\\include', or `\\subimport' — multi-file support is v2."
-  (unless (tip-latex--refuse-if-includes)
+Multi-file projects are supported: fragments in a child file are
+detected locally; the server walks the project graph to assemble
+the compile-time preamble from `tip-project-root-path'."
   (let ((scan-beg (point-min))
         (scan-end (point-max))
         (verbatim (tip-latex--verbatim-ranges (point-min) (point-max)))
@@ -320,7 +320,7 @@ Returns nil (and emits a one-time warning) when the buffer contains
       (mapcar (lambda (pair)
                 `(("start" . ,(1- (position-bytes (car pair))))
                   ("end"   . ,(1- (position-bytes (cdr pair))))))
-              in-range)))))
+              in-range))))
 
 ;;; * bounds at point
 
@@ -328,9 +328,7 @@ Returns nil (and emits a one-time warning) when the buffer contains
   "Return (BEG . END) of the math fragment at POS, or nil.
 Half-open: valid only when BEG <= POS < END.
 
-Returns nil when the buffer has live `\\input'/`\\include'/`\\subimport'
-(see `tip-latex-collect-fragments')."
-  (unless (tip-latex--refuse-if-includes)
+Multi-file projects are supported by the server-side graph walk."
   (let* ((scan-beg (max (point-min) (- pos 4096)))
          (scan-end (min (point-max) (+ pos 4096)))
          (frags (tip-latex-collect-fragments scan-beg scan-end)))
@@ -340,7 +338,7 @@ Returns nil when the buffer has live `\\input'/`\\include'/`\\subimport'
              (e (byte-to-position (1+ (alist-get "end"   frag nil nil #'equal)))))
          (when (and (<= b pos) (< pos e))
            (cons b e))))
-     frags))))
+     frags)))
 
 ;;; * multi-file detection
 
