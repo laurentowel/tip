@@ -301,6 +301,23 @@ We tried using rayon to compile fragments in parallel. Result: only 10% speedup 
 
 **Page clipping with `height: auto`**: Typst's auto page height doesn't fully account for glyph ink bounds beyond the content box. Upstream: https://github.com/typst/typst/issues/1028. Solved by rendering with large margins (20pt) and cropping SVG to ink bounds post-render.
 
+## Plain TeX and ConTeXt — Not Supported, Workaround
+
+The LaTeX backend depends on `preview.sty`, which is LaTeX-only (~900 lines, shipout hooks + `! Preview: Snippet N ended.(h+dxw)` stdout markers + tightpage cropping). Plain TeX and ConTeXt have no equivalent; reimplementing preview.sty for plain is moderate work (~200–400 lines of plain TeX covering tightpage, color specials, error-mode snippet separators, env auto-wrap hacks).
+
+We chose **not** to reimplement. The user-side workaround is a thin LaTeX shim:
+
+```tex
+% shim.tex
+\documentclass{article}
+\usepackage{amsmath,amssymb}
+\begin{document}
+\input{their-plain-file.tex}
+\end{document}
+```
+
+Then point `tip-project-root-path` at `shim.tex` in `.dir-locals.el`. The multi-file machinery (TexProject) reads the plain file via `\input` and renders its math fragments. Three user-side lines vs. a new codepath on our end; revisit only if a real user asks.
+
 ## HTML-Targeting Documents and Kodama
 
 ### Critical quirks for future agents
