@@ -135,8 +135,19 @@ impl LatexBackend {
                             // wrapping.  See write_batch_tex in compiler.rs.
                             let error_detail =
                                 frag.error_detail.map(|e| adjust_fragment_error(e, &color_cmd));
-                            let err_msg =
-                                error_detail.as_ref().map(|e| e.message.clone());
+                            // `error' is the render-blocking signal; warnings
+                            // (`! LaTeX Warning:' etc.) carry diagnostic info
+                            // but don't invalidate the SVG.  Common arxiv case:
+                            // `\ref{eq:foo}' produces a warning in a per-fragment
+                            // compile because the label lives in another
+                            // fragment; the math still rendered fine.
+                            let err_msg = error_detail.as_ref().and_then(|e| {
+                                if matches!(e.severity, tip_protocol::messages::ErrorSeverity::Error) {
+                                    Some(e.message.clone())
+                                } else {
+                                    None
+                                }
+                            });
                             results.push(FragmentResult {
                                 start: loc.start,
                                 end: loc.end,

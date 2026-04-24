@@ -428,7 +428,13 @@ diagnostic is echoed and later errors get minimal visual weight."
         ;; produces a partial SVG even on error — we intentionally do
         ;; NOT display that garbled image; user needs to see the source
         ;; to fix it.
-        (when (and frag-beg frag-end (or err err-detail))
+        ;;
+        ;; Warnings (severity = warning) are a separate case: the SVG
+        ;; DID render correctly, the warning is informational.  Those
+        ;; fall through to the success path and attach a `⚑' hint
+        ;; via a secondary overlay below.
+        (when (and frag-beg frag-end (or err err-detail)
+                   (not (eq err-severity 'warning)))
           (when tip-echo-errors
             (message "TIP [%s]: %s" (or err-severity "error")
                      (or err-message err "compile failed")))
@@ -472,11 +478,14 @@ diagnostic is echoed and later errors get minimal visual weight."
             ;; when the underline covers a smaller span.
             (overlay-put ov 'tip-frag-beg frag-beg)
             (overlay-put ov 'tip-frag-end frag-end)))
-        ;; Success path — only when we have a valid SVG AND no error_detail.
+        ;; Success path — valid SVG AND no render-blocking error.
+        ;; Warnings are tolerated: the SVG is good, we'll attach the
+        ;; warning as metadata on the overlay so flymake / eldoc still
+        ;; surface it.
         (when (and frag-beg frag-end (> (length svg-data) 0)
                    (> (or height-pt 0) 0.01)
                    (> (or width-pt 0) 0.01)
-                   (not err-detail)
+                   (or (null err-detail) (eq err-severity 'warning))
                    (not err)
                    (not (string-match-p "width=\"0pt\"" svg-data)))
           (dolist (ov (overlays-in frag-beg frag-end))
@@ -524,6 +533,19 @@ diagnostic is echoed and later errors get minimal visual weight."
             (overlay-put ov 'display display)
             (overlay-put ov 'modification-hooks
                          (list #'tip--invalidate-on-modification))
+            ;; If the fragment rendered but emitted a warning (e.g.
+            ;; `\ref{foo}' resolving to ??), stamp the warning onto
+            ;; the image overlay so flymake / eldoc / tip-next-error
+            ;; still see it.  The image itself stays displayed.
+            (when (eq err-severity 'warning)
+              (overlay-put ov 'tip-error-severity 'warning)
+              (overlay-put ov 'tip-error-message err-message)
+              (overlay-put ov 'tip-error-hint err-hint)
+              (overlay-put ov 'tip-error-line err-line)
+              (overlay-put ov 'tip-error-detail err-full)
+              (overlay-put ov 'tip-frag-beg frag-beg)
+              (overlay-put ov 'tip-frag-end frag-end)
+              (overlay-put ov 'help-echo (or err-message err)))
             (when (and is-single-line-display tip-display-indicator)
               (overlay-put ov 'before-string tip-display-indicator)))))))))
 
