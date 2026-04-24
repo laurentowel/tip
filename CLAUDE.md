@@ -301,6 +301,52 @@ We tried using rayon to compile fragments in parallel. Result: only 10% speedup 
 
 **Page clipping with `height: auto`**: Typst's auto page height doesn't fully account for glyph ink bounds beyond the content box. Upstream: https://github.com/typst/typst/issues/1028. Solved by rendering with large margins (20pt) and cropping SVG to ink bounds post-render.
 
+## LaTeX Parser — Planned Refactor and Tree-sitter Direction
+
+The regex/`syntax-ppss` parser in `tip-latex.el` currently handles
+fragment detection, preamble extraction, include scanning, and magic
+comments.  Perf under rapid editing required buffer-wide caching + an
+idle-debounced rescan (see commits `b794581`, `311f4d8`).  That cache
+machinery is a short-term stopgap; long-term we want tree-sitter.
+
+**Planned file split** (not yet done):
+
+- `tip-latex.el` — thin: backend registration, `tip-latex-build-preamble`,
+  project-root discovery UX, `classify-fragment`, session-file handling.
+- `tip-latex-parse.el` — dispatcher.  `defcustom tip-latex-parser`
+  (`'regex` default).  Forwards `collect-fragments` / `bounds-at-point`
+  / `preamble-end` / `has-includes-p` / `magic-comment-root` /
+  `verbatim-ranges` to the configured parser.  Public surface (what
+  other tip modules call) stays identical.
+- `tip-latex-parse-regex.el` — current implementation.  **The cache +
+  `after-change-functions` idle timer live here, not in the dispatcher.**
+  These are parser-internal concerns.
+- `tip-latex-parse-treesit.el` — lazy-loaded when the user sets
+  `tip-latex-parser` to `'treesit`.  Uses `treesit.el' directly (no
+  major-mode dep — no `latex-ts-mode' exists yet, but `treesit-parser-create'
+  works standalone).
+
+**Grammar**: use `alex-pinkus/tree-sitter-latex`
+(https://github.com/latex-lsp/tree-sitter-latex), the one texlab uses.
+Well-maintained, correctly handles `$...$` / `\[...\]` / `\begin{equation}` /
+`\verb`/verbatim envs / `\newcommand` bodies.  Install via
+`M-x tip-latex-install-treesit-grammar' (same pattern as typst-ts-mode's
+grammar install — `treesit-install-language-grammar' + explicit URL).
+
+**Promotion criteria**: tree-sitter becomes the default when it
+(a) handles ≥90% of arxiv papers in `arxiv-sampler/sample.py` (matches
+or beats the regex baseline of 9/10), AND (b) matches or beats the
+current perf numbers on a 45-page paper: 1.8 ms/call cursor movement,
+~2 ms/keystroke during typing.  Concrete bar on both axes, not either.
+
+**Emacs-side vs Rust-side tree-sitter**: fragment detection stays
+Emacs-side — no IPC round-trip per keystroke, `treesit.el` is builtin
+in 29+, local to the buffer, no mid-edit sync.  Rust-side would be
+right only if a non-emacs client lands (vscode, web), or if the server
+needs the AST for preamble walking in child files (TexProject).  The
+protocol already sends full buffer content on `sync`, so the Rust side
+can parse independently if it grows a reason to.
+
 ## Plain TeX and ConTeXt — Not Supported, Workaround
 
 The LaTeX backend depends on `preview.sty`, which is LaTeX-only (~900 lines, shipout hooks + `! Preview: Snippet N ended.(h+dxw)` stdout markers + tightpage cropping). Plain TeX and ConTeXt have no equivalent; reimplementing preview.sty for plain is moderate work (~200–400 lines of plain TeX covering tightpage, color specials, error-mode snippet separators, env auto-wrap hacks).
