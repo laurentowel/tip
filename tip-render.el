@@ -24,6 +24,7 @@
 (defvar tip-scale)
 (defvar tip-baseline-offset)
 (defvar tip-display-math-padding)
+(defvar tip-image-face)
 (defvar tip-echo-errors)
 (defvar tip-mode)
 (defvar tip-live--content-cache)
@@ -326,11 +327,22 @@ RENDERED-PT is the backend's native render size (see
                                  50)))
                      (max 0 (min 100 (- pct tip-baseline-offset)))))))
     (list (cons 'image
-                (list :type 'svg
-                      :data svg-data
-                      :height `(,height-em . em)
-                      :ascent ascent
-                      :pointer 'hand)))))
+                (append (list :type 'svg
+                              :data svg-data
+                              :height `(,height-em . em)
+                              :ascent ascent
+                              :pointer 'hand)
+                        ;; When `tip-image-face' is non-nil, pin the
+                        ;; image's currentColor source to that face —
+                        ;; useful to stop the rendered math from
+                        ;; inheriting `font-latex-math-face' or other
+                        ;; buffer-text-at-position fontification.  When
+                        ;; nil (default), Emacs picks whatever face is
+                        ;; at the image position, which is the feature
+                        ;; most users enjoy (math tints with headings,
+                        ;; emph, etc.).
+                        (when tip-image-face
+                          (list :face tip-image-face)))))))
 
 ;;; * error-overlay helpers
 

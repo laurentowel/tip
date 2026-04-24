@@ -148,6 +148,21 @@ background color (and swapped on theme change)."
   :type 'boolean
   :group 'tip)
 
+(defcustom tip-image-face nil
+  "Face used as the image overlay's color source.
+When nil (default), the rendered math picks up `currentColor' from
+whatever face Emacs applies at the image's position — so math inside
+a heading inherits the heading face, math inside an `emph' inherits
+italic-ish coloring, and so on.  Some users find this behavior
+pleasant; others find it distracting when major modes fontify math
+delimiters (e.g. `font-latex-math-face' giving all math a purple
+tint).  Set to `default' to pin every overlay to the default face,
+ignoring the fontification beneath.  Any face symbol works — you
+could also pin to `shadow', `font-lock-comment-face', etc."
+  :type '(choice (const :tag "Inherit from face at point (default)" nil)
+                 (face :tag "Pin to face"))
+  :group 'tip)
+
 (defcustom tip-cursor-inside-overlay '(bar . 2)
   "Cursor shape to use while point sits on a tip image overlay.
 Emacs draws the regular block cursor at the overlay's pixel area,
