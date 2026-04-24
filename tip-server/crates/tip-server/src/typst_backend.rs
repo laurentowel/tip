@@ -94,7 +94,13 @@ impl TypstBackend {
                 &content,
                 frag_loc.start,
                 frag_loc.end,
-                &params.color,
+                // Always render with the STANDIN_HEX sentinel, not the
+                // client's color.  The post-render pass below rewrites
+                // that sentinel to SVG's `currentColor', so Emacs picks
+                // the actual foreground from the face at display time.
+                // Author-specified `#text(fill: red)` etc. passes
+                // through untouched.
+                tip_protocol::svg_color::STANDIN_HEX,
                 params.page_setup.as_deref(),
                 params.preamble.as_deref(),
             ) {
@@ -102,7 +108,10 @@ impl TypstBackend {
                     results.push(FragmentResult {
                         start: frag_loc.start,
                         end: frag_loc.end,
-                        svg: output.svg,
+                        svg: tip_protocol::svg_color::fills_to_current_color(
+                            &output.svg,
+                            tip_protocol::svg_color::STANDIN_HEX,
+                        ),
                         height_pt: output.height_pt,
                         depth_pt: output.depth_pt,
                         width_pt: output.width_pt,
@@ -145,7 +154,7 @@ impl TypstBackend {
             &content,
             params.start,
             params.end,
-            &params.color,
+            tip_protocol::svg_color::STANDIN_HEX,
             params.page_setup.as_deref(),
             params.preamble.as_deref(),
         ) {
@@ -153,7 +162,10 @@ impl TypstBackend {
                 fragment: FragmentResult {
                     start: params.start,
                     end: params.end,
-                    svg: output.svg,
+                    svg: tip_protocol::svg_color::fills_to_current_color(
+                        &output.svg,
+                        tip_protocol::svg_color::STANDIN_HEX,
+                    ),
                     height_pt: output.height_pt,
                     depth_pt: output.depth_pt,
                     width_pt: output.width_pt,

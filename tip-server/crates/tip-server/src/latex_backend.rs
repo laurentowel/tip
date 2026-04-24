@@ -97,10 +97,14 @@ impl LatexBackend {
             })
             .unwrap_or("\\documentclass{article}\n\\usepackage{amsmath,amssymb}\n");
 
-        // Inject color into the preamble via \color{...} in the body? Simplest:
-        // prepend a \color directive to each fragment.  Keep it inline so
-        // fragments that are \begin{equation} still work.
-        let color_cmd = color_command(&params.color);
+        // Inject a STAND-IN color via \color{...} in the body.  We
+        // ALWAYS use STANDIN_HEX, not the client's color — dvisvgm bakes
+        // that value into every fill attribute, then the post-render
+        // pass below rewrites it to `currentColor' so Emacs picks the
+        // foreground at display time (org-latex-preview technique).
+        // Author colors in the source (`{\color{red}...}`) stay intact
+        // because we only match the sentinel value.
+        let color_cmd = color_command(tip_protocol::svg_color::STANDIN_HEX);
         let wrapped: Vec<String> = fragment_srcs
             .iter()
             .map(|s| format!("{}{}", color_cmd, s))
@@ -148,10 +152,23 @@ impl LatexBackend {
                                     None
                                 }
                             });
+                            // The fragment was rendered with STANDIN_HEX as
+                            // its \color; rewrite every occurrence to SVG's
+                            // `currentColor' so Emacs picks the fg from the
+                            // display-time face (theme-change-free, inherits
+                            // the face-at-position color).  `ensure_svg_fill'
+                            // remains a defensive fallback in case dvisvgm
+                            // drops the fill attribute on some path we
+                            // haven't anticipated.
+                            let svg = tip_protocol::svg_color::fills_to_current_color(
+                                &frag.svg,
+                                tip_protocol::svg_color::STANDIN_HEX,
+                            );
+                            let svg = ensure_svg_fill(&svg, "currentColor");
                             results.push(FragmentResult {
                                 start: loc.start,
                                 end: loc.end,
-                                svg: ensure_svg_fill(&frag.svg, &params.color),
+                                svg,
                                 height_pt: frag.height_pt,
                                 depth_pt: frag.depth_pt,
                                 width_pt: frag.width_pt,
@@ -307,12 +324,13 @@ fn ensure_svg_fill(svg: &str, color: &str) -> String {
     if svg.contains("fill=") || svg.contains("stroke=") {
         return svg.to_string();
     }
-    let hex_upper = color.strip_prefix('#').map(|s| s.to_ascii_uppercase());
-    let fill = match hex_upper {
-        Some(h) if h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()) => {
-            format!("#{}", h)
-        }
-        _ => color.to_string(),
+    let fill = if let Some(h) = color
+        .strip_prefix('#')
+        .filter(|h| h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        format!("#{}", h.to_ascii_uppercase())
+    } else {
+        color.to_string()
     };
     // Insert `<g fill='...'>` right after `<g id='pageN'>` and close it
     // before the matching `</g>` at the very end of the document.

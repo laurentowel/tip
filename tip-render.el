@@ -190,11 +190,6 @@ Returns non-nil on success.  Equivalent to one iteration of
       (overlay-put ov 'tip-width-pt (or width-pt 0))
       (overlay-put ov 'tip-font-size-pt font-size-pt)
       (overlay-put ov 'tip-svg svg-data)
-      (overlay-put ov 'tip-fg (tip--color-to-hex
-                               (face-attribute 'default :foreground)))
-      (unless tip-transparent-bg
-        (overlay-put ov 'tip-bg (tip--color-to-hex
-                                 (face-attribute 'default :background))))
       (overlay-put ov 'display img-spec)
       (overlay-put ov 'modification-hooks
                    (list #'tip--invalidate-on-modification))
@@ -528,11 +523,6 @@ diagnostic is echoed and later errors get minimal visual weight."
                (tip--color-to-hex (face-attribute 'default :foreground))
                (list :svg svg-data :height-pt height-pt :depth-pt depth-pt
                      :width-pt (or width-pt 0) :font-size-pt font-size-pt)))
-            (overlay-put ov 'tip-fg (tip--color-to-hex
-                                     (face-attribute 'default :foreground)))
-            (unless tip-transparent-bg
-              (overlay-put ov 'tip-bg (tip--color-to-hex
-                                       (face-attribute 'default :background))))
             (overlay-put ov 'display display)
             (overlay-put ov 'modification-hooks
                          (list #'tip--invalidate-on-modification))
@@ -552,43 +542,16 @@ diagnostic is echoed and later errors get minimal visual weight."
             (when (and is-single-line-display tip-display-indicator)
               (overlay-put ov 'before-string tip-display-indicator)))))))))
 
-;;; * theme change: fast SVG color substitution
-
-(defun tip--recolor-overlays ()
-  "Update SVG colors in all tip overlays to match current theme.
-Does string replacement on cached SVG data — no server round-trip."
-  (let ((new-fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (new-bg (unless tip-transparent-bg
-                  (tip--color-to-hex (face-attribute 'default :background)))))
-    (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (eq (overlay-get ov 'tip) 'tip)
-        (let ((old-fg (overlay-get ov 'tip-fg))
-              (old-bg (overlay-get ov 'tip-bg))
-              (disp (overlay-get ov 'display)))
-          (when (and old-fg disp (not (string= old-fg new-fg)))
-            (let* ((svg (plist-get (cdr disp) :data))
-                   (new-svg (when svg
-                              (let ((s (string-replace old-fg new-fg svg)))
-                                (if (and old-bg new-bg)
-                                    (string-replace old-bg new-bg s)
-                                  s)))))
-              (when new-svg
-                (setcar (cdr (plist-member (cdr disp) :data)) new-svg)
-                (overlay-put ov 'tip-fg new-fg)
-                (when new-bg
-                  (overlay-put ov 'tip-bg new-bg))))))))))
-
-(defun tip--on-theme-change (&rest _)
-  "Update all tip buffers after a theme change.
-Uses fast SVG color substitution (~0.5ms/fragment) rather than
-recompilation (~17ms/fragment)."
-  (dolist (buf (buffer-list))
-    (with-current-buffer buf
-      (when tip-mode
-        (tip--recolor-overlays)
-        (setq tip-live--content-cache "")))))
-
 ;;; * font change: rescale image specs without recompile
+;;
+;; Theme-change tracking used to live here — a string-replace pass over
+;; every overlay's SVG on `enable-theme-functions' that swapped the
+;; baked-in fg color.  The server now emits SVGs with
+;; `fill="currentColor"' (see tip-protocol::svg_color), so Emacs picks
+;; the face's :foreground at display time and theme changes cost
+;; nothing.  Font-size changes still require rescaling the image spec
+;; because `(N . em)' in Emacs image heights is evaluated once at
+;; overlay creation — see `tip--on-font-change' below.
 
 (defun tip--rescale-overlays ()
   "Update image specs on all tip overlays for the current font.
@@ -622,17 +585,16 @@ Rescales overlays using current font metrics — no recompilation."
 
 ;;;###autoload
 (define-minor-mode tip-follow-theme-mode
-  "Automatically update tip overlays when the Emacs theme changes.
-Replaces colors in cached SVGs instantly — no server round-trip."
+  "Automatically rescale tip overlays on font-size changes.
+Theme-color changes no longer require any update — SVGs emit
+`fill=\"currentColor\"' and Emacs picks the face's :foreground at
+display time.  The minor mode still exists (and is still enabled by
+`tip-mode') because font-size changes DO require rescaling the image
+spec (`(N . em)' is resolved at overlay-creation time)."
   :init-value nil
   :lighter ""
   (if tip-follow-theme-mode
-      (progn
-        (add-hook 'enable-theme-functions #'tip--on-theme-change)
-        (add-hook 'disable-theme-functions #'tip--on-theme-change)
-        (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t))
-    (remove-hook 'enable-theme-functions #'tip--on-theme-change)
-    (remove-hook 'disable-theme-functions #'tip--on-theme-change)
+      (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t)
     (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)))
 
 (provide 'tip-render)

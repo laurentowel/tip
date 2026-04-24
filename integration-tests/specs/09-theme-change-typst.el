@@ -1,35 +1,30 @@
-;;; theme-change.el --- Theme switch re-colors overlays without recompile  -*- lexical-binding: t; -*-
+;;; 09-theme-change-typst.el --- Theme switch preserves overlays  -*- lexical-binding: t; -*-
 
-;; `tip-follow-theme-mode' hooks into `enable-theme-functions' so a
-;; theme change triggers `tip--on-theme-change', which does fast SVG
-;; color substitution (no server round-trip).  Ported from
-;; legacy 08-theme-change, trimmed to the observable signals.
+;; SVGs emit `fill="currentColor"' — Emacs picks the face foreground
+;; at display time, so a theme change is literally free: no server
+;; round-trip, no SVG string-replace, no overlay rebuild.  These tests
+;; assert the observable invariant: loading a new theme doesn't drop
+;; or corrupt any overlays.
 
-(tip-test-deftest follow-theme-mode-hooks-installed
-  :doc "tip-mode activates follow-theme-mode and registers the hook."
-  :tags (theme)
+(tip-test-deftest follow-theme-mode-still-enabled-with-tip-mode
+  :doc "tip-mode activates tip-follow-theme-mode (now font-only)."
+  :tags (theme typst)
   (tip-test-with-fresh-typst-buffer "$a$\n"
-    (should tip-follow-theme-mode)
-    (should (memq #'tip--on-theme-change enable-theme-functions))))
+    (should tip-follow-theme-mode)))
 
 (tip-test-deftest theme-switch-preserves-overlays
-  :doc "Loading a theme keeps overlays alive (no rebuild needed)."
-  :tags (theme render)
+  :doc "Loading a theme keeps overlays alive (currentColor in SVG)."
+  :tags (theme render typst)
   (tip-test-with-fresh-typst-buffer
    "Inline $a + b$ and $x^2$\nDisplay: $ sum_k k $\n"
     (tip-render-all)
     (tip-test-wait-for-pending 20)
-    (let ((before (length (overlays-in (point-min) (point-max))))
-          (fired 0))
+    (let ((before (length (overlays-in (point-min) (point-max)))))
       (should (> before 0))
-      (cl-letf* ((orig (symbol-function 'tip--on-theme-change))
-                 ((symbol-function 'tip--on-theme-change)
-                  (lambda (&rest args) (cl-incf fired) (apply orig args))))
-        (mapc #'disable-theme custom-enabled-themes)
-        (load-theme 'wombat t)
-        (redisplay t)
-        (sit-for 0.3))
-      (should (> fired 0))
+      (mapc #'disable-theme custom-enabled-themes)
+      (load-theme 'wombat t)
+      (redisplay t)
+      (sit-for 0.3)
       (should (= before (length (overlays-in (point-min) (point-max))))))
-    ;; Reset to default so later tests have a predictable face.
+    ;; Reset so later tests have a predictable face.
     (mapc #'disable-theme custom-enabled-themes)))

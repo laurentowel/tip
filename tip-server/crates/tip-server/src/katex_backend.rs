@@ -165,31 +165,13 @@ fn strip_math_delimiters(s: &str) -> &str {
     t
 }
 
-/// Rewrite default-foreground fills to SVG's `currentColor` keyword.
-///
-/// This is the technique org-latex-preview uses (see its
-/// `--svg-make-fg-currentColor'): render the SVG with a specific
-/// "standin" color for the default foreground, then rewrite that
-/// color to `currentColor' so Emacs picks up the buffer face's
-/// `:foreground' at display time.  Theme changes become FREE — the
-/// image re-uses whatever color the face carries right now, no
-/// recompile, no SVG string-replace on the client.
-///
-/// RaTeX's default fill is `rgba(0,0,0,1)`.  Replacing ONLY that
-/// means author-specified colors (e.g. the red in `\color{red}{x}`)
-/// stay as authored — RaTeX emits those as `rgba(255,0,0,1)` etc.
-///
-/// The `_color` parameter is accepted for signature compatibility
-/// with earlier callers but intentionally unused: the whole point of
-/// currentColor is to let the CLIENT's face pick the color, not the
-/// server.
+/// RaTeX hard-codes its default fill as `rgba(0,0,0,1)` — it doesn't
+/// accept a stand-in color through its public API.  So instead of the
+/// sentinel-hex technique Typst/LaTeX can use, we rewrite that exact
+/// encoding to `currentColor'.  Author colors (RaTeX emits those as
+/// `rgba(R,G,B,1)` with nonzero R/G/B) stay intact.
 fn recolor_svg(svg: &str, _color: &str) -> String {
-    svg.replace("fill=\"rgba(0,0,0,1)\"", "fill=\"currentColor\"")
-        .replace("fill='rgba(0,0,0,1)'", "fill='currentColor'")
-        .replace("fill=\"#000000\"", "fill=\"currentColor\"")
-        .replace("fill='#000000'", "fill='currentColor'")
-        .replace("fill=\"black\"", "fill=\"currentColor\"")
-        .replace("fill='black'", "fill='currentColor'")
+    tip_protocol::svg_color::replace_default_black(svg)
 }
 
 #[cfg(test)]
