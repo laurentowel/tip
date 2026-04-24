@@ -271,9 +271,20 @@ field (defaulting to tip-server-typst)."
                    (callback (gethash id tip--pending-callbacks)))
               (remhash id tip--pending-callbacks)
               (tip-debug-msg "tip-server response id=%s" id)
+              ;; Any error inside a user callback (dead buffer,
+              ;; type mismatch, etc.) must not propagate — emacs
+              ;; would print it as "error in process sentinel"
+              ;; and mask the real cause.  Catch + log and move on.
               (when callback
-                (funcall callback result))
-              (run-hook-with-args 'tip-server-response-functions result))
+                (condition-case cb-err
+                    (funcall callback result)
+                  (error
+                   (tip-debug-msg "tip-server callback error: %S id=%s"
+                                  cb-err id))))
+              (condition-case hook-err
+                  (run-hook-with-args 'tip-server-response-functions result)
+                (error
+                 (tip-debug-msg "tip-server response-hook error: %S" hook-err))))
           (error
            (tip-debug-msg "tip-server parse error: %S for line: %s" err line)))))))
 

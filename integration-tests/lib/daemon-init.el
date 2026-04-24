@@ -26,9 +26,14 @@
        (default-repo-root (file-name-directory
                            (directory-file-name default-it-dir)))
        (repo-root (or (getenv "TIP_REPO") default-repo-root))
-       (it-dir (or (getenv "TIP_IT_DIR") default-it-dir)))
+       (it-dir (or (getenv "TIP_IT_DIR") default-it-dir))
+       ;; TIP_IT_SPECS overrides the default specs/ dir — lets the
+       ;; showcase runner point at a different set of files without
+       ;; touching the main suite.
+       (specs-override (getenv "TIP_IT_SPECS")))
   (setq tip-test--repo-root repo-root)
-  (setq tip-test--specs-dir (expand-file-name "specs" it-dir))
+  (setq tip-test--specs-dir
+        (or specs-override (expand-file-name "specs" it-dir)))
   (setq tip-test--lib-dir (expand-file-name "lib" it-dir))
   (add-to-list 'load-path repo-root)
   (add-to-list 'load-path lib-dir)

@@ -193,6 +193,19 @@ so `tip-test-reset' can find and kill it."
            (setq-local header-line-format
                        '(:eval (tip-test--header-line)))
            ,@body)
+       ;; Before sleeping for the watcher's benefit, make sure the
+       ;; buffer is in a FULLY-RENDERED state — including tests whose
+       ;; body is pure-logic (fragment detection etc.) and didn't ask
+       ;; for rendering.  Cache hits make the extra render cheap when
+       ;; the body already rendered.
+       (when (and (buffer-live-p buf)
+                  (> tip-test--inter-test-sleep 0))
+         (with-current-buffer buf
+           (ignore-errors
+             (when (fboundp 'tip-render-all) (tip-render-all))
+             (tip-test-wait-for-pending 10)))
+         (redisplay t)
+         (sit-for tip-test--inter-test-sleep))
        (when (buffer-live-p buf)
          (with-current-buffer buf (set-buffer-modified-p nil))
          (let ((kill-buffer-query-functions nil))
@@ -220,6 +233,19 @@ so `tip-test-reset' can find and kill it."
            (setq-local header-line-format
                        '(:eval (tip-test--header-line)))
            ,@body)
+       ;; Before sleeping for the watcher's benefit, make sure the
+       ;; buffer is in a FULLY-RENDERED state — including tests whose
+       ;; body is pure-logic (fragment detection etc.) and didn't ask
+       ;; for rendering.  Cache hits make the extra render cheap when
+       ;; the body already rendered.
+       (when (and (buffer-live-p buf)
+                  (> tip-test--inter-test-sleep 0))
+         (with-current-buffer buf
+           (ignore-errors
+             (when (fboundp 'tip-render-all) (tip-render-all))
+             (tip-test-wait-for-pending 10)))
+         (redisplay t)
+         (sit-for tip-test--inter-test-sleep))
        (when (buffer-live-p buf)
          (with-current-buffer buf (set-buffer-modified-p nil))
          (let ((kill-buffer-query-functions nil))
@@ -243,18 +269,19 @@ so `tip-test-reset' can find and kill it."
   "Face for the running test's docstring in the header-line.")
 
 (defun tip-test--header-line ()
-  "Header-line format showing the active test and its docstring.
-Uses a newline so the test name stays prominent and the doc gets
-its own row underneath."
+  "Header-line format showing the active test name and docstring.
+Single-line — header-line doesn't render embedded newlines; they
+come out as literal C-j."
   (when tip-test--current-name
     (concat
      (propertize (format " ◉ %s " (symbol-name tip-test--current-name))
                  'face 'tip-test-header-name)
      (when (and tip-test--current-doc
                 (not (string-empty-p tip-test--current-doc)))
-       (concat "\n "
-               (propertize tip-test--current-doc
-                           'face 'tip-test-header-doc))))))
+       (concat
+        (propertize "  │  " 'face 'tip-test-header-doc)
+        (propertize tip-test--current-doc
+                    'face 'tip-test-header-doc))))))
 
 (defun tip-test-run-one (name)
   "Run the test registered under NAME.  Returns a plist
@@ -275,6 +302,8 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
                        (setq status 'timeout
                              errmsg (format "exceeded %ds" tip-test--per-test-timeout)))
           (funcall fn))
+      (ert-test-skipped
+       (setq status 'skip errmsg (format "%s" (cadr err))))
       (ert-test-failed
        (setq status 'fail errmsg (format "%S" (cdr err))))
       (error
@@ -284,33 +313,29 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
 
 (defun tip-test-run-all ()
   "Run every registered test in order of registration.  Returns
-a plist (:results LIST :passed N :failed N).  Pauses
-`tip-test--inter-test-sleep' seconds between tests so a human
-watching the frame can see each result settle before the next
-takes over."
-  (let ((results nil) (passed 0) (failed 0)
-        (tests (reverse tip-test--tests))
-        (last (car (last (reverse tip-test--tests)))))
-    (dolist (cell tests)
+a plist (:results LIST :passed N :failed N :skipped N).  Skipped
+tests (via `ert-skip' — e.g. \"no graphical display\") don't count
+as failures; they appear as SKIP in the report and leave the exit
+status clean."
+  (let ((results nil) (passed 0) (failed 0) (skipped 0))
+    (dolist (cell (reverse tip-test--tests))
       (let* ((name (car cell))
              (r (tip-test-run-one name)))
         (push r results)
-        (if (eq (plist-get r :status) 'pass)
-            (cl-incf passed)
-          (cl-incf failed))
-        ;; Pause between tests (but not after the last one).
-        (when (and (> tip-test--inter-test-sleep 0)
-                   (not (eq cell last)))
-          (redisplay t)
-          (sleep-for tip-test--inter-test-sleep))))
-    (list :results (nreverse results) :passed passed :failed failed)))
+        (pcase (plist-get r :status)
+          ('pass (cl-incf passed))
+          ('skip (cl-incf skipped))
+          (_     (cl-incf failed)))))
+    (list :results (nreverse results)
+          :passed passed :failed failed :skipped skipped)))
 
 (defun tip-test-format-summary (summary)
   "Pretty-print a SUMMARY plist as a multi-line string."
   (let ((lines nil))
-    (push (format "  passed: %d  failed: %d"
+    (push (format "  passed: %d  failed: %d  skipped: %d"
                   (plist-get summary :passed)
-                  (plist-get summary :failed))
+                  (plist-get summary :failed)
+                  (or (plist-get summary :skipped) 0))
           lines)
     (dolist (r (plist-get summary :results))
       (push (format "  [%-5s] %-45s %.2fs%s"

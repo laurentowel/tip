@@ -278,6 +278,39 @@
           '');
         };
 
+        # `nix run .#showcase` — pretty demo reel: same infra as
+        # integration-tests, different spec dir + generous default
+        # sleep so a human can eye-ball each scene.  Good for
+        # README screencasts / "here's what tip does" moments.
+        apps.showcase = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "tip-showcase" ''
+            set -eu
+            export PATH=${tip-server}/bin:${demoEmacs}/bin:$PATH
+            export TYPST_FONT_PATHS=${demoFontDir}
+            export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
+            export TIP_IT_DIR=${./integration-tests}
+            export TIP_REPO=${./.}
+            export TIP_IT_SPECS=${./integration-tests/showcase}
+            # 3s between scenes is a comfortable pace for watching;
+            # override via --sleep.
+            exec ${pkgs.bash}/bin/bash "$TIP_IT_DIR/run.sh" --sleep 3 "$@"
+          '');
+        };
+
+        # `nix run .#stop-daemons` — gracefully shut down every
+        # tip-it-* daemon still around from a previous run.  Sends
+        # `(kill-emacs 0)` via emacsclient; falls back to SIGTERM/
+        # SIGKILL + socket cleanup if the client can't reach it.
+        apps.stop-daemons = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "tip-it-stop" ''
+            set -eu
+            export PATH=${demoEmacs}/bin:$PATH
+            exec ${pkgs.bash}/bin/bash ${./integration-tests/stop.sh} "$@"
+          '');
+        };
+
         # `nix run .#fresh-build` — force a from-scratch rebuild by
         # GC'ing the current tip-server output first.  Useful when you
         # want to verify a cold build works or are chasing a
