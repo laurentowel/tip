@@ -1,5 +1,17 @@
 \documentclass{article}
 \usepackage{amsmath,amssymb,mathtools}
+
+% These macros are picked up by tip-server's LaTeX preamble
+% extraction (everything between \documentclass and \begin{document})
+% and injected into every fragment compile.  See the Scope detection
+% section below — the macros are USED in math fragments further
+% down, and resolve correctly because they live in the preamble.
+\newcommand{\D}[2]{\frac{\partial #1}{\partial #2}}
+\newcommand{\lapl}{\nabla^2}
+\newcommand{\bra}[1]{\langle #1\rvert}
+\newcommand{\ket}[1]{\lvert #1\rangle}
+\newcommand{\braket}[2]{\langle #1 \mid #2\rangle}
+
 \begin{document}
 
 \section*{tip-mode demo --- LaTeX}
@@ -43,6 +55,31 @@ $\langle f, g\rangle = \langle \hat f, \hat g\rangle$.
     0          &  0          & 0 & 1
 \end{pmatrix}
 \begin{pmatrix} x \\ y \\ z \\ 1 \end{pmatrix} \]
+
+\subsection*{Scope detection}
+
+tip-server extracts everything between \verb|\documentclass| and
+\verb|\begin{document}| as the per-fragment preamble --- so
+\verb|\newcommand| and \verb|\usepackage| declared in the preamble
+resolve correctly in every fragment below.  (Unlike Typst, body-level
+\verb|\newcommand| is \emph{not} currently captured; put macros in
+the preamble to be safe.)
+
+The preamble of this file defines \verb|\D|, \verb|\lapl|,
+\verb|\bra|, \verb|\ket|, \verb|\braket|.  Fragments can use them:
+
+\[ \D{u}{t} = \alpha \lapl u \]
+
+\[ \braket{\phi}{\psi} = \bra{\phi}\ket{\psi}
+     = \int \overline{\phi(x)}\,\psi(x)\,dx \]
+
+\subsection*{Custom math font}
+
+Unlike Typst --- which can swap math fonts at any point via
+\verb|#show math.equation: set text(font: ...)| --- the LaTeX math
+font is fixed at preamble time.  Swapping in mid-document would need
+\verb|unicode-math| + xelatex/lualatex, which our current
+\texttt{latex + dvisvgm} pipeline doesn't use.  Kept as a known gap.
 
 \subsection*{Green's identity (multi-line display)}
 
