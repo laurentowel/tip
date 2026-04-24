@@ -56,9 +56,7 @@ impl Handler {
             },
             Request::DebugSkeleton(params) => match params.backend {
                 BackendId::Typst => self.typst.handle_debug_skeleton(params),
-                BackendId::Latex => ResponseResult::Error {
-                    error: "debug_skeleton is Typst-only (LaTeX has no scope skeleton)".into(),
-                },
+                BackendId::Latex => self.latex.handle_debug_skeleton(params),
             },
             Request::HealthCheck => ResponseResult::Health {
                 report: diagnostics::collect_report(&self.typst),

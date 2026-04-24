@@ -181,6 +181,22 @@ impl LatexBackend {
         }
     }
 
+    /// Return the preamble that `compile_fragments' would feed to
+    /// latex for a fragment in this URI — whatever the multi-file
+    /// project walk picked up, or the client's buffer preamble
+    /// otherwise.  Typst has a similar `debug_skeleton' but
+    /// per-fragment (scope varies by position); LaTeX's preamble is
+    /// document-wide, so we ignore `start'/`end'.
+    pub fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
+        let preamble = self
+            .roots
+            .get(&params.uri)
+            .and_then(|root| self.projects.get(root))
+            .and_then(|p| p.preamble_for(&params.uri).ok())
+            .unwrap_or_default();
+        ResponseResult::DebugSkeleton { source: preamble }
+    }
+
     pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
         // Map live → batch-of-one.
         let fragments_params = CompileFragmentsParams {

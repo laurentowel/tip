@@ -328,6 +328,93 @@ Works even when the overlay is open (display cleared)."
       (message "No tip overlay at point"))))
 
 ;;;###autoload
+(defun tip-dump-compile-inputs (&optional dest)
+  "Dump everything the server would compile for this buffer.
+DEST is the directory to write into (defaults to a timestamped
+subdir of `temporary-file-directory').  Useful for filing bug
+reports, building regression tests, and just seeing what's going
+into the sausage.
+
+LaTeX buffers:
+  preamble.tex      — preamble the server would use, including any
+                      multi-file project walk.
+  fragment-NNN.tex  — raw text of each collected fragment.
+
+Typst buffers:
+  skeleton-NNN.typ  — the per-fragment scoped skeleton (what
+                      `tip-show-skeleton-at-point' displays), one
+                      file per fragment.
+
+Prints the dump directory when done so you can copy-paste it."
+  (interactive
+   (list (read-directory-name
+          "Dump to: "
+          (expand-file-name
+           (format "tip-dump-%s-%s/"
+                   (or (and buffer-file-name
+                            (file-name-base buffer-file-name))
+                       "buffer")
+                   (format-time-string "%Y%m%d-%H%M%S"))
+           temporary-file-directory))))
+  (unless (tip-active-backend)
+    (user-error "tip-dump-compile-inputs: no tip backend active"))
+  (make-directory dest t)
+  (let* ((backend-name (tip-backend-name (tip-active-backend)))
+         (frags (tip-collect-fragments (point-min) (point-max)))
+         (pending (length frags))
+         (completed 0))
+    (when (zerop pending)
+      (user-error "No fragments detected"))
+    (tip--sync-buffer)
+    (cond
+     ((eq backend-name 'latex)
+      ;; One debug_skeleton call for the preamble (doc-wide).
+      (tip--send-request
+       "debug_skeleton"
+       `(("uri" . ,(buffer-file-name))
+         ("start" . 0) ("end" . 0))
+       (lambda (result)
+         (let ((src (or (alist-get 'source result) "")))
+           (with-temp-file (expand-file-name "preamble.tex" dest)
+             (insert src)))))
+      ;; Fragment text straight from the buffer — no server round-trip.
+      (let ((i 0))
+        (dolist (f frags)
+          (cl-incf i)
+          (let* ((bs (cdr (assoc "start" f)))
+                 (be (cdr (assoc "end" f)))
+                 (beg (byte-to-position (1+ bs)))
+                 (end (byte-to-position (1+ be)))
+                 (text (buffer-substring-no-properties beg end)))
+            (with-temp-file (expand-file-name
+                             (format "fragment-%03d.tex" i) dest)
+              (insert text)))))
+      (message "tip-dump: wrote preamble + %d fragments to %s"
+               (length frags) dest))
+     ((eq backend-name 'typst)
+      (let ((i 0))
+        (dolist (f frags)
+          (cl-incf i)
+          (let ((idx i)
+                (bs (cdr (assoc "start" f)))
+                (be (cdr (assoc "end" f))))
+            (tip--send-request
+             "debug_skeleton"
+             `(("uri" . ,(buffer-file-name))
+               ("start" . ,bs) ("end" . ,be))
+             (lambda (result)
+               (let ((src (or (alist-get 'source result) "")))
+                 (with-temp-file (expand-file-name
+                                  (format "skeleton-%03d.typ" idx) dest)
+                   (insert src))
+                 (cl-incf completed)
+                 (when (= completed pending)
+                   (message "tip-dump: wrote %d skeletons to %s"
+                            pending dest)))))))))
+     (t (user-error "tip-dump-compile-inputs: backend %S not supported"
+                    backend-name)))))
+
+;;;###autoload
 (defun tip-show-skeleton-at-point ()
   "Display the scoped skeleton for the fragment at point.
 Shows the synthetic Typst source that the server would compile,
