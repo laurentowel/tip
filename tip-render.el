@@ -32,6 +32,13 @@
 
 ;;; * in-buffer compile cache (LRU)
 
+(defcustom tip-cache-enabled t
+  "If nil, skip the in-memory compile-result cache entirely.
+Typst-mode buffers opt out automatically (see
+`tip--caching-enabled-p') because `#let' scope changes aren't
+reflected in the cache key."
+  :type 'boolean :group 'tip :local t)
+
 (defvar-local tip--compile-cache nil
   "Buffer-local hash-table mapping cache-key → plist.
 Key:   (CONTENT . FG-COLOR) cons.
@@ -56,6 +63,24 @@ fragment costs no compile.")
 
 (defun tip--cache-key (content fg)
   (cons content fg))
+
+(defun tip--caching-enabled-p ()
+  "Return non-nil if the compile-result cache is safe for the active backend.
+
+Typst fragments depend on document-wide scope (`#let' / `#import'
+/ `#show' / `#set') that the cache key — fragment text + fg — does
+NOT capture.  A plain `$foo$' may resolve to different things at
+different points in the same document.  Opt-out here instead of
+trying to hash the whole scope skeleton per lookup.
+
+LaTeX's preamble does participate in the request already, but the
+fragment key doesn't include it either; however in a single
+editing session the preamble is approximately stable so cache hits
+are still mostly correct.  Flip `tip-cache-enabled' to nil per
+buffer if you hit scope-sensitivity there too."
+  (and tip-cache-enabled
+       (let ((b (and (fboundp 'tip-active-backend) (tip-active-backend))))
+         (not (eq (and b (tip-backend-name b)) 'typst)))))
 
 (defun tip--cache-next-ts ()
   (cl-incf tip--compile-cache-clock))
@@ -360,8 +385,14 @@ diagnostic is echoed and later errors get minimal visual weight."
              (font-size-pt (alist-get 'font_size_pt frag))
              (err (alist-get 'error frag))
              (err-detail (alist-get 'error_detail frag))
-             (err-severity (alist-get 'severity err-detail))
-             (err-message (alist-get 'message err-detail))
+             ;; Typst backend currently emits only a plain `error'
+             ;; string (no structured `error_detail'); LaTeX populates
+             ;; both.  Synthesize minimal severity/message from `err'
+             ;; so navigation/eldoc/flymake don't silently drop Typst
+             ;; errors.
+             (err-severity (or (alist-get 'severity err-detail)
+                               (and err 'error)))
+             (err-message (or (alist-get 'message err-detail) err))
              (err-hint (alist-get 'hint err-detail))
              (err-line (alist-get 'line_in_fragment err-detail))
              (err-full (alist-get 'detail err-detail)))
@@ -449,13 +480,16 @@ diagnostic is echoed and later errors get minimal visual weight."
             (overlay-put ov 'tip-width-pt (or width-pt 0))
             (overlay-put ov 'tip-font-size-pt font-size-pt)
             (overlay-put ov 'tip-svg svg-data)
-            ;; Populate the compile cache so moving the cursor through
-            ;; this fragment (without editing) won't cost a round-trip.
-            (tip--cache-put
-             frag-text
-             (tip--color-to-hex (face-attribute 'default :foreground))
-             (list :svg svg-data :height-pt height-pt :depth-pt depth-pt
-                   :width-pt (or width-pt 0) :font-size-pt font-size-pt))
+            ;; Populate the compile cache (so cursor transitions don't
+            ;; re-compile), but only for backends where the (content+fg)
+            ;; key actually captures the full compile input.  See
+            ;; `tip--caching-enabled-p'.
+            (when (tip--caching-enabled-p)
+              (tip--cache-put
+               frag-text
+               (tip--color-to-hex (face-attribute 'default :foreground))
+               (list :svg svg-data :height-pt height-pt :depth-pt depth-pt
+                     :width-pt (or width-pt 0) :font-size-pt font-size-pt)))
             (overlay-put ov 'tip-fg (tip--color-to-hex
                                      (face-attribute 'default :foreground)))
             (unless tip-transparent-bg

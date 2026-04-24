@@ -213,7 +213,8 @@ Buffer-local."
              (p1 (byte-to-position sb))
              (p2 (byte-to-position eb))
              (content (buffer-substring-no-properties p1 p2))
-             (cached (tip--cache-get content fg)))
+             (cached (and (tip--caching-enabled-p)
+                          (tip--cache-get content fg))))
         (if cached
             (progn
               (tip--apply-cached-fragment p1 p2 cached)
