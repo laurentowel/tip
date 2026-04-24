@@ -221,18 +221,24 @@ or Typst's fixed 11pt.  Defaults to 11.0 when absent."
 
 (defun tip--font-pixel-size ()
   "Return the default font's pixel size.
-Respects `face-remapping-alist' (e.g. `variable-pitch-mode')."
+Respects `face-remapping-alist' (e.g. `variable-pitch-mode').
+`face-attribute' can return the symbol `unspecified' (truthy but
+not a font) when no graphical frame is selected — e.g. inside a
+daemon's callback dispatched from a non-GUI context; guard with
+`fontp'."
   (let ((font (face-attribute 'default :font)))
-    (if font
+    (if (fontp font)
         (let ((sz (font-get font :size)))
           (if (and (numberp sz) (> sz 0)) sz 15))
       15)))
 
 (defun tip--font-metrics ()
   "Return (ASCENT . DESCENT) in pixels for the default face font.
-Respects `face-remapping-alist'."
+Respects `face-remapping-alist'.  Falls back to 80/20 split of
+pixel-size when the face has no real font (daemon without GUI
+frame, batch mode, etc.)."
   (let* ((font (face-attribute 'default :font))
-         (info (and font (font-info (font-xlfd-name font)))))
+         (info (and (fontp font) (font-info (font-xlfd-name font)))))
     (if (and info (> (length info) 9))
         (cons (aref info 8) (aref info 9))
       (let ((px (tip--font-pixel-size)))

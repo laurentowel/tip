@@ -10,8 +10,8 @@
 ;; Run:
 ;;   emacs -Q -l tests/65-latex-baseline-stress.el
 ;;
-;; Needs `latex' + `dvisvgm' on PATH and the tip-server-latex binary
-;; built (cargo build --release -p tip-server-latex).
+;; Needs `latex' + `dvisvgm' on PATH and the tip-server binary
+;; built (cargo build --release -p tip-server).
 
 ;;; Code:
 
@@ -23,7 +23,7 @@
   (add-to-list 'load-path (expand-file-name ".." base))
   (load (expand-file-name "../tip.el" base))
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server-latex" base))
+        (expand-file-name "../tip-server/target/release/tip-server" base))
   (add-hook 'latex-mode-hook #'tip-mode)
   (find-file (expand-file-name "fixtures/latex_baseline_stress.tex" base)))
 

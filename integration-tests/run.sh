@@ -9,6 +9,30 @@
 
 set -eu
 
+# --- flag parsing ---
+sleep_between="${TIP_IT_SLEEP:-0}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --sleep|-s)      sleep_between="$2"; shift 2;;
+    --sleep=*)       sleep_between="${1#--sleep=}"; shift;;
+    --headless)      export TIP_IT_HEADLESS=1; shift;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: run.sh [OPTIONS]
+  --sleep N, -s N    Pause N seconds between consecutive tests so a
+                     human watching the frame can see each result
+                     settle before the next starts.  Default 0.
+                     Env: TIP_IT_SLEEP.
+  --headless         Don't pop a visible frame (CI mode).
+                     Env: TIP_IT_HEADLESS=1.
+  -h, --help         This message.
+USAGE
+      exit 0;;
+    *) echo "unknown arg: $1 (try --help)" >&2; exit 2;;
+  esac
+done
+export TIP_IT_SLEEP="$sleep_between"
+
 # TIP_IT_DIR: absolute path to the integration-tests/ directory.
 # The nix app wrapper sets this so run.sh doesn't have to live inside
 # the tree it drives.  Outside nix we self-locate.
@@ -26,7 +50,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "tip integration-tests — starting daemon $DAEMON"
-echo "  emacs=$emacs_cmd"
+echo "  emacs=$emacs_cmd   sleep-between=${sleep_between}s   headless=${TIP_IT_HEADLESS:-0}"
 # Keep daemon stderr visible so startup failures don't become silent
 # "daemon never came up" timeouts.
 "$emacs_cmd" --fg-daemon="$DAEMON" -l "$INIT" &

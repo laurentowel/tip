@@ -242,20 +242,25 @@ Buffer-local."
         (tip--send-request
          "compile_fragments" params
          (lambda (result)
-           (with-current-buffer buf
-             (let* ((frags (alist-get 'fragments result))
-                    (got (if frags (length frags) 0))
-                    (errors (and frags
-                                 (cl-count-if
-                                  (lambda (f) (alist-get 'error f))
-                                  (append frags nil)))))
-               (tip--apply-fragment-results frags)
-               (tip--flymake-refresh)
-               (when tip-verbose
-                 (message "tip: %d/%d rendered (%d cached, %d error%s)"
-                          (+ cache-hits got) n cache-hits
-                          (or errors 0)
-                          (if (= (or errors 0) 1) "" "s"))))))))))
+           ;; BUF may have been killed while the compile was in flight
+           ;; (tests churn buffers; users close files).  Without this
+           ;; guard `with-current-buffer' signals "selecting deleted
+           ;; buffer" from the process filter and the sentinel rethrows.
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (let* ((frags (alist-get 'fragments result))
+                      (got (if frags (length frags) 0))
+                      (errors (and frags
+                                   (cl-count-if
+                                    (lambda (f) (alist-get 'error f))
+                                    (append frags nil)))))
+                 (tip--apply-fragment-results frags)
+                 (tip--flymake-refresh)
+                 (when tip-verbose
+                   (message "tip: %d/%d rendered (%d cached, %d error%s)"
+                            (+ cache-hits got) n cache-hits
+                            (or errors 0)
+                            (if (= (or errors 0) 1) "" "s")))))))))))
     n))
 
 ;;; * public commands

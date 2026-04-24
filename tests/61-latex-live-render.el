@@ -1,4 +1,4 @@
-;;; 61-latex-live-render.el --- End-to-end test of tip-latex + tip-server-latex -*- lexical-binding: t; -*-
+;;; 61-latex-live-render.el --- End-to-end test of tip-latex + tip-server -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Opens a .tex file, enables tip-mode (LaTeX backend), sends a batch
@@ -6,7 +6,7 @@
 ;; fragments.  Tests the full Emacs↔Rust pipeline.
 ;;
 ;; Skips silently if `latex' or `dvisvgm' are not on PATH, or if the
-;; tip-server-latex binary isn't built yet.
+;; tip-server binary isn't built yet.
 ;;
 ;; Run: emacs --batch -l tests/61-latex-live-render.el
 
@@ -30,20 +30,20 @@
 (defun server-binary-p ()
   (let ((base (file-name-directory (or load-file-name "."))))
     (file-executable-p
-     (expand-file-name "../tip-server/target/release/tip-server-latex" base))))
+     (expand-file-name "../tip-server/target/release/tip-server" base))))
 
 (unless (tools-available-p)
   (message "SKIP: latex or dvisvgm not on PATH")
   (kill-emacs 0))
 
 (unless (server-binary-p)
-  (message "SKIP: tip-server-latex binary not built")
+  (message "SKIP: tip-server binary not built")
   (kill-emacs 0))
 
 ;; Point the backend at the built binary explicitly.
 (let ((base (file-name-directory (or load-file-name "."))))
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server-latex" base)))
+        (expand-file-name "../tip-server/target/release/tip-server" base)))
 
 (message "=== tip-latex end-to-end live test ===")
 

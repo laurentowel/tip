@@ -37,6 +37,11 @@ PLIST carries :fn, :doc, :file — NAME and :fn are always present.")
   "Hard timeout per test, in seconds.  A hung test fails instead of
 stalling the whole suite.")
 
+(defvar tip-test--inter-test-sleep 0
+  "Seconds to sleep between consecutive tests.  Useful when
+eye-balling results — with 0 the whole suite can blur past too
+fast to watch.  Set via env TIP_IT_SLEEP read at daemon startup.")
+
 ;;; ---- spec registration ----
 
 (defmacro tip-test-deftest (name &rest body)
@@ -61,8 +66,20 @@ The rest is the test body."
 
 ;;; ---- reset between tests ----
 
+(defun tip-test--cleanup-extra-windows ()
+  "Keep the test frame to a single window.  Any previous test's
+buffer is killed in its `unwind-protect'; that leaves an empty
+window which we delete here, so each test starts in a single-
+window frame."
+  (dolist (frame (frame-list))
+    (with-selected-frame frame
+      (when (and (not (frame-parameter frame 'tip-test--control))
+                 (> (length (window-list frame 0)) 1))
+        (delete-other-windows (frame-root-window frame))))))
+
 (defun tip-test-reset ()
   "Kill server process, temp buffers, and pending state."
+  (tip-test--cleanup-extra-windows)
   (when (and (boundp 'tip--server-process)
              tip--server-process
              (process-live-p tip--server-process))
@@ -81,7 +98,9 @@ The rest is the test body."
 ;;; ---- helpers for spec writers ----
 
 (defun tip-test-wait-for-pending (&optional deadline-s)
-  "Block until no pending server callbacks, or DEADLINE-S seconds pass."
+  "Block until no pending server callbacks, or DEADLINE-S seconds pass.
+Also drain any just-fired async timers so the rendered-overlay
+state is settled before the test asserts on it."
   (let ((deadline (+ (float-time) (or deadline-s 10))))
     (while (and (< (float-time) deadline)
                 (boundp 'tip--server-process)
@@ -90,7 +109,11 @@ The rest is the test body."
                 (boundp 'tip--pending-callbacks)
                 (> (hash-table-count tip--pending-callbacks) 0))
       (accept-process-output tip--server-process 0.1)
-      (redisplay t))))
+      (redisplay t)))
+  ;; Give the response filter's callback (which creates overlays)
+  ;; one more chance to run after the process-output loop exits.
+  (sit-for 0.05)
+  (redisplay t))
 
 (defun tip-test-fragment-ranges ()
   "Return the tree-sitter math fragment ranges in the current buffer.
@@ -110,12 +133,25 @@ immediately after the opening `$'."
 
 (defun tip-test-overlay-showing-image-p (&optional pos)
   "Return non-nil if there's a TIP overlay at POS (or point) whose
-`display' property is a rendered SVG image."
+`display' property renders an SVG image.
+
+The display spec produced by `tip--make-image-spec' is a list like
+`((image :type svg :data ...))' — i.e. a LIST of specs where the
+first element is itself a list starting with `image'.  Accept both
+that shape and the bare `(image ...)' form, since emacs accepts
+both as a display property."
   (let ((p (or pos (point))))
     (seq-some (lambda (ov)
                 (and (eq (overlay-get ov 'tip) 'tip)
                      (let ((disp (overlay-get ov 'display)))
-                       (and (consp disp) (eq (car disp) 'image)))))
+                       (cond
+                        ((null disp) nil)
+                        ;; ((image ...) [...]) — current tip shape.
+                        ((and (consp disp) (consp (car disp))
+                              (eq (car (car disp)) 'image))
+                         t)
+                        ;; (image ...) — bare spec.
+                        ((eq (car-safe disp) 'image) t)))))
               (overlays-at p))))
 
 (defun tip-test-simulate-command (cmd pos)
@@ -148,9 +184,14 @@ so `tip-test-reset' can find and kill it."
            ;; watching, so test actions are observable.
            (when-let ((win (get-buffer-window buf t)))
              (select-window win))
-           (display-buffer buf '((display-buffer-reuse-window
-                                  display-buffer-pop-up-window))
-                           '((inhibit-same-window . nil)))
+           ;; Rotate the test buffer INTO the selected window rather
+           ;; than splitting off a new one each time.  pop-to-buffer-
+           ;; same-window is aggressive enough to take over any
+           ;; dedicated/minibuffer concern.
+           (pop-to-buffer-same-window buf)
+           ;; Buffer-local header-line showing what this test does.
+           (setq-local header-line-format
+                       '(:eval (tip-test--header-line)))
            ,@body)
        (when (buffer-live-p buf)
          (with-current-buffer buf (set-buffer-modified-p nil))
@@ -170,9 +211,14 @@ so `tip-test-reset' can find and kill it."
            (latex-mode)
            (tip-mode 1)
            (when (fboundp 'tip-live-mode) (tip-live-mode -1))
-           (display-buffer buf '((display-buffer-reuse-window
-                                  display-buffer-pop-up-window))
-                           '((inhibit-same-window . nil)))
+           ;; Rotate the test buffer INTO the selected window rather
+           ;; than splitting off a new one each time.  pop-to-buffer-
+           ;; same-window is aggressive enough to take over any
+           ;; dedicated/minibuffer concern.
+           (pop-to-buffer-same-window buf)
+           ;; Buffer-local header-line showing what this test does.
+           (setq-local header-line-format
+                       '(:eval (tip-test--header-line)))
            ,@body)
        (when (buffer-live-p buf)
          (with-current-buffer buf (set-buffer-modified-p nil))
@@ -181,6 +227,34 @@ so `tip-test-reset' can find and kill it."
        (ignore-errors (delete-file file)))))
 
 ;;; ---- runner ----
+
+(defvar tip-test--current-name nil
+  "Name of the test currently running, for header-line display.")
+
+(defvar tip-test--current-doc nil
+  "Docstring of the running test, for header-line display.")
+
+(defface tip-test-header-name
+  '((t :weight bold :inherit warning :height 1.15))
+  "Face for the running test's name in the header-line.")
+
+(defface tip-test-header-doc
+  '((t :weight normal :inherit shadow))
+  "Face for the running test's docstring in the header-line.")
+
+(defun tip-test--header-line ()
+  "Header-line format showing the active test and its docstring.
+Uses a newline so the test name stays prominent and the doc gets
+its own row underneath."
+  (when tip-test--current-name
+    (concat
+     (propertize (format " ◉ %s " (symbol-name tip-test--current-name))
+                 'face 'tip-test-header-name)
+     (when (and tip-test--current-doc
+                (not (string-empty-p tip-test--current-doc)))
+       (concat "\n "
+               (propertize tip-test--current-doc
+                           'face 'tip-test-header-doc))))))
 
 (defun tip-test-run-one (name)
   "Run the test registered under NAME.  Returns a plist
@@ -193,6 +267,8 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
          (errmsg nil))
     (unless fn
       (error "No such test: %s" name))
+    (setq tip-test--current-name name
+          tip-test--current-doc (plist-get entry :doc))
     (tip-test-reset)
     (condition-case err
         (with-timeout (tip-test--per-test-timeout
@@ -208,15 +284,25 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
 
 (defun tip-test-run-all ()
   "Run every registered test in order of registration.  Returns
-a plist (:results LIST :passed N :failed N)."
-  (let ((results nil) (passed 0) (failed 0))
-    (dolist (cell (reverse tip-test--tests))
+a plist (:results LIST :passed N :failed N).  Pauses
+`tip-test--inter-test-sleep' seconds between tests so a human
+watching the frame can see each result settle before the next
+takes over."
+  (let ((results nil) (passed 0) (failed 0)
+        (tests (reverse tip-test--tests))
+        (last (car (last (reverse tip-test--tests)))))
+    (dolist (cell tests)
       (let* ((name (car cell))
              (r (tip-test-run-one name)))
         (push r results)
         (if (eq (plist-get r :status) 'pass)
             (cl-incf passed)
-          (cl-incf failed))))
+          (cl-incf failed))
+        ;; Pause between tests (but not after the last one).
+        (when (and (> tip-test--inter-test-sleep 0)
+                   (not (eq cell last)))
+          (redisplay t)
+          (sleep-for tip-test--inter-test-sleep))))
     (list :results (nreverse results) :passed passed :failed failed)))
 
 (defun tip-test-format-summary (summary)

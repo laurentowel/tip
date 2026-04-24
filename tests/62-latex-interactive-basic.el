@@ -14,7 +14,7 @@
 ;;   emacs -Q -l tests/62-latex-interactive-basic.el
 ;;
 ;; Requirements on PATH: `latex', `dvisvgm'.
-;; Expects tip-server-latex built at tip-server/target/release/tip-server-latex.
+;; Expects tip-server built at tip-server/target/release/tip-server.
 
 ;;; Code:
 
@@ -27,7 +27,7 @@
   (load (expand-file-name "../tip.el" base))
   ;; Point explicitly at the built binary so we don't prompt.
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server-latex" base)))
+        (expand-file-name "../tip-server/target/release/tip-server" base)))
 
 (setq tip-enable-debug nil)
 

@@ -46,6 +46,18 @@
 (defvar tip-test--specs-dir nil)
 (defvar tip-test--lib-dir nil)
 
+;; Pick up the eyeball-pace from the env so run.sh can pass it in.
+(let ((v (getenv "TIP_IT_SLEEP")))
+  (when (and v (not (string-empty-p v)))
+    (setq tip-test--inter-test-sleep
+          (condition-case _ (string-to-number v) (error 0)))))
+
+;; Turn on debug spray so failures have breadcrumbs — the echo area
+;; mirrors into *Messages* and, under run.sh, into stderr via our
+;; `message' advice.
+(setq tip-enable-debug t)
+(setq tip-verbose t)
+
 (defun tip-test-daemon-run ()
   "Load every spec in the specs/ dir, run all tests, return summary string."
   (setq tip-test--tests nil)
