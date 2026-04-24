@@ -254,6 +254,30 @@
           program = "${demoScript}";
         };
 
+        # `nix run .#integration-tests` — one-shot run of the
+        # integration-tests/ suite in a fresh pinned emacs daemon with
+        # tip-server, typst-ts-mode, and the typst tree-sitter grammar
+        # wired up.  Prints a PASS/FAIL summary; exits non-zero on any
+        # failure.  Intended for CI and quick local sanity checks.
+        apps.integration-tests = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "tip-it-run" ''
+            set -eu
+            export PATH=${tip-server}/bin:${demoEmacs}/bin:$PATH
+            export TYPST_FONT_PATHS=${demoFontDir}
+            # The demoEmacs bundle has typst-ts-mode baked in.  Feed the
+            # tree-sitter grammar via EMACSLOADPATH override rather than
+            # per-invocation flags so run.sh is vanilla.
+            export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
+            export TIP_IT_DIR=${./integration-tests}
+            # tip.el lives at repo root (one level above integration-tests/
+            # in the source tree).  Pin it explicitly because daemon-init
+            # otherwise self-locates into the nix store.
+            export TIP_REPO=${./.}
+            exec ${pkgs.bash}/bin/bash "$TIP_IT_DIR/run.sh" "$@"
+          '');
+        };
+
         # `nix run .#fresh-build` — force a from-scratch rebuild by
         # GC'ing the current tip-server output first.  Useful when you
         # want to verify a cold build works or are chasing a
