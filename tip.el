@@ -408,6 +408,10 @@ Automatically renders visible fragments and enables live preview."
         ;; Kodama integration (auto-detect)
         (when (fboundp 'tip-kodama-maybe-enable)
           (tip-kodama-maybe-enable))
+        ;; LaTeX project-root discovery (magic comment / prompt /
+        ;; session file) — no-op in Typst buffers.
+        (when (fboundp 'tip-latex-maybe-setup-project)
+          (tip-latex-maybe-setup-project))
         ;; Flymake integration (on by default; users can disable via
         ;; tip-mode-hook).  Skips gracefully if Flymake isn't available.
         (when (and (locate-library "flymake")

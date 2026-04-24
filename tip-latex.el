@@ -446,6 +446,147 @@ LaTeX has no `block' analogue in v1."
    ;; Everything else: \(...\) or $...$ → inline.
    (t 'inline)))
 
+;;; * project root discovery
+
+(defcustom tip-latex-session-file
+  (locate-user-emacs-file "tip-latex-sessions.el")
+  "File persisting per-buffer project-root choices across sessions.
+Written whenever `tip-latex-set-root' or the first-time prompt
+records an answer.  Disable by setting to nil — choices then live
+only for the current Emacs session."
+  :type '(choice (const :tag "Disable persistence" nil) file)
+  :group 'tip)
+
+(defvar tip-latex--session-cache nil
+  "In-memory mirror of `tip-latex-session-file' — an alist
+mapping absolute buffer path → absolute root path.
+Loaded lazily by `tip-latex--session-load'.")
+
+(defvar tip-latex--session-loaded nil)
+
+(defun tip-latex--session-load ()
+  "Read `tip-latex-session-file' into `tip-latex--session-cache'."
+  (unless tip-latex--session-loaded
+    (setq tip-latex--session-loaded t)
+    (when (and tip-latex-session-file
+               (file-readable-p tip-latex-session-file))
+      (with-demoted-errors "tip-latex-session-load: %S"
+        (with-temp-buffer
+          (insert-file-contents tip-latex-session-file)
+          (setq tip-latex--session-cache (read (current-buffer))))))))
+
+(defun tip-latex--session-save ()
+  "Write `tip-latex--session-cache' to disk."
+  (when tip-latex-session-file
+    (with-demoted-errors "tip-latex-session-save: %S"
+      (make-directory (file-name-directory tip-latex-session-file) t)
+      (with-temp-file tip-latex-session-file
+        (let ((print-length nil) (print-level nil))
+          (prin1 tip-latex--session-cache (current-buffer)))))))
+
+(defun tip-latex--session-lookup (file)
+  "Return the saved root for FILE, or nil."
+  (tip-latex--session-load)
+  (cdr (assoc (expand-file-name file) tip-latex--session-cache)))
+
+(defun tip-latex--session-store (file root)
+  "Persist (FILE → ROOT) in the session file."
+  (tip-latex--session-load)
+  (setf (alist-get (expand-file-name file)
+                   tip-latex--session-cache nil nil #'equal)
+        (expand-file-name root))
+  (tip-latex--session-save))
+
+(defun tip-latex--magic-comment-root ()
+  "Parse the `% !TEX root = PATH' magic comment anywhere in the
+buffer.  Returns PATH resolved against the buffer's directory, or
+nil.  Scanning the whole buffer is microseconds — no 1000-byte
+cap like digestif."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (when (re-search-forward
+             "^[[:blank:]]*%[[:blank:]]*!TEX[[:blank:]]+root[[:blank:]]*=[[:blank:]]*\\(.+?\\)[[:blank:]]*$"
+             nil t)
+        (let ((raw (match-string-no-properties 1)))
+          (expand-file-name raw (file-name-directory
+                                 (or buffer-file-name default-directory))))))))
+
+(defun tip-latex--candidate-roots ()
+  "Return a list of plausible root `.tex' paths in ancestor dirs.
+A plausible root is a `.tex' file whose first 4k contains
+`\\documentclass'.  Walks up from the buffer's directory to home
+or filesystem root, whichever comes first."
+  (let* ((start (file-name-directory (or buffer-file-name default-directory)))
+         (home (expand-file-name "~/"))
+         (candidates nil)
+         (dir (expand-file-name start)))
+    (while (and dir
+                (not (string= dir (expand-file-name "/")))
+                (not (string= dir home)))
+      (dolist (f (ignore-errors (directory-files dir t "\\.tex\\'")))
+        (when (and (file-readable-p f)
+                   (not (file-directory-p f))
+                   (with-temp-buffer
+                     (insert-file-contents f nil 0 4096)
+                     (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward "\\\\documentclass" nil t))))
+          (push f candidates)))
+      (let ((parent (file-name-directory (directory-file-name dir))))
+        (setq dir (unless (equal parent dir) parent))))
+    (nreverse candidates)))
+
+(defun tip-latex--prompt-for-root ()
+  "Ask the user which file is this project's root.
+Default is the current buffer file; completions are
+`tip-latex--candidate-roots' — any `\\documentclass'-bearing
+`.tex' in an ancestor directory."
+  (let* ((here (or buffer-file-name default-directory))
+         (candidates (tip-latex--candidate-roots))
+         (default (or (car candidates) here))
+         (prompt (format "tip-latex project root (default %s): "
+                         (file-name-nondirectory default)))
+         (choice (completing-read prompt candidates nil nil nil nil default)))
+    (expand-file-name choice)))
+
+(defun tip-latex-set-root (root)
+  "Re-prompt for this buffer's project root and persist the answer.
+ROOT is resolved against the buffer's directory if relative."
+  (interactive (list (tip-latex--prompt-for-root)))
+  (setq-local tip-project-root-path (expand-file-name root))
+  (when buffer-file-name
+    (tip-latex--session-store buffer-file-name tip-project-root-path))
+  (message "tip-latex root → %s" tip-project-root-path)
+  tip-project-root-path)
+
+(defun tip-latex-maybe-setup-project ()
+  "Resolve this buffer's project root on `tip-mode' enable.
+Precedence:
+  1. `tip-project-root-path' already set (by user or .dir-locals.el) — keep.
+  2. If the buffer has no \\input/\\include/\\subimport — skip (single-file).
+  3. If the buffer isn't file-backed — error loudly.
+  4. `% !TEX root' magic comment.
+  5. Saved session answer for this file.
+  6. Prompt the user; remember the answer.
+
+Called from `tip-mode' activation via the LaTeX backend."
+  (when (and (derived-mode-p 'latex-mode 'LaTeX-mode)
+             (not tip-project-root-path))
+    (when (tip-latex--buffer-has-includes-p)
+      (cond
+       ((null buffer-file-name)
+        (user-error
+         "tip-latex: buffer contains \\input/\\include but is not visiting a file"))
+       ((tip-latex--magic-comment-root)
+        (setq-local tip-project-root-path (tip-latex--magic-comment-root)))
+       ((tip-latex--session-lookup buffer-file-name)
+        (setq-local tip-project-root-path
+                    (tip-latex--session-lookup buffer-file-name)))
+       (t
+        (tip-latex-set-root (tip-latex--prompt-for-root)))))))
+
 ;;; * backend registration
 
 (tip-register-backend
