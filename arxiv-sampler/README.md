@@ -28,6 +28,27 @@ override with `TIP_SERVER_EXECUTABLE=...`.
   elapsed, first-error) per paper, plus an overall pass rate.
 - JSON blob of the raw rows at the end for machine consumption.
 
+## Regression database
+
+Papers that render **zero** fragments ("catastrophic failure") are
+captured automatically:
+
+- `catastrophic.jsonl` — one JSON object per failure: id, capture
+  timestamp, detected-count, first-error.
+- `regressions/<id>.tar.gz` — the paper's source tarball, so every
+  future run can replay the exact bits that failed.
+
+Replay them any time (e.g. after a fix):
+
+```sh
+./sample.py --regress
+```
+
+The tarballs live in git so the DB persists across checkouts. They
+tend to be small (hundreds of KB each — TeX source + maybe a couple
+of figures).  If a paper swells past a megabyte it's worth asking
+whether we actually need the figures to reproduce.
+
 ## Conventions
 
 - **Never delete recordings** (`CLAUDE.md` memory). The `tmp/` workdir

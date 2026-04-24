@@ -54,17 +54,28 @@
                                (overlays-in (point-min) (point-max))))
                          (with-img (seq-filter
                                     (lambda (o) (overlay-get o 'display)) ovs))
-                         (with-err (seq-filter
-                                    (lambda (o) (overlay-get o 'tip-error-message))
-                                    ovs))
-                         (sample-err (and with-err
-                                          (overlay-get (car with-err)
+                         ;; A fragment that rendered with a warning
+                         ;; attached is still a success; `errored' is
+                         ;; reserved for real failures (no image).
+                         (errored (seq-filter
+                                   (lambda (o)
+                                     (and (overlay-get o 'tip-error-message)
+                                          (not (overlay-get o 'display))))
+                                   ovs))
+                         (warned (seq-filter
+                                  (lambda (o)
+                                    (and (overlay-get o 'tip-error-message)
+                                         (overlay-get o 'display)))
+                                  ovs))
+                         (sample-err (and errored
+                                          (overlay-get (car errored)
                                                        'tip-error-message))))
                     `((id . ,id)
                       (root . ,root-path)
                       (detected . ,nfrags)
                       (rendered . ,(length with-img))
-                      (errored . ,(length with-err))
+                      (warned . ,(length warned))
+                      (errored . ,(length errored))
                       (first-error . ,(or sample-err :null))
                       (elapsed . ,(- (float-time) t0))))))
             (error

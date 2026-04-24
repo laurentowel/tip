@@ -39,6 +39,13 @@ ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 HEADERS = {"User-Agent": "tip-arxiv-sampler/0.1 (https://github.com/local/tip)"}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Catastrophic-failure regression DB.  Every zero-render row gets
+# appended to the log + has its tarball stashed so future runs can
+# replay the exact-same source and verify a fix resolves it.
+HERE = Path(__file__).resolve().parent
+CATASTROPHIC_LOG = HERE / "catastrophic.jsonl"
+REGRESSIONS_DIR = HERE / "regressions"
+
 
 def fetch_ids(category: str, want: int) -> list[str]:
     """Random IDs from a recent slice; over-fetch then sample to avoid
@@ -150,13 +157,97 @@ def run_emacs(root: Path, paper_id: str, timeout: int) -> dict:
     }
 
 
+def capture_catastrophic(paper_id: str, row: dict, src_dir: Path) -> None:
+    """Stash a zero-render paper's tarball + append a JSONL row.
+    Skips if the id is already recorded (avoid duplicate tarballs)."""
+    REGRESSIONS_DIR.mkdir(exist_ok=True)
+    dest = REGRESSIONS_DIR / f"{paper_id}.tar.gz"
+    if not dest.exists():
+        # Re-pack the extracted src dir — the original tarball is gone
+        # by the time we notice the failure.
+        subprocess.run(
+            ["tar", "-czf", str(dest), "-C", str(src_dir), "."],
+            check=True, capture_output=True,
+        )
+    entry = {
+        "id": paper_id,
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "detected": row.get("detected", 0),
+        "rendered": row.get("rendered", 0),
+        "first_error": row.get("first-error"),
+        "elapsed": row.get("elapsed"),
+    }
+    with CATASTROPHIC_LOG.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def load_regressions() -> list[tuple[str, Path]]:
+    """Return [(id, tarball_path), ...] for every captured catastrophe."""
+    if not REGRESSIONS_DIR.exists():
+        return []
+    return sorted(
+        (p.stem, p) for p in REGRESSIONS_DIR.glob("*.tar.gz")
+    )
+
+
+def extract_regression(tarball: Path, dest: Path) -> bool:
+    dest.mkdir()
+    try:
+        subprocess.run(
+            ["tar", "-xzf", str(tarball), "-C", str(dest)],
+            check=True, capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=10, help="papers to sample")
     ap.add_argument("--category", default="math.AP", help="arxiv category")
     ap.add_argument("--timeout", type=int, default=180, help="per-paper seconds")
     ap.add_argument("--sleep", type=float, default=3.0, help="between fetches")
+    ap.add_argument(
+        "--regress", action="store_true",
+        help="replay every paper in regressions/ (no fetch)",
+    )
     args = ap.parse_args()
+
+    if args.regress:
+        captured = load_regressions()
+        print(f"Replaying {len(captured)} captured failures…", file=sys.stderr)
+        rows = []
+        with tempfile.TemporaryDirectory(prefix="tip-regress-") as work_root:
+            work_root = Path(work_root)
+            for i, (paper_id, tarball) in enumerate(captured):
+                print(f"\n[{i+1}/{len(captured)}] {paper_id}", file=sys.stderr)
+                paper_dir = work_root / paper_id
+                if not extract_regression(tarball, paper_dir):
+                    rows.append({
+                        "id": paper_id, "root": "", "detected": 0, "rendered": 0,
+                        "warned": 0, "errored": 0,
+                        "first-error": "EXTRACT", "elapsed": 0,
+                    })
+                    continue
+                root = guess_root(paper_dir)
+                if root is None:
+                    rows.append({
+                        "id": paper_id, "root": "", "detected": 0, "rendered": 0,
+                        "warned": 0, "errored": 0,
+                        "first-error": "NO-ROOT", "elapsed": 0,
+                    })
+                    continue
+                row = run_emacs(root, paper_id, args.timeout)
+                print(
+                    f"  → detected={row['detected']} rendered={row['rendered']} "
+                    f"warned={row.get('warned', 0)} errored={row['errored']} "
+                    f"elapsed={row['elapsed']:.1f}s",
+                    file=sys.stderr,
+                )
+                rows.append(row)
+        print_report(rows)
+        return
 
     print(f"Fetching {args.n} random ids from {args.category}…", file=sys.stderr)
     ids = fetch_ids(args.category, args.n)
@@ -188,15 +279,28 @@ def main():
             row = run_emacs(root, arxiv_id, args.timeout)
             print(
                 f"  → detected={row['detected']} rendered={row['rendered']} "
-                f"errored={row['errored']} elapsed={row['elapsed']:.1f}s",
+                f"warned={row.get('warned', 0)} errored={row['errored']} "
+                f"elapsed={row['elapsed']:.1f}s",
                 file=sys.stderr,
             )
             rows.append(row)
+            # Stash catastrophic failures (0 rendered) as regressions.
+            if row.get("detected", 0) > 0 and row.get("rendered", 0) == 0:
+                try:
+                    capture_catastrophic(arxiv_id, row, paper_dir / "src")
+                    print(f"  CAPTURED as regression → {REGRESSIONS_DIR / f'{arxiv_id}.tar.gz'}",
+                          file=sys.stderr)
+                except Exception as e:
+                    print(f"  capture failed: {e}", file=sys.stderr)
             time.sleep(args.sleep)
 
+    print_report(rows)
+
+
+def print_report(rows: list[dict]) -> None:
     print("\n## Summary\n")
-    print("| id | detected | rendered | errored | elapsed | first error |")
-    print("|----|----------|----------|---------|---------|-------------|")
+    print("| id | detected | rendered | warned | errored | elapsed | first error |")
+    print("|----|----------|----------|--------|---------|---------|-------------|")
     for r in rows:
         err = r.get("first-error") or ""
         if err is None or err == "null":
@@ -204,12 +308,17 @@ def main():
         err = str(err).replace("|", "\\|")[:60]
         print(
             f"| {r['id']} | {r['detected']} | {r['rendered']} | "
-            f"{r['errored']} | {r['elapsed']:.1f}s | {err} |"
+            f"{r.get('warned', 0)} | {r['errored']} | {r['elapsed']:.1f}s | {err} |"
         )
     total = len(rows)
     fully = sum(1 for r in rows if r["detected"] > 0 and r["rendered"] == r["detected"])
     none = sum(1 for r in rows if r["rendered"] == 0)
     print(f"\n**{fully}/{total} fully rendered**, {none} zero-render")
+    if CATASTROPHIC_LOG.exists():
+        with CATASTROPHIC_LOG.open() as f:
+            captured = sum(1 for _ in f)
+        print(f"Regression DB: {captured} catastrophic failures logged "
+              f"({REGRESSIONS_DIR.relative_to(REPO_ROOT)}/)")
     print("\n<details><summary>raw rows (JSON)</summary>\n\n```json")
     print(json.dumps(rows, indent=2))
     print("```\n</details>")

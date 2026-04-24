@@ -268,12 +268,20 @@ and fuses with a subsequent fragment.  Correct-always > cheap-wrong.
 
 Multi-file projects are supported: fragments in a child file are
 detected locally; the server walks the project graph to assemble
-the compile-time preamble from `tip-project-root-path'."
-  (let ((scan-beg (point-min))
-        (scan-end (point-max))
-        (verbatim (tip-latex--verbatim-ranges (point-min) (point-max)))
-        (re (tip-latex--math-begin-re))
-        ranges)
+the compile-time preamble from `tip-project-root-path'.
+
+Skips the preamble (text before `\\begin{document}') so math-env
+openers inside `\\newcommand' bodies — e.g. `\\newcommand{\\beq}
+{\\begin{equation}}' — don't get picked up as fragments.  Child
+files (no `\\begin{document}') are scanned from the top."
+  (let* ((preamble-end (tip-latex--preamble-end))
+         (scan-beg (if preamble-end
+                       (max (point-min) preamble-end)
+                     (point-min)))
+         (scan-end (point-max))
+         (verbatim (tip-latex--verbatim-ranges scan-beg scan-end))
+         (re (tip-latex--math-begin-re))
+         ranges)
     (save-excursion
       (goto-char scan-beg)
       (while (re-search-forward re scan-end t)
