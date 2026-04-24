@@ -56,15 +56,150 @@
           };
         };
 
+        # Musl-static build of the same binary.  Target switched via
+        # pkgsCross.musl64 (so rustc, linker, and openssl are all musl
+        # variants — no glibc linkage).  The resulting binary runs on
+        # any x86_64 Linux without Nix or matching glibc — that's the
+        # artifact we ship on GitHub releases.
+        # Musl build wrapped in +crt-static so libc itself is linked
+        # statically.  Without this, rustc's musl target emits a PIE
+        # that dynamically links to musl's libc.so — which defeats
+        # the point, since that .so only lives in the nix store.
+        mkStaticTipServer = crossPkgs: crossPkgs.rustPlatform.buildRustPackage {
+          pname = "tip-server-static";
+          version = "0.1.0";
+          src = ./tip-server;
+          cargoLock = { lockFile = ./tip-server/Cargo.lock; };
+          cargoBuildFlags = [ "-p" "tip-server" ];
+          doCheck = false;
+          nativeBuildInputs = [ pkgs.pkg-config pkgs.perl ];
+          buildInputs = [ ];
+          # +crt-static → libc/libgcc_s statically linked.  Result:
+          # single file that runs on any Linux of the matching arch
+          # with no external .so dependencies.
+          RUSTFLAGS = "-C target-feature=+crt-static";
+          meta = tip-server.meta // { description = "tip-server (musl-static)"; };
+        };
+        tip-server-static = mkStaticTipServer pkgs.pkgsCross.musl64;
+        tip-server-static-aarch64 =
+          mkStaticTipServer pkgs.pkgsCross.aarch64-multiplatform-musl;
+
+        # ----- demo: GUI emacs with tip-mode rendering live -----
+        #
+        # `nix run .#demo` opens emacs-pgtk (native Wayland) with
+        # tip-server on PATH, typst-ts-mode installed, the typst
+        # tree-sitter grammar wired up, and two buffers side by side
+        # (a .typ and a .tex, both with tip-mode live).  Zero host
+        # config — every bit is pinned by the flake.
+
+        # typst-ts-mode isn't in nixpkgs' melpaPackages snapshot yet, so
+        # fetch it directly from codeberg and trivial-build it.
+        typst-ts-mode = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).trivialBuild {
+          pname = "typst-ts-mode";
+          version = "0-unstable-2026-04";
+          src = pkgs.fetchFromGitea {
+            domain = "codeberg.org";
+            owner = "meow_king";
+            repo = "typst-ts-mode";
+            rev = "278562d702de429f5c4369c007913ca0ef1584f3";
+            hash = "sha256-B1GAyYWLUipsTD7DHH7TSZjWtp1gru4YdOXqXmPeedU=";
+          };
+          # All .el sit at the repo root.
+          postUnpack = "";
+          meta.description = "Major mode for Typst, tree-sitter based";
+        };
+
+        # The typst grammar derivation outputs `$out/parser` as a .so
+        # file.  Emacs' treesit-extra-load-path expects a directory
+        # containing `libtree-sitter-LANG.so`, so symlink it into shape.
+        typstGrammarDir = pkgs.runCommand "tip-typst-grammar-dir" { } ''
+          mkdir -p $out
+          ln -s ${pkgs.tree-sitter-grammars.tree-sitter-typst}/parser \
+                $out/libtree-sitter-typst.so
+        '';
+
+        demoEmacs = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages
+          (ep: [ typst-ts-mode ]);
+
+        demoTypst = pkgs.writeText "tip-demo.typ" ''
+          = tip-mode demo — Typst
+
+          Inline math: $a + b = c$ and $integral_0^1 x^2 dif x = 1/3$.
+
+          Display:
+          $ mat(1, 0; 0, 1) + mat(a, b; c, d) = mat(1+a, b; c, 1+d) $
+
+          $ sum_(k=1)^n k = n(n+1)/2 $
+        '';
+
+        demoLatex = pkgs.writeText "tip-demo.tex" ''
+          \documentclass{article}
+          \usepackage{amsmath,amssymb}
+          \begin{document}
+
+          \textbf{tip-mode demo --- LaTeX}
+
+          Inline: $a + b = c$ and $\int_0^1 x^2\,dx = \tfrac{1}{3}$.
+
+          Display:
+          \[ \begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}
+             + \begin{pmatrix} a & b \\ c & d \end{pmatrix}
+             = \begin{pmatrix} 1+a & b \\ c & 1+d \end{pmatrix} \]
+
+          \[ \sum_{k=1}^n k = \frac{n(n+1)}{2} \]
+
+          \end{document}
+        '';
+
+        demoInit = pkgs.writeText "tip-demo-init.el" ''
+          ;; Minimal init for the tip-mode demo.  Everything outside
+          ;; this file is flake-pinned.
+          (setq inhibit-startup-screen t
+                make-backup-files nil
+                auto-save-default nil
+                frame-title-format "tip-mode demo (Typst | LaTeX)")
+          (add-to-list 'treesit-extra-load-path "${typstGrammarDir}/")
+          (add-to-list 'load-path "${toString ./.}")
+          (require 'tip)
+          (require 'tip-typst)
+          (require 'tip-latex)
+          ;; Open typst on the left, latex on the right.
+          (find-file "${demoTypst}")
+          (split-window-right)
+          (other-window 1)
+          (find-file "${demoLatex}")
+          (other-window 1)
+          ;; Enable tip-mode in both buffers.
+          (dolist (buf (buffer-list))
+            (with-current-buffer buf
+              (when (or (derived-mode-p 'typst-ts-mode)
+                        (derived-mode-p 'latex-mode)
+                        (derived-mode-p 'tex-mode))
+                (tip-mode 1))))
+        '';
+
+        demoScript = pkgs.writeShellScript "tip-demo" ''
+          export PATH=${tip-server}/bin:$PATH
+          exec ${demoEmacs}/bin/emacs -Q -l ${demoInit} "$@"
+        '';
       in {
         packages = {
           default = tip-server;
           tip-server = tip-server;
+          tip-server-static = tip-server-static;
+          tip-server-static-aarch64 = tip-server-static-aarch64;
         };
 
         apps.default = {
           type = "app";
           program = "${tip-server}/bin/tip-server";
+        };
+
+        # `nix run .#demo` — spawns a GUI emacs with tip-mode live,
+        # typst on the left, latex on the right.
+        apps.demo = {
+          type = "app";
+          program = "${demoScript}";
         };
 
         # `nix develop` gives a reproducible build+test environment:
