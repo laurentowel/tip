@@ -185,18 +185,37 @@ field (defaulting to tip-server-typst)."
 
 ;;; * process spawn
 
+(defconst tip--server-stderr-buffer-name "*tip-server-stderr*"
+  "Buffer name capturing tip-server's stderr.
+Panic backtraces (RUST_BACKTRACE=1 is set by `tip--start-server-process')
+land here.  View via `tip-show-server-stderr'.")
+
+(defun tip--server-stderr-buffer ()
+  "Return (creating if needed) the tip-server stderr capture buffer."
+  (let ((buf (get-buffer-create tip--server-stderr-buffer-name)))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'special-mode)
+        (special-mode)))
+    buf))
+
 (defun tip--start-server-process ()
-  "Start tip-server as a local process."
+  "Start tip-server as a local process.
+Stderr is captured into `tip--server-stderr-buffer-name' so panic
+backtraces (RUST_BACKTRACE=1) survive an exit.  No perf cost:
+RUST_BACKTRACE is only consulted when the process actually panics."
   (let ((exe (tip--find-server)))
     (unless exe
       (user-error "No tip-server binary found. Run M-x tip--compile-from-source"))
-    (make-process
-     :name "tip-server"
-     :command (list exe)
-     :connection-type 'pipe
-     :filter #'tip--process-filter
-     :sentinel #'tip--process-sentinel
-     :noquery t)))
+    (let ((process-environment
+           (cons "RUST_BACKTRACE=1" process-environment)))
+      (make-process
+       :name "tip-server"
+       :command (list exe)
+       :connection-type 'pipe
+       :filter #'tip--process-filter
+       :sentinel #'tip--process-sentinel
+       :stderr (tip--server-stderr-buffer)
+       :noquery t))))
 
 (defun tip--start-docker-process ()
   "Start tip-server via Docker with stdio."
@@ -220,6 +239,7 @@ field (defaulting to tip-server-typst)."
      :connection-type 'pipe
      :filter #'tip--process-filter
      :sentinel #'tip--process-sentinel
+     :stderr (tip--server-stderr-buffer)
      :noquery t)))
 
 ;;;###autoload
@@ -257,12 +277,50 @@ field (defaulting to tip-server-typst)."
               (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
       (message "tip-server failed to start"))))
 
+(defun tip--server-stderr-tail (&optional n-lines)
+  "Return the last N-LINES of the tip-server stderr buffer, or nil.
+Defaults to 10 lines."
+  (let ((buf (get-buffer tip--server-stderr-buffer-name)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (let ((end (point-max))
+              (n (or n-lines 10)))
+          (save-excursion
+            (goto-char end)
+            (forward-line (- n))
+            (let ((s (buffer-substring-no-properties (point) end)))
+              (unless (string-empty-p (string-trim s)) s))))))))
+
 (defun tip--process-sentinel (proc event)
-  "Handle tip-server process state changes."
+  "Handle tip-server process state changes.
+On unexpected exits, surface the stderr tail so the user sees panic
+backtraces (RUST_BACKTRACE=1) instead of a bare `exited abnormally'."
   (tip-debug-msg "tip-server: %s" (string-trim event))
   (when (not (process-live-p proc))
     (setq tip--server-process nil)
-    (message "tip-server exited: %s" (string-trim event))))
+    (let ((ev (string-trim event))
+          (tail (tip--server-stderr-tail 20)))
+      (cond
+       ((or (string-match-p "finished" ev) (string-match-p "killed" ev))
+        (message "tip-server exited: %s" ev))
+       (t
+        (message "tip-server exited: %s (M-x tip-show-server-stderr for details)%s"
+                 ev
+                 (if tail
+                     (format "\n--- last stderr lines ---\n%s"
+                             (string-trim tail))
+                   "")))))))
+
+;;;###autoload
+(defun tip-show-server-stderr ()
+  "Pop the tip-server stderr capture buffer.
+Useful for panic backtraces after an unexpected `exit 1'.
+RUST_BACKTRACE=1 is set at process spawn so panics include frames."
+  (interactive)
+  (let ((buf (get-buffer tip--server-stderr-buffer-name)))
+    (if (and buf (> (buffer-size buf) 0))
+        (pop-to-buffer buf)
+      (message "tip-server stderr is empty (no panics / warnings captured)"))))
 
 (defun tip--process-filter (_proc output)
   "Handle output from tip-server.  Parse newline-delimited JSON responses."
