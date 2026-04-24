@@ -132,7 +132,7 @@
         '';
 
         demoEmacs = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages
-          (ep: [ typst-ts-mode ]);
+          (ep: [ typst-ts-mode ep.ef-themes ep.spacious-padding ep.demo-it ep.keycast ]);
 
         # Pennstander Math — a distinctive math font used by the
         # custom-font section of demo/tip-demo.typ.  Fetched from
@@ -148,9 +148,14 @@
         # TYPST_FONT_PATHS.  Bundled so the custom-font section
         # renders identically across machines — even on hosts that
         # have no system-installed math fonts.  Add more fonts here.
+        #
+        # Includes Sarasa Gothic for CJK glyphs so the Chinese
+        # showcase (TIP_SHOWCASE_LANG=zh) has real characters to
+        # render in both Emacs text and Typst output.
         demoFontDir = pkgs.runCommand "tip-demo-fonts" { } ''
           mkdir -p $out
           cp ${pennstanderSrc}/fonts/otf/PennstanderMath-*.otf $out/
+          cp -L ${pkgs.sarasa-gothic}/share/fonts/truetype/*.ttc $out/
         '';
 
         # Typst and LaTeX demos show the SAME math, just translated into
@@ -288,13 +293,111 @@
             set -eu
             export PATH=${tip-server}/bin:${demoEmacs}/bin:$PATH
             export TYPST_FONT_PATHS=${demoFontDir}
+            # fontconfig sees the bundled fonts (Sarasa Gothic for CJK).
+            export XDG_DATA_DIRS=${pkgs.sarasa-gothic}/share:${pkgs.fira-math}/share:''${XDG_DATA_DIRS:-/usr/share}
             export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
-            export TIP_IT_DIR=${./integration-tests}
             export TIP_REPO=${./.}
-            export TIP_IT_SPECS=${./integration-tests/showcase}
-            # 3s between scenes is a comfortable pace for watching;
-            # override via --sleep.
-            exec ${pkgs.bash}/bin/bash "$TIP_IT_DIR/run.sh" --sleep 3 "$@"
+            export TIP_SHOWCASE_DIR=${./showcase}
+            export TIP_SHOWCASE_THEME=''${TIP_SHOWCASE_THEME:-modus-operandi}
+            exec ${pkgs.bash}/bin/bash "$TIP_SHOWCASE_DIR/run.sh" "$@"
+          '');
+        };
+
+# `nix run .#showcase-record` — record the showcase to an mp4.
+        # Prompts (via slurp) for a screen region, then launches the
+        # showcase with wl-screenrec capturing that region.  Output
+        # defaults to ./tip-showcase.mp4; override with TIP_RECORD_OUT.
+        # Wayland-only; needs wl-screenrec + slurp.
+        apps.showcase-record = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "tip-showcase-record" ''
+            set -eu
+            export PATH=${pkgs.wf-recorder}/bin:${pkgs.slurp}/bin:$PATH
+
+            # Output lands in ./recordings/ (gitignored) with a
+            # timestamp suffix so multiple runs don't clobber.  Set
+            # TIP_RECORD_OUT to override the whole path.
+            ts=$(date +%Y%m%d-%H%M%S)
+            dir="''${TIP_RECORD_DIR:-$PWD/recordings}"
+            mkdir -p "$dir"
+            out="''${TIP_RECORD_OUT:-$dir/tip-showcase-$ts.mp4}"
+
+            mode="region"
+            for arg in "$@"; do
+              case "$arg" in
+                --full)     mode="full" ;;
+                --region=*) mode="custom"; region="''${arg#--region=}" ;;
+              esac
+            done
+
+            case "$mode" in
+              region)
+                echo "Select a region (drag-select the emacs frame)..." >&2
+                region=$(slurp) || { echo "cancelled" >&2; exit 1; }
+                rec_args=(-g "$region") ;;
+              custom)
+                rec_args=(-g "$region") ;;
+              full)
+                rec_args=() ;;  # full output (default monitor)
+            esac
+
+            echo "recording to $out  (mode=$mode)" >&2
+            # wf-recorder with software libx264 — universal.  VAAPI-
+            # based tools (wl-screenrec) silently emit 0-byte files
+            # on hosts with broken VAAPI (missing libLLVM etc.).
+            wf-recorder -c libx264 -f "$out" "''${rec_args[@]}" &
+            rec_pid=$!
+            sleep 2
+
+            # Foreground the showcase — block until done.
+            nix run .#showcase
+            sc_exit=$?
+
+            # wf-recorder MUST be stopped with SIGINT and given time
+            # to flush the mp4 trailer (moov atom).  SIGKILL or a
+            # too-quick exit produces a file that can't be opened.
+            kill -INT $rec_pid 2>/dev/null || true
+            for _ in $(seq 1 50); do
+              if ! kill -0 $rec_pid 2>/dev/null; then break; fi
+              sleep 0.1
+            done
+            # If still alive after 5s, escalate.
+            if kill -0 $rec_pid 2>/dev/null; then
+              echo "recorder didn't stop on SIGINT, sending SIGTERM" >&2
+              kill -TERM $rec_pid 2>/dev/null || true
+              sleep 1
+            fi
+            wait $rec_pid 2>/dev/null || true
+            echo "wrote $out" >&2
+            exit $sc_exit
+          '');
+        };
+
+        # `nix run .#showcase-record-headless` — record the showcase
+        # to an mp4 WITHOUT popping a visible frame on the user's
+        # desktop.  Runs the showcase inside a nested sway headless
+        # compositor at a fixed resolution (default 600×400) and
+        # recorder attaches to that compositor's Wayland socket.
+        # Pixman software renderer — no GPU needed.
+        # `nix run .#showcase-record-headless` — nested-niri variant.
+        # Despite the name, niri has no true headless mode, so this
+        # pops a visible nested window (app-id "niri") on the host
+        # compositor.  Configure a host window-rule to float it.
+        # Uses the host's system `niri` (not nixpkgs niri) so GPU/EGL
+        # drivers are available without a NixOS /run/opengl-driver.
+        apps.showcase-record-headless = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "tip-showcase-nested" ''
+            set -eu
+            export PATH=${tip-server}/bin:${demoEmacs}/bin:${pkgs.wf-recorder}/bin:${pkgs.ffmpeg}/bin:$PATH
+            export TYPST_FONT_PATHS=${demoFontDir}
+            export XDG_DATA_DIRS=${pkgs.sarasa-gothic}/share:${pkgs.fira-math}/share:''${XDG_DATA_DIRS:-/usr/share}
+            export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
+            export TIP_REPO=${./.}
+            export TIP_SHOWCASE_DIR=${./showcase}
+            export TIP_SHOWCASE_THEME=''${TIP_SHOWCASE_THEME:-modus-operandi}
+            export TIP_RECORD_BIN=${pkgs.wf-recorder}/bin/wf-recorder
+            exec ${pkgs.bash}/bin/bash "$TIP_SHOWCASE_DIR/run.sh" --headless "$@"
           '');
         };
 
