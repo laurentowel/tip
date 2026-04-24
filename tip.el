@@ -702,7 +702,7 @@ appears in the `*tip-doctor*' buffer."
 
 (defun tip--doctor-render (result)
   "Format health-check RESULT into the `*tip-doctor*' buffer."
-  (let* ((report (alist-get "report" result nil nil #'equal))
+  (let* ((report (alist-get 'report result))
          (buf (get-buffer-create "*tip-doctor*")))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
@@ -716,16 +716,16 @@ appears in the `*tip-doctor*' buffer."
   "Insert a formatted report from the alist R."
   (cl-labels
       ((field (k)
-         (alist-get k r nil nil #'equal))
+         (alist-get k r))
        (sub (a k)
-         (alist-get k a nil nil #'equal))
+         (alist-get k a))
        (mark (ok)
          (if ok "[ok]   " "[FAIL] "))
        (dep (label probe)
-         (let* ((found (eq (sub probe "found") t))
-                (meets (not (eq (sub probe "meets_min_version") :json-false)))
-                (path (sub probe "path"))
-                (ver (sub probe "version")))
+         (let* ((found (eq (sub probe 'found) t))
+                (meets (not (eq (sub probe 'meets_min_version) :json-false)))
+                (path (sub probe 'path))
+                (ver (sub probe 'version)))
            (insert (format "  %s%-12s" (mark (and found meets)) label))
            (if found
                (insert (format "%s\n               %s\n"
@@ -735,23 +735,23 @@ appears in the `*tip-doctor*' buffer."
     (insert "tip-server health check\n")
     (insert "=======================\n\n")
     (insert (format "server %s   target %s   %s/%s\n\n"
-                    (field "server_version")
-                    (field "target_triple")
-                    (field "os") (field "arch")))
-    (let ((tp (field "typst")))
+                    (field 'server_version)
+                    (field 'target_triple)
+                    (field 'os) (field 'arch)))
+    (let ((tp (field 'typst)))
       (when tp
         (insert (format "Typst backend\n  %stypst %s, %d fonts\n\n"
-                        (mark (eq (sub tp "ok") t))
-                        (sub tp "typst_version")
-                        (sub tp "fonts_found")))))
-    (let ((lx (field "latex")))
+                        (mark (eq (sub tp 'ok) t))
+                        (sub tp 'typst_version)
+                        (sub tp 'fonts_found)))))
+    (let ((lx (field 'latex)))
       (when lx
-        (insert (format "LaTeX backend  %s\n" (mark (eq (sub lx "ok") t))))
-        (dep "latex"     (sub lx "latex"))
-        (dep "dvisvgm"   (sub lx "dvisvgm"))
-        (dep "preview.sty" (sub lx "preview_sty"))
+        (insert (format "LaTeX backend  %s\n" (mark (eq (sub lx 'ok) t))))
+        (dep "latex"     (sub lx 'latex))
+        (dep "dvisvgm"   (sub lx 'dvisvgm))
+        (dep "preview.sty" (sub lx 'preview_sty))
         (insert "\n")))
-    (let ((ws (field "warnings")))
+    (let ((ws (field 'warnings)))
       (when (and ws (> (length ws) 0))
         (insert "Warnings:\n")
         (mapc (lambda (w) (insert (format "  - %s\n" w))) (append ws nil))))))
