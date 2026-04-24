@@ -110,10 +110,12 @@ impl LatexBackend {
         // Working dir: explicit project root (set via sync) wins;
         // otherwise the uri's parent so relative \includegraphics etc.
         // resolve the same way they would during a real compile.
+        // `roots' values are the root FILE path (e.g. main.tex) — take
+        // its parent to get the directory latex should be spawned in.
         let cwd = self
             .roots
             .get(&params.uri)
-            .cloned()
+            .and_then(|root| root.parent().map(Path::to_path_buf))
             .or_else(|| Path::new(&params.uri).parent().map(Path::to_path_buf));
 
         match LatexCompiler::compile_batch(

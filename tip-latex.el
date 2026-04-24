@@ -565,26 +565,28 @@ ROOT is resolved against the buffer's directory if relative."
   "Resolve this buffer's project root on `tip-mode' enable.
 Precedence:
   1. `tip-project-root-path' already set (by user or .dir-locals.el) — keep.
-  2. If the buffer has no \\input/\\include/\\subimport — skip (single-file).
-  3. If the buffer isn't file-backed — error loudly.
-  4. `% !TEX root' magic comment.
-  5. Saved session answer for this file.
-  6. Prompt the user; remember the answer.
+  2. `% !TEX root' magic comment (child files usually have this and
+     no \\input of their own).
+  3. Saved session answer for this file.
+  4. If the buffer has \\input/\\include/\\subimport and is file-backed
+     — prompt the user; remember the answer.
+  5. If the buffer has \\input but is NOT file-backed — error loudly.
+  6. Otherwise skip (single-file, no multi-file signals).
 
 Called from `tip-mode' activation via the LaTeX backend."
   (when (and (derived-mode-p 'latex-mode 'LaTeX-mode)
              (not tip-project-root-path))
-    (when (tip-latex--buffer-has-includes-p)
+    (let ((magic (tip-latex--magic-comment-root))
+          (saved (and buffer-file-name
+                      (tip-latex--session-lookup buffer-file-name)))
+          (has-inc (tip-latex--buffer-has-includes-p)))
       (cond
-       ((null buffer-file-name)
+       (magic (setq-local tip-project-root-path magic))
+       (saved (setq-local tip-project-root-path saved))
+       ((and has-inc (null buffer-file-name))
         (user-error
          "tip-latex: buffer contains \\input/\\include but is not visiting a file"))
-       ((tip-latex--magic-comment-root)
-        (setq-local tip-project-root-path (tip-latex--magic-comment-root)))
-       ((tip-latex--session-lookup buffer-file-name)
-        (setq-local tip-project-root-path
-                    (tip-latex--session-lookup buffer-file-name)))
-       (t
+       (has-inc
         (tip-latex-set-root (tip-latex--prompt-for-root)))))))
 
 ;;; * backend registration
