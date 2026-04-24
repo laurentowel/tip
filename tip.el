@@ -500,7 +500,12 @@ Automatically renders visible fragments and enables live preview."
           (setq preview-toggle--marker (make-marker)))
         (add-hook 'pre-command-hook #'preview-toggle--pre-command nil 'local)
         (add-hook 'post-command-hook #'preview-toggle--post-command nil 'local)
-        (add-hook 'post-command-hook #'tip--update-cursor-type nil 'local)
+        ;; `t' here = APPEND (not prepend).  Must run AFTER
+        ;; preview-toggle's post-command so `display=nil' set by
+        ;; open-at-point is already visible when we decide whether to
+        ;; swap cursor-type.  Prepending made cursor-type see a stale
+        ;; image-display and uselessly switch to the thin bar.
+        (add-hook 'post-command-hook #'tip--update-cursor-type t 'local)
         ;; Live preview via childframe (off by default, user enables with M-x tip-live-mode)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
