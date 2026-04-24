@@ -166,6 +166,24 @@ impl TypstBackend {
         }
     }
 
+    /// Typst has no dependency graph yet — return the URI alone.
+    /// Clients pack just this file; if the user needs more, they re-run
+    /// from a root file that imports everything.  Root dir is picked by
+    /// the same marker walk `handle_sync' uses, or the URI's parent as
+    /// fallback.
+    pub fn handle_list_project_files(&self, params: ListProjectFilesParams) -> ResponseResult {
+        let path = PathBuf::from(&params.uri);
+        let root = path
+            .parent()
+            .and_then(Self::find_project_root)
+            .or_else(|| path.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| path.clone());
+        ResponseResult::ProjectFiles {
+            root: root.display().to_string(),
+            files: vec![params.uri],
+        }
+    }
+
     pub fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),

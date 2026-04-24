@@ -13,12 +13,6 @@ use tip_protocol::messages::{BinaryProbe, HealthReport, LatexHealth, TypstHealth
 
 use crate::typst_backend::TypstBackend;
 
-/// Minimum dvisvgm version we rely on.  `--bbox=preview` existed
-/// earlier, but 2.14 is the first release where its interaction with
-/// preview.sty's tightpage option is reliable (prior versions mis-crop
-/// when preview's depth-metric is negative).
-const MIN_DVISVGM: &str = "2.14";
-
 /// Collect a full diagnostic report.  Cheap enough (a few short
 /// subprocess calls) to run synchronously in the request handler.
 pub fn collect_report(typst: &TypstBackend) -> HealthReport {
@@ -42,19 +36,14 @@ pub fn collect_report(typst: &TypstBackend) -> HealthReport {
 
 fn probe_latex_deps(warnings: &mut Vec<String>) -> LatexHealth {
     let latex = probe_binary("latex", &["--version"], None);
-    let dvisvgm = probe_binary("dvisvgm", &["--version"], Some(MIN_DVISVGM));
+    let dvisvgm = probe_binary("dvisvgm", &["--version"], None);
     let preview_sty = probe_kpsewhich("preview.sty");
 
-    if !dvisvgm.meets_min_version {
-        if let Some(v) = dvisvgm.version.as_deref() {
-            warnings.push(format!(
-                "dvisvgm {} detected; {}+ recommended for reliable tightpage bbox",
-                v, MIN_DVISVGM
-            ));
-        }
-    }
     if !latex.found {
         warnings.push("`latex` not found in PATH — LaTeX fragments will fail".into());
+    }
+    if !dvisvgm.found {
+        warnings.push("`dvisvgm` not found in PATH — LaTeX fragments will fail".into());
     }
     if !preview_sty.found {
         warnings.push(
@@ -62,7 +51,7 @@ fn probe_latex_deps(warnings: &mut Vec<String>) -> LatexHealth {
         );
     }
 
-    let ok = latex.found && dvisvgm.found && dvisvgm.meets_min_version && preview_sty.found;
+    let ok = latex.found && dvisvgm.found && preview_sty.found;
     LatexHealth { ok, latex, dvisvgm, preview_sty }
 }
 

@@ -61,6 +61,10 @@ impl Handler {
             Request::HealthCheck => ResponseResult::Health {
                 report: diagnostics::collect_report(&self.typst),
             },
+            Request::ListProjectFiles(params) => match params.backend {
+                BackendId::Typst => self.typst.handle_list_project_files(params),
+                BackendId::Latex => self.latex.handle_list_project_files(params),
+            },
             Request::Shutdown => {
                 self.shutdown = true;
                 ResponseResult::Shutdown { ok: true }

@@ -33,6 +33,7 @@
 (require 'tip-latex)
 (require 'tip-live)
 (require 'tip-errors)
+(require 'tip-diagnostic)
 
 (declare-function tip-kodama-mode "tip-kodama" (&optional arg))
 
@@ -684,117 +685,6 @@ Called from `after-change-functions'."
   (interactive)
   (clear-image-cache t)
   (tip-clear-buffer))
-
-;;;###autoload
-(defun tip-doctor ()
-  "Probe tip-server and external deps; print a diagnostic report.
-Useful both for interactive troubleshooting (\"is my setup OK?\") and
-as the body of a bug report — the report includes server version,
-OS/arch, backend statuses, dep paths and versions, plus any warnings.
-
-If no server is running, one is started for the probe.  The report
-appears in the `*tip-doctor*' buffer."
-  (interactive)
-  (tip--send-request
-   "health_check" nil
-   (lambda (result)
-     (tip--doctor-render result))))
-
-(defun tip--doctor-render (result)
-  "Format health-check RESULT into the `*tip-doctor*' buffer."
-  (let* ((report (alist-get 'report result))
-         (buf (get-buffer-create "*tip-doctor*")))
-    (with-current-buffer buf
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (tip--doctor-format report))
-      (goto-char (point-min))
-      (special-mode))
-    (display-buffer buf)))
-
-(defun tip--doctor-insert (text &rest faces)
-  "Insert TEXT propertized with FACES."
-  (insert (propertize text 'face (if (cdr faces) faces (car faces)))))
-
-(defun tip--doctor-mark (ok)
-  "Return a propertized check/cross glyph for OK."
-  (if ok
-      (propertize "✓" 'face 'success)
-    (propertize "✗" 'face 'error)))
-
-(defun tip--doctor-kv (label value &optional face)
-  "Insert a `  LABEL  VALUE' line; VALUE rendered with FACE (default shadow)."
-  (insert "  ")
-  (tip--doctor-insert (format "%-16s" label) 'font-lock-variable-name-face)
-  (tip--doctor-insert (format "%s\n" (or value "—"))
-                      (or face 'shadow)))
-
-(defun tip--doctor-dep (label probe)
-  "Insert a dependency line for PROBE under LABEL."
-  (let* ((found (eq (alist-get 'found probe) t))
-         (meets (not (eq (alist-get 'meets_min_version probe) :json-false)))
-         (ok (and found meets))
-         (ver (alist-get 'version probe))
-         (path (alist-get 'path probe)))
-    (insert "    ")
-    (insert (tip--doctor-mark ok))
-    (insert " ")
-    (tip--doctor-insert (format "%-12s" label) 'font-lock-function-name-face)
-    (cond
-     ((not found)
-      (tip--doctor-insert "not found\n" 'error))
-     (t
-      (tip--doctor-insert (format "%s" (or ver "(version unknown)"))
-                          'font-lock-constant-face)
-      (unless meets
-        (insert " ")
-        (tip--doctor-insert "(below minimum)" 'warning))
-      (insert "\n")
-      (when path
-        (tip--doctor-insert (format "                 %s\n" path)
-                            'shadow))))))
-
-(defun tip--doctor-section (title ok)
-  "Insert a section header TITLE with OK status mark."
-  (insert "\n")
-  (insert (tip--doctor-mark ok))
-  (insert " ")
-  (tip--doctor-insert title 'font-lock-keyword-face)
-  (insert "\n"))
-
-(defun tip--doctor-format (r)
-  "Insert a formatted report from the alist R."
-  (cl-labels ((field (k) (alist-get k r))
-              (sub (a k) (alist-get k a)))
-    (tip--doctor-insert "  tip-server health check\n" '(bold font-lock-keyword-face))
-    (tip--doctor-insert (make-string 40 ?─) 'shadow)
-    (insert "\n\n")
-    (tip--doctor-kv "Server"   (field 'server_version) 'font-lock-constant-face)
-    (tip--doctor-kv "Target"   (field 'target_triple))
-    (tip--doctor-kv "Platform"
-                    (format "%s / %s" (field 'os) (field 'arch)))
-    (let ((tp (field 'typst)))
-      (when tp
-        (tip--doctor-section "Typst backend" (eq (sub tp 'ok) t))
-        (tip--doctor-kv "typst"
-                        (sub tp 'typst_version) 'font-lock-constant-face)
-        (tip--doctor-kv "fonts"
-                        (format "%d" (sub tp 'fonts_found)))))
-    (let ((lx (field 'latex)))
-      (when lx
-        (tip--doctor-section "LaTeX backend" (eq (sub lx 'ok) t))
-        (tip--doctor-dep "latex"       (sub lx 'latex))
-        (tip--doctor-dep "dvisvgm"     (sub lx 'dvisvgm))
-        (tip--doctor-dep "preview.sty" (sub lx 'preview_sty))))
-    (let ((ws (field 'warnings)))
-      (when (and ws (> (length ws) 0))
-        (insert "\n")
-        (tip--doctor-insert "Warnings\n" '(bold warning))
-        (mapc (lambda (w)
-                (insert "  ")
-                (tip--doctor-insert "!" 'warning)
-                (insert " " w "\n"))
-              (append ws nil))))))
 
 ;;;###autoload
 (defun tip-shutdown ()

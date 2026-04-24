@@ -299,7 +299,7 @@ field (defaulting to tip-server-typst)."
 ;;; * request/response
 
 (defvar tip--backend-carrying-methods
-  '("sync" "compile_fragments" "compile_live" "debug_skeleton")
+  '("sync" "compile_fragments" "compile_live" "debug_skeleton" "list_project_files")
   "Request methods that carry a `backend' field.
 `init', `health_check', and `shutdown' do not — they are backend-agnostic.")
 

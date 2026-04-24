@@ -101,8 +101,22 @@ pub enum Request {
     DebugSkeleton(DebugSkeletonParams),
     #[serde(rename = "health_check")]
     HealthCheck,
+    #[serde(rename = "list_project_files")]
+    ListProjectFiles(ListProjectFilesParams),
     #[serde(rename = "shutdown")]
     Shutdown,
+}
+
+/// Ask the server to enumerate every source file in the project a URI
+/// belongs to.  Backends that track a project graph (LaTeX's TexProject)
+/// return the connected component reachable via `\input`/`\include`.
+/// Backends without a graph (Typst today) return just the URI itself —
+/// clients can fall back to a root-marker walk on their side.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ListProjectFilesParams {
+    #[serde(default)]
+    pub backend: BackendId,
+    pub uri: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -203,6 +217,16 @@ pub enum ResponseResult {
     Shutdown { ok: bool },
     #[serde(rename = "debug_skeleton")]
     DebugSkeleton { source: String },
+    #[serde(rename = "project_files")]
+    ProjectFiles {
+        /// Absolute path to the project root (a directory).  All file
+        /// paths in `files` are absolute but are expected to sit under
+        /// this root so clients can preserve relative layout in a tar.
+        root: String,
+        /// Absolute file paths.  Guaranteed non-empty — at minimum the
+        /// queried URI itself.
+        files: Vec<String>,
+    },
     #[serde(rename = "health")]
     Health { report: HealthReport },
     #[serde(rename = "error")]

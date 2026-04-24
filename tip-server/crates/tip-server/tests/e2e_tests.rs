@@ -178,3 +178,42 @@ fn multiple_fragments_in_one_batch() {
 
     server.shutdown();
 }
+
+#[test]
+fn list_project_files_typst_fallback() {
+    // Typst has no graph → returns the URI itself.
+    let mut server = TestServer::spawn(&bin_path());
+    let resp = server.request(&RequestMessage {
+        id: 1,
+        request: Request::ListProjectFiles(ListProjectFilesParams {
+            backend: BackendId::Typst,
+            uri: "/tmp/ex.typ".into(),
+        }),
+    });
+    match resp.result {
+        ResponseResult::ProjectFiles { root: _, files } => {
+            assert_eq!(files, vec!["/tmp/ex.typ"]);
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+    server.shutdown();
+}
+
+#[test]
+fn list_project_files_latex_without_project_returns_self() {
+    let mut server = TestServer::spawn(&bin_path());
+    let resp = server.request(&RequestMessage {
+        id: 1,
+        request: Request::ListProjectFiles(ListProjectFilesParams {
+            backend: BackendId::Latex,
+            uri: "/tmp/foo.tex".into(),
+        }),
+    });
+    match resp.result {
+        ResponseResult::ProjectFiles { files, .. } => {
+            assert_eq!(files, vec!["/tmp/foo.tex"]);
+        }
+        other => panic!("unexpected: {:?}", other),
+    }
+    server.shutdown();
+}

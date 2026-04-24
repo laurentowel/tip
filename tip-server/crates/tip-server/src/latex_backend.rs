@@ -197,6 +197,40 @@ impl LatexBackend {
         ResponseResult::DebugSkeleton { source: preamble }
     }
 
+    /// Enumerate the project's connected component for a URI.  Returns
+    /// the root dir (parent of the root file) and every `.tex` reachable
+    /// via `\input`/`\include`/`\subfile`/`\subimport`.  If the URI has
+    /// no registered project root, falls back to just the URI itself.
+    pub fn handle_list_project_files(&self, params: ListProjectFilesParams) -> ResponseResult {
+        let root_file = self.roots.get(&params.uri);
+        if let Some(root_file) = root_file {
+            if let Some(project) = self.projects.get(root_file) {
+                let root_dir = root_file
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| root_file.clone());
+                let files: Vec<String> = project
+                    .files()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                return ResponseResult::ProjectFiles {
+                    root: root_dir.display().to_string(),
+                    files,
+                };
+            }
+        }
+        // No project registered — return the URI alone, root = its parent.
+        let path = PathBuf::from(&params.uri);
+        let root = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| path.clone());
+        ResponseResult::ProjectFiles {
+            root: root.display().to_string(),
+            files: vec![params.uri],
+        }
+    }
+
     pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
         // Map live → batch-of-one.
         let fragments_params = CompileFragmentsParams {
