@@ -243,7 +243,8 @@ field (defaulting to tip-server-typst)."
              nil)))
     (if tip--server-process
         (progn
-          (message "tip-server started (pid %d)" (process-id tip--server-process))
+          (tip-debug-msg "tip-server started (pid %d)"
+                         (process-id tip--server-process))
           (let ((dirs (tip--resolve-font-dirs)))
             (when dirs
               (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
