@@ -39,6 +39,16 @@ Typst-mode buffers opt out automatically (see
 reflected in the cache key."
   :type 'boolean :group 'tip :local t)
 
+(defcustom tip-cache-clear-on-server-restart t
+  "If non-nil, drop every buffer's compile cache when tip-server restarts.
+The cache key is (content, fg) — it does NOT capture which backend
+or which server binary produced an SVG.  When the server is
+swapped (version bump, docker→native, crash+respawn) the old
+entries can be stale or outright wrong (e.g. a Typst-compiled SVG
+sitting in the cache for a LaTeX buffer).  Clearing on restart is
+cheap and rules that class of bug out."
+  :type 'boolean :group 'tip)
+
 (defvar-local tip--compile-cache nil
   "Buffer-local hash-table mapping cache-key → plist.
 Key:   (CONTENT . FG-COLOR) cons.
@@ -60,6 +70,22 @@ fragment costs no compile.")
   "Ensure the buffer-local cache is initialised and return it."
   (or tip--compile-cache
       (setq tip--compile-cache (make-hash-table :test 'equal))))
+
+(defun tip-cache-clear (&optional all-buffers)
+  "Drop this buffer's compile cache.
+With prefix arg, or non-nil ALL-BUFFERS, clear every buffer's cache.
+Useful after restarting tip-server or swapping its binary."
+  (interactive "P")
+  (if all-buffers
+      (dolist (buf (buffer-list))
+        (with-current-buffer buf
+          (when tip--compile-cache
+            (setq tip--compile-cache nil
+                  tip--compile-cache-clock 0))))
+    (setq tip--compile-cache nil
+          tip--compile-cache-clock 0))
+  (when (called-interactively-p 'interactive)
+    (message "tip cache cleared%s" (if all-buffers " (all buffers)" ""))))
 
 (defun tip--cache-key (content fg)
   (cons content fg))

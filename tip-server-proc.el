@@ -245,6 +245,13 @@ field (defaulting to tip-server-typst)."
         (progn
           (tip-debug-msg "tip-server started (pid %d)"
                          (process-id tip--server-process))
+          ;; Cross-backend / cross-binary cache collisions are real
+          ;; (see tip-cache-clear-on-server-restart doc).  Drop every
+          ;; buffer's cache when a new server process starts.
+          (when (and (boundp 'tip-cache-clear-on-server-restart)
+                     tip-cache-clear-on-server-restart
+                     (fboundp 'tip-cache-clear))
+            (tip-cache-clear t))
           (let ((dirs (tip--resolve-font-dirs)))
             (when dirs
               (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
