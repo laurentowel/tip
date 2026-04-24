@@ -92,21 +92,51 @@ start/end."
     (setq preview-toggle--was-inside (not (null (preview-toggle--inside-p))))
     (set-marker preview-toggle--marker (point))))
 
+(defun preview-toggle--overlay-shows-image-p (ov)
+  "Non-nil if OV has a `display' property rendering an SVG image.
+Mirrors `tip-test-overlay-showing-image-p' — matches both
+`((image ...) [...])' and bare `(image ...)'."
+  (when ov
+    (let ((d (overlay-get ov 'display)))
+      (cond
+       ((null d) nil)
+       ((and (consp d) (consp (car d)) (eq (car (car d)) 'image)) t)
+       ((eq (car-safe d) 'image) t)))))
+
 (defun preview-toggle--post-command ()
-  "Post-command hook: open/close overlays based on cursor transition."
+  "Post-command hook: open/close overlays based on cursor position.
+The logic is level-triggered, not edge-triggered: whenever the cursor
+is inside a region whose overlay still shows its image, open it.
+Whenever the cursor is outside but the previous command was inside,
+recompile the marker region.  This handles several edge cases that
+purely edge-triggered logic misses — notably when tip-mode turns on
+with the cursor already parked on a rendered fragment, or when the
+`this-command' that moved the cursor in was in
+`preview-toggle-ignored-commands' so `preview-toggle--was-inside'
+never got reset."
   (when (and preview-toggle-type
              (not (memq this-command preview-toggle-ignored-commands)))
-    (let ((now-inside (preview-toggle--inside-p)))
+    (let* ((now-inside (preview-toggle--inside-p))
+           (now-ov (and now-inside (preview-toggle--overlay-at (point))))
+           (prev-ov (and preview-toggle--was-inside
+                         (preview-toggle--overlay-at
+                          (marker-position preview-toggle--marker)))))
       (cond
-       ((and now-inside (not preview-toggle--was-inside))
-        (preview-toggle-open-at-point))
+       ;; Leaving a previewable region → re-render the old one.
        ((and (not now-inside) preview-toggle--was-inside)
         (preview-toggle--close-at-marker))
+       ;; Crossing from one fragment to another: close old, open new.
        ((and now-inside preview-toggle--was-inside
-             (not (eq (preview-toggle--overlay-at (point))
-                      (preview-toggle--overlay-at
-                       (marker-position preview-toggle--marker)))))
+             prev-ov now-ov
+             (not (eq now-ov prev-ov)))
         (preview-toggle--close-at-marker)
+        (preview-toggle-open-at-point))
+       ;; Inside: open if the overlay still shows its image.  This is
+       ;; the level-triggered part: covers "cursor was already inside
+       ;; when the mode activated" and ignored-command entries that
+       ;; skipped a prior open.
+       ((and now-inside
+             (preview-toggle--overlay-shows-image-p now-ov))
         (preview-toggle-open-at-point))))))
 
 ;;; * minor mode
