@@ -305,22 +305,35 @@ Buffer-local."
 
 ;;; * public commands
 
+(defvar tip-mode)  ; forward decl — defined by `define-minor-mode' below.
+(defun tip--ensure-mode ()
+  "Enable `tip-mode' in the current buffer if it isn't already.
+Called from interactive rendering commands so invoking `tip-render-all'
+and friends without first `M-x tip-mode' still installs the cursor
+open/close hooks — without them the overlays render once but never
+open when the cursor enters, producing the confusing \"image with
+thin-bar cursor that never reveals source\" mis-state."
+  (unless tip-mode (tip-mode 1)))
+
 ;;;###autoload
 (defun tip-render-all ()
   "Render all math fragments in the buffer."
   (interactive)
+  (tip--ensure-mode)
   (tip-send-region (point-min) (point-max)))
 
 ;;;###autoload
 (defun tip-send-nbd ()
   "Render visible fragments, avoiding the one at point."
   (interactive)
+  (tip--ensure-mode)
   (tip-send-region (window-start) (window-end) (point)))
 
 ;;;###autoload
 (defun tip-send-all ()
   "Render the whole buffer."
   (interactive)
+  (tip--ensure-mode)
   (tip-send-region (point-min) (point-max)))
 
 ;;;###autoload
@@ -465,6 +478,7 @@ including all scope-defining statements visible at this position."
 (defun tip-open ()
   "Open overlay at point."
   (interactive)
+  (tip--ensure-mode)
   (preview-toggle-open-at-point))
 
 (defun tip--compile-region (beg end)

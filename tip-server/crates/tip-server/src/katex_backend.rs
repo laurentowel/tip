@@ -165,38 +165,31 @@ fn strip_math_delimiters(s: &str) -> &str {
     t
 }
 
-/// RaTeX's standalone SVG uses `fill` on individual glyph paths with
-/// `rgba(R,G,B,A)` notation.  Normalize to the requested foreground in
-/// hex (`#RRGGBB`) so (1) light/dark themes flip correctly on initial
-/// render, and (2) our client-side theme-change handler (which does
-/// string-replace on the stored `tip-fg` hex) can later swap the color
-/// without a server round-trip.  Non-black glyph colors are left alone
-/// (author-intentional, e.g. `\color{red}`).
-fn recolor_svg(svg: &str, color: &str) -> String {
-    let hex = normalize_color(color);
-    // Every black-ish fill in RaTeX's output becomes the requested fg.
-    svg.replace("fill=\"rgba(0,0,0,1)\"", &format!("fill=\"{hex}\""))
-        .replace("fill='rgba(0,0,0,1)'", &format!("fill='{hex}'"))
-        .replace("fill=\"#000000\"", &format!("fill=\"{hex}\""))
-        .replace("fill='#000000'", &format!("fill='{hex}'"))
-        .replace("fill=\"black\"", &format!("fill=\"{hex}\""))
-        .replace("fill='black'", &format!("fill='{hex}'"))
-}
-
-/// Normalize a color token (named or hex) to lower-case `#rrggbb` so
-/// the SVG's post-render string-replacement theme switcher has a
-/// stable anchor to find.
-fn normalize_color(c: &str) -> String {
-    if let Some(hex) = c.strip_prefix('#') {
-        if hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            return format!("#{}", hex.to_lowercase());
-        }
-    }
-    match c.to_ascii_lowercase().as_str() {
-        "black" => "#000000".into(),
-        "white" => "#ffffff".into(),
-        _ => c.to_string(),
-    }
+/// Rewrite default-foreground fills to SVG's `currentColor` keyword.
+///
+/// This is the technique org-latex-preview uses (see its
+/// `--svg-make-fg-currentColor'): render the SVG with a specific
+/// "standin" color for the default foreground, then rewrite that
+/// color to `currentColor' so Emacs picks up the buffer face's
+/// `:foreground' at display time.  Theme changes become FREE — the
+/// image re-uses whatever color the face carries right now, no
+/// recompile, no SVG string-replace on the client.
+///
+/// RaTeX's default fill is `rgba(0,0,0,1)`.  Replacing ONLY that
+/// means author-specified colors (e.g. the red in `\color{red}{x}`)
+/// stay as authored — RaTeX emits those as `rgba(255,0,0,1)` etc.
+///
+/// The `_color` parameter is accepted for signature compatibility
+/// with earlier callers but intentionally unused: the whole point of
+/// currentColor is to let the CLIENT's face pick the color, not the
+/// server.
+fn recolor_svg(svg: &str, _color: &str) -> String {
+    svg.replace("fill=\"rgba(0,0,0,1)\"", "fill=\"currentColor\"")
+        .replace("fill='rgba(0,0,0,1)'", "fill='currentColor'")
+        .replace("fill=\"#000000\"", "fill=\"currentColor\"")
+        .replace("fill='#000000'", "fill='currentColor'")
+        .replace("fill=\"black\"", "fill=\"currentColor\"")
+        .replace("fill='black'", "fill='currentColor'")
 }
 
 #[cfg(test)]
@@ -212,30 +205,28 @@ mod tests {
     }
 
     #[test]
-    fn recolor_replaces_black_only() {
+    fn recolor_replaces_default_fill_with_currentColor() {
         let svg = "<svg><path fill='#000000'/></svg>";
-        assert!(recolor_svg(svg, "#ff0000").contains("#ff0000"));
-        // Non-black left alone (author-intentional color).
+        let out = recolor_svg(svg, "#ff0000");
+        assert!(out.contains("currentColor"));
+        assert!(!out.contains("#000000"));
+    }
+
+    #[test]
+    fn recolor_author_color_left_alone() {
+        // Non-black = author-specified via `\color{red}`.  Stays as-is.
         let svg = "<svg><path fill='#ff0000'/></svg>";
-        assert!(recolor_svg(svg, "#00ff00").contains("#ff0000"));
+        let out = recolor_svg(svg, "#00ff00");
+        assert!(out.contains("#ff0000"));
+        assert!(!out.contains("currentColor"));
     }
 
     #[test]
     fn recolor_handles_rgba_black() {
-        // RaTeX actually emits rgba(0,0,0,1) not #000000.
+        // RaTeX's actual output uses rgba notation.
         let svg = "<svg><path fill=\"rgba(0,0,0,1)\"/></svg>";
         let out = recolor_svg(svg, "#ffffff");
-        assert!(out.contains("#ffffff"));
-        assert!(!out.contains("rgba(0,0,0,1)"));
-    }
-
-    #[test]
-    fn recolor_normalizes_to_client_anchor_even_for_black() {
-        // Even when fg is black we should rewrite rgba(0,0,0,1) → #000000
-        // so the client's theme-change string-replace has a stable anchor.
-        let svg = "<svg><path fill=\"rgba(0,0,0,1)\"/></svg>";
-        let out = recolor_svg(svg, "#000000");
-        assert!(out.contains("#000000"));
+        assert!(out.contains("currentColor"));
         assert!(!out.contains("rgba(0,0,0,1)"));
     }
 
