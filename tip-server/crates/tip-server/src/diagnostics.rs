@@ -133,18 +133,22 @@ fn probe_kpsewhich(pkg: &str) -> BinaryProbe {
     }
 }
 
-/// Best-effort scrape of a `\ProvidesPackage{foo}[YYYY/MM/DD vX.Y ...]` line.
+/// Best-effort scrape of a `\ProvidesPackage{foo}[YYYY/MM/DD vX.Y desc]` line.
+/// Returns just the date + version token (e.g. "2017/04/15 v13.2"), dropping
+/// the trailing prose.
 fn parse_sty_version(source: &str) -> Option<String> {
     for line in source.lines().take(40) {
-        // Match `[YYYY/MM/DD vX.Y desc]` optionally after ProvidesPackage.
         if let Some(start) = line.find('[') {
             if let Some(end) = line[start..].find(']') {
-                let bracket = &line[start + 1..start + end];
-                // Take everything after the date, which is at positions [0..10].
-                if bracket.len() > 11 {
-                    return Some(bracket[11..].trim().to_string());
-                }
-                return Some(bracket.trim().to_string());
+                let bracket = line[start + 1..start + end].trim();
+                // Keep at most the first two whitespace-separated tokens:
+                // "YYYY/MM/DD vX.Y" — drop the package description after.
+                let mut it = bracket.split_whitespace();
+                return match (it.next(), it.next()) {
+                    (Some(a), Some(b)) => Some(format!("{a} {b}")),
+                    (Some(a), None) => Some(a.to_string()),
+                    _ => None,
+                };
             }
         }
     }
@@ -240,6 +244,6 @@ mod tests {
     fn parse_sty_version_provides_line() {
         let src = "\\NeedsTeXFormat{LaTeX2e}\n\
                    \\ProvidesPackage{preview}[2017/04/15 v13.2 preview]\n";
-        assert_eq!(parse_sty_version(src).as_deref(), Some("v13.2 preview"));
+        assert_eq!(parse_sty_version(src).as_deref(), Some("2017/04/15 v13.2"));
     }
 }
