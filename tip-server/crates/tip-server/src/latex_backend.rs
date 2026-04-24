@@ -4,23 +4,35 @@
 //! `backend` field is `Latex`.  Implements `sync`, `compile_fragments`,
 //! and `compile_live`; `debug_skeleton` is not meaningful for LaTeX.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use tip_core_latex::{DocumentStore, LatexCompiler};
 use tip_protocol::messages::*;
 
 pub struct LatexBackend {
     documents: DocumentStore,
+    /// Per-uri project root, set by `handle_sync` from
+    /// `SyncParams::project_root'.  Used as `cwd' for the latex
+    /// subprocess so `\includegraphics' and `\input' resolve against
+    /// the user's chosen root.
+    roots: HashMap<String, PathBuf>,
 }
 
 impl LatexBackend {
     pub fn new() -> Self {
         Self {
             documents: DocumentStore::new(),
+            roots: HashMap::new(),
         }
     }
 
     pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
+        if let Some(root) = params.project_root.as_deref() {
+            self.roots.insert(params.uri.clone(), PathBuf::from(root));
+        } else {
+            self.roots.remove(&params.uri);
+        }
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
     }
@@ -65,9 +77,14 @@ impl LatexBackend {
             .collect();
         let wrapped_refs: Vec<&str> = wrapped.iter().map(String::as_str).collect();
 
-        // Working dir = directory of the uri, so relative \includegraphics etc.
+        // Working dir: explicit project root (set via sync) wins;
+        // otherwise the uri's parent so relative \includegraphics etc.
         // resolve the same way they would during a real compile.
-        let cwd = Path::new(&params.uri).parent().map(Path::to_path_buf);
+        let cwd = self
+            .roots
+            .get(&params.uri)
+            .cloned()
+            .or_else(|| Path::new(&params.uri).parent().map(Path::to_path_buf));
 
         match LatexCompiler::compile_batch(
             preamble,

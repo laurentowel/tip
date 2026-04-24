@@ -25,11 +25,19 @@ impl TypstBackend {
     }
 
     pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
-        // Set project root by walking up from the file to find a project marker
-        if let Some(parent) = Path::new(&params.uri).parent() {
-            let root = Self::find_project_root(parent).unwrap_or_else(|| parent.to_path_buf());
+        // Root resolution: explicit `project_root' from the client wins;
+        // otherwise walk up from the file looking for a marker.
+        let root = params
+            .project_root
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| {
+                Path::new(&params.uri)
+                    .parent()
+                    .map(|p| Self::find_project_root(p).unwrap_or_else(|| p.to_path_buf()))
+            });
+        if let Some(root) = root {
             self.world.set_root(root);
-            // Set main file vpath so relative imports resolve correctly
             self.world.set_main_path(&params.uri);
         }
         self.documents.sync(params.uri, params.content);
@@ -185,6 +193,7 @@ mod tests {
     fn sync_params(uri: &str, content: &str) -> SyncParams {
         SyncParams {
             backend: BackendId::Typst,
+            project_root: None,
             uri: uri.into(),
             content: content.into(),
         }

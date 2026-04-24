@@ -330,12 +330,15 @@ CALLBACK is called with the result alist when response arrives."
 (defun tip--sync-buffer ()
   "Sync current buffer content to tip-server.
 Always sends the full buffer, ignoring narrowing."
-  (tip--send-request
-   "sync"
-   `(("uri" . ,(buffer-file-name))
-     ("content" . ,(save-restriction
-                     (widen)
-                     (buffer-substring-no-properties (point-min) (point-max)))))))
+  (let ((params
+         `(("uri" . ,(buffer-file-name))
+           ("content" . ,(save-restriction
+                           (widen)
+                           (buffer-substring-no-properties (point-min) (point-max)))))))
+    (when-let ((root (and (fboundp 'tip--resolve-project-root)
+                          (tip--resolve-project-root))))
+      (push (cons "project_root" root) params))
+    (tip--send-request "sync" params)))
 
 (provide 'tip-server-proc)
 

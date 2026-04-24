@@ -65,6 +65,30 @@ Example in init.el (global):
   :type '(repeat (choice string (cons string string)))
   :group 'tip)
 
+(defcustom tip-project-root-path nil
+  "Explicit project root for this buffer.
+When non-nil, tip-server uses it as-is and skips backend auto-
+discovery (Typst's typst.toml/.git marker walk; future LaTeX
+`\\input'/`\\include' root prompt).  Intended for .dir-locals.el
+or file-local variables:
+
+  ;;; .dir-locals.el
+  ((nil . ((tip-project-root-path . \"..\"))))
+
+Relative paths resolve against `default-directory'."
+  :type '(choice (const :tag "Auto-discover" nil) directory)
+  :safe #'stringp
+  :local t
+  :group 'tip)
+
+(defun tip--resolve-project-root ()
+  "Return `tip-project-root-path' as an absolute path, or nil.
+Nil means \"let the server auto-discover\"."
+  (when (and tip-project-root-path
+             (stringp tip-project-root-path)
+             (not (string-empty-p tip-project-root-path)))
+    (expand-file-name tip-project-root-path)))
+
 (defcustom tip-server-executable nil
   "Path to the tip-server binary.
 If nil, auto-detected from PATH, local build, or user prompted."
@@ -798,9 +822,11 @@ Reuses the shared `tip-live--show-preview' / `tip-live--handle-result'."
                  (fg (tip--color-to-hex (face-attribute 'default :foreground)))
                  (byte-start (string-bytes before))
                  (byte-end (+ byte-start (string-bytes new-text))))
-            (tip--send-request "sync"
-                               `(("uri" . ,(buffer-file-name))
-                                 ("content" . ,spliced)))
+            (let ((sync-params `(("uri" . ,(buffer-file-name))
+                                 ("content" . ,spliced))))
+              (when-let ((root (tip--resolve-project-root)))
+                (push (cons "project_root" root) sync-params))
+              (tip--send-request "sync" sync-params))
             (tip--send-request
              "compile_fragments"
              `(("uri" . ,(buffer-file-name))

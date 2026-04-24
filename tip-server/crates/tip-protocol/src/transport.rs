@@ -92,6 +92,7 @@ mod tests {
             id: 42,
             request: Request::Sync(SyncParams {
                 backend: crate::messages::BackendId::Typst,
+                project_root: None,
                 uri: "/test.typ".into(),
                 content: "$x^2$".into(),
             }),

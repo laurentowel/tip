@@ -126,6 +126,12 @@ pub struct SyncParams {
     pub backend: BackendId,
     pub uri: String,
     pub content: String,
+    /// Explicit project root from the client.  When present, backends
+    /// use this path as-is and skip their auto-discovery walks.  Used
+    /// both to honor a buffer-local `tip-project-root-path' override
+    /// and (future) to anchor multi-file LaTeX projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -299,6 +305,7 @@ mod tests {
             id: 1,
             request: Request::Sync(SyncParams {
                 backend: BackendId::Typst,
+            project_root: None,
                 uri: "/tmp/test.typ".into(),
                 content: "$a + b$".into(),
             }),
@@ -370,6 +377,7 @@ mod tests {
             msg.request,
             Request::Sync(SyncParams {
                 backend: BackendId::Typst,
+            project_root: None,
                 uri: "/test.typ".into(),
                 content: "hello".into(),
             })
