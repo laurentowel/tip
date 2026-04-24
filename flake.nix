@@ -121,35 +121,13 @@
         demoEmacs = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages
           (ep: [ typst-ts-mode ]);
 
-        demoTypst = pkgs.writeText "tip-demo.typ" ''
-          = tip-mode demo — Typst
-
-          Inline math: $a + b = c$ and $integral_0^1 x^2 dif x = 1/3$.
-
-          Display:
-          $ mat(1, 0; 0, 1) + mat(a, b; c, d) = mat(1+a, b; c, 1+d) $
-
-          $ sum_(k=1)^n k = n(n+1)/2 $
-        '';
-
-        demoLatex = pkgs.writeText "tip-demo.tex" ''
-          \documentclass{article}
-          \usepackage{amsmath,amssymb}
-          \begin{document}
-
-          \textbf{tip-mode demo --- LaTeX}
-
-          Inline: $a + b = c$ and $\int_0^1 x^2\,dx = \tfrac{1}{3}$.
-
-          Display:
-          \[ \begin{pmatrix} 1 & 0 \\ 0 & 1 \end{pmatrix}
-             + \begin{pmatrix} a & b \\ c & d \end{pmatrix}
-             = \begin{pmatrix} 1+a & b \\ c & 1+d \end{pmatrix} \]
-
-          \[ \sum_{k=1}^n k = \frac{n(n+1)}{2} \]
-
-          \end{document}
-        '';
+        # Typst and LaTeX demos show the SAME math, just translated into
+        # each language's syntax.  Kept as separate files in demo/ so
+        # edits go through normal git diffs (and don't hit nix's
+        # indented-string apostrophe/escape gotchas).  Any change to
+        # one file should be mirrored in the other.
+        demoTypst = ./demo/tip-demo.typ;
+        demoLatex = ./demo/tip-demo.tex;
 
         demoInit = pkgs.writeText "tip-demo-init.el" ''
           ;; Minimal init for the tip-mode demo.  Everything outside
@@ -160,22 +138,44 @@
                 frame-title-format "tip-mode demo (Typst | LaTeX)")
           (add-to-list 'treesit-extra-load-path "${typstGrammarDir}/")
           (add-to-list 'load-path "${toString ./.}")
+          (require 'typst-ts-mode)
           (require 'tip)
           (require 'tip-typst)
           (require 'tip-latex)
+          ;; With -Q the typst-ts-mode autoload isn't registered —
+          ;; do it explicitly so `.typ` buffers get the mode.
+          (add-to-list 'auto-mode-alist '("\\.typ\\'" . typst-ts-mode))
+          (add-to-list 'auto-mode-alist '("\\.tex\\'" . latex-mode))
           ;; Open typst on the left, latex on the right.
           (find-file "${demoTypst}")
           (split-window-right)
           (other-window 1)
           (find-file "${demoLatex}")
           (other-window 1)
-          ;; Enable tip-mode in both buffers.
+          ;; Enable tip-mode in both buffers.  `set-auto-mode' is
+          ;; harmless on buffers that already picked the right mode;
+          ;; it's a safety net in case the find-file above ran before
+          ;; auto-mode-alist was populated.
           (dolist (buf (buffer-list))
             (with-current-buffer buf
-              (when (or (derived-mode-p 'typst-ts-mode)
-                        (derived-mode-p 'latex-mode)
-                        (derived-mode-p 'tex-mode))
-                (tip-mode 1))))
+              (when (buffer-file-name)
+                (unless (or (derived-mode-p 'typst-ts-mode)
+                            (derived-mode-p 'latex-mode)
+                            (derived-mode-p 'tex-mode))
+                  (set-auto-mode))
+                (when (or (derived-mode-p 'typst-ts-mode)
+                          (derived-mode-p 'latex-mode)
+                          (derived-mode-p 'tex-mode))
+                  (tip-mode 1)
+                  ;; Kick off an initial render so overlays appear
+                  ;; without the user having to move the cursor.
+                  (when (fboundp 'tip-render-all)
+                    (run-with-idle-timer 0.3 nil
+                                         (lambda (b)
+                                           (when (buffer-live-p b)
+                                             (with-current-buffer b
+                                               (tip-render-all))))
+                                         (current-buffer)))))))
         '';
 
         demoScript = pkgs.writeShellScript "tip-demo" ''

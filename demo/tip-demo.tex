@@ -1,0 +1,61 @@
+\documentclass{article}
+\usepackage{amsmath,amssymb,mathtools}
+\begin{document}
+
+\section*{tip-mode demo --- LaTeX}
+
+\subsection*{Inline}
+
+The Plancherel identity
+$\int_{-\infty}^{\infty} \lvert f(x)\rvert^2\,dx
+  = \int_{-\infty}^{\infty} \lvert \hat f(\xi)\rvert^2\,d\xi$
+holds for $f \in L^2(\mathbb{R})$, and more generally
+$\langle f, g\rangle = \langle \hat f, \hat g\rangle$.
+
+\subsection*{Short display}
+
+\[ \sum_{k=1}^n k^3 = \left( \frac{n(n+1)}{2} \right)^2 \]
+
+\subsection*{Cases}
+
+\[ \lvert x\rvert = \begin{cases}
+    x,  & \text{if } x \ge 0, \\
+    -x, & \text{if } x < 0.
+\end{cases} \]
+
+\subsection*{Multi-line derivation (align)}
+
+\begin{align*}
+  \frac{d}{dx} e^{f(x)}
+    &= f'(x)\, e^{f(x)} \\
+  \frac{d^2}{dx^2} e^{f(x)}
+    &= \bigl(f''(x) + f'(x)^2\bigr)\, e^{f(x)} \\
+  \frac{d^3}{dx^3} e^{f(x)}
+    &= \bigl(f'''(x) + 3\,f'(x)f''(x) + f'(x)^3\bigr)\, e^{f(x)}
+\end{align*}
+
+\subsection*{Big rotation matrix}
+
+\[ \begin{pmatrix}
+    \cos\theta & -\sin\theta & 0 & 0 \\
+    \sin\theta &  \cos\theta & 0 & 0 \\
+    0          &  0          & 1 & 0 \\
+    0          &  0          & 0 & 1
+\end{pmatrix}
+\begin{pmatrix} x \\ y \\ z \\ 1 \end{pmatrix} \]
+
+\subsection*{Green's identity (multi-line display)}
+
+\begin{equation*}
+  \int_\Omega
+    \frac{\nabla f \cdot \nabla g}{\sqrt{1 + \lvert\nabla f\rvert^2}}
+    \, dV
+  = \int_{\partial \Omega}
+    g\, \frac{\partial f}{\partial n}\, dS
+  - \int_\Omega
+    g\, \operatorname{div}
+    \!\!\left(\frac{\nabla f}{\sqrt{1 + \lvert\nabla f\rvert^2}}\right)
+    dV
+\end{equation*}
+
+\end{document}
