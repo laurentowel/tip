@@ -26,6 +26,13 @@ Usage: run.sh [OPTIONS]
   --headless         Don't pop a visible frame (CI mode).
                      Env: TIP_IT_HEADLESS=1.
   -h, --help         This message.
+
+Filtering:
+  TIP_IT_TEST=STR    Run only tests whose name contains STR as a
+                     literal substring.  Examples:
+                       TIP_IT_TEST=katex           (all katex tests)
+                       TIP_IT_TEST=multiline-open  (all backends)
+                       TIP_IT_TEST=katex-display-math-closes-on-next-line
 USAGE
       exit 0;;
     *) echo "unknown arg: $1 (try --help)" >&2; exit 2;;

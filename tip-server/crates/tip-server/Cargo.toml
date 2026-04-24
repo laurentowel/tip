@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 tip-core-typst = { path = "../tip-core-typst" }
 tip-core-latex = { path = "../tip-core-latex" }
+tip-core-katex = { path = "../tip-core-katex" }
 tip-protocol = { path = "../tip-protocol" }
 serde_json = "1"
 which = "6"

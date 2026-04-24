@@ -60,11 +60,23 @@ Called with two arguments (BEG END).  Should async create overlay.")
       (overlay-put ov 'display nil)
       (overlay-put ov 'face nil))))
 
+(defun preview-toggle--bounds-at (pos)
+  "Resolve the previewable region at POS.
+First tries `preview-toggle-region-at-point-fn' (the backend's
+fragment-range lookup).  If that returns nil — e.g. the saved marker
+sits on a position that's INSIDE the preview overlay but OUTSIDE the
+underlying fragment (backends sometimes extend the overlay to swallow
+a leading newline for display math) — fall back to the overlay's own
+start/end."
+  (or (when preview-toggle-region-at-point-fn
+        (funcall preview-toggle-region-at-point-fn pos))
+      (when-let* ((ov (preview-toggle--overlay-at pos)))
+        (cons (overlay-start ov) (overlay-end ov)))))
+
 (defun preview-toggle--close-at-marker ()
   "Recompile the region at the saved marker position."
   (when-let* ((pos (marker-position preview-toggle--marker))
-              (region-fn preview-toggle-region-at-point-fn)
-              (bounds (funcall region-fn pos))
+              (bounds (preview-toggle--bounds-at pos))
               (compile-fn preview-toggle-compile-region-fn))
     (dolist (ov (overlays-in (car bounds) (cdr bounds)))
       (when (eq (overlay-get ov preview-toggle-type) preview-toggle-type)

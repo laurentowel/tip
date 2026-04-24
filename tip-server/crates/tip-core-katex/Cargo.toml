@@ -1,0 +1,12 @@
+[package]
+name = "tip-core-katex"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratex-parser = "0.1"
+ratex-layout = "0.1"
+ratex-svg = { version = "0.1", features = ["embed-fonts"] }
+
+[dev-dependencies]
+# none

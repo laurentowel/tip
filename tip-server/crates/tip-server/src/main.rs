@@ -1,5 +1,6 @@
 mod diagnostics;
 mod handler;
+mod katex_backend;
 mod latex_backend;
 mod typst_backend;
 

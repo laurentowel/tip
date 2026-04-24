@@ -54,6 +54,11 @@
   (let ((gp (getenv "TIP_IT_GRAMMAR_PATH")))
     (when (and gp (file-directory-p gp))
       (add-to-list 'treesit-extra-load-path (file-name-as-directory gp))))
+  ;; Optional second grammar dir (markdown for katex tests).  Separate
+  ;; env var so callers can provide just one or both.
+  (let ((mp (getenv "TIP_IT_MARKDOWN_GRAMMAR_PATH")))
+    (when (and mp (file-directory-p mp))
+      (add-to-list 'treesit-extra-load-path (file-name-as-directory mp))))
   (load (expand-file-name "tip.el" repo-root) nil t)
   (require 'tip-test))
 
@@ -62,6 +67,12 @@
   (when (and v (not (string-empty-p v)))
     (setq tip-test--inter-test-sleep
           (condition-case _ (string-to-number v) (error 0)))))
+
+;; Optional name-substring filter: TIP_IT_TEST=katex runs only tests
+;; whose name contains "katex".  Matches `regexp-quote' literal.
+(let ((v (getenv "TIP_IT_TEST")))
+  (when (and v (not (string-empty-p v)))
+    (setq tip-test-filter v)))
 
 ;; Debug + verbose ON for the test harness — failures need breadcrumbs.
 (setq tip-enable-debug t

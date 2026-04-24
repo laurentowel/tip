@@ -28,6 +28,7 @@
 (require 'tip)
 (require 'tip-typst nil t)
 (require 'tip-latex nil t)
+(require 'tip-markdown nil t)
 
 (defvar tip-test--tests nil
   "Alist of (NAME . PLIST) registered via `tip-test-deftest'.
@@ -119,9 +120,25 @@ state is settled before the test asserts on it."
   (redisplay t))
 
 (defun tip-test-fragment-ranges ()
-  "Return the tree-sitter math fragment ranges in the current buffer.
-For typst-ts-mode buffers only."
-  (treesit-query-range 'typst "((math) @math)"))
+  "Return math fragment ranges `(BEG . END)' in the current buffer.
+Backend-agnostic: dispatches through `tip-collect-fragments' when the
+active backend emits alist-of-\"start\"/\"end\" byte offsets (LaTeX,
+KaTeX); falls back to the Typst tree-sitter query when no backend is
+registered or the backend doesn't return alists (legacy call path)."
+  (or (when (and (fboundp 'tip-active-backend) (tip-active-backend))
+        (let ((frags (save-restriction
+                       (widen)
+                       (tip-collect-fragments (point-min) (point-max)))))
+          (when (and (listp frags) (listp (car-safe frags))
+                     (consp (car-safe (car-safe frags))))
+            (mapcar (lambda (f)
+                      (let ((b (byte-to-position
+                                (1+ (alist-get "start" f nil nil #'equal))))
+                            (e (byte-to-position
+                                (1+ (alist-get "end" f nil nil #'equal)))))
+                        (cons b e)))
+                    frags))))
+      (treesit-query-range 'typst "((math) @math)")))
 
 (defun tip-test-inside-fragment (index)
   "Return a buffer position one past the opener of the INDEX-th
@@ -201,6 +218,52 @@ so `tip-test-reset' can find and kill it."
        ;; body is pure-logic (fragment detection etc.) and didn't ask
        ;; for rendering.  Cache hits make the extra render cheap when
        ;; the body already rendered.
+       (when (and (buffer-live-p buf)
+                  (> tip-test--inter-test-sleep 0))
+         (with-current-buffer buf
+           (ignore-errors
+             (when (fboundp 'tip-render-all) (tip-render-all))
+             (tip-test-wait-for-pending 10)))
+         (redisplay t)
+         (sit-for tip-test--inter-test-sleep))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf (set-buffer-modified-p nil))
+         (let ((kill-buffer-query-functions nil))
+           (kill-buffer buf)))
+       (ignore-errors (delete-file file)))))
+
+(defmacro tip-test-with-fresh-markdown-buffer (content &rest body)
+  "Markdown / KaTeX counterpart of `tip-test-with-fresh-typst-buffer'."
+  (declare (indent 1))
+  `(let* ((file (make-temp-file "tip-test-" nil ".md"))
+          (buf (generate-new-buffer "*tip-test-markdown*")))
+     (unwind-protect
+         (with-current-buffer buf
+           (setq buffer-file-name file)
+           (insert ,content)
+           (cond
+            ((fboundp 'markdown-ts-mode) (markdown-ts-mode))
+            ((fboundp 'markdown-mode)    (markdown-mode))
+            (t                           (text-mode)))
+           ;; In environments where markdown-mode isn't installed, the
+           ;; katex backend is registered only for markdown modes —
+           ;; extend its major-modes list here so text-mode buffers
+           ;; still route to katex for the test.
+           (when (eq major-mode 'text-mode)
+             (when-let* ((b (cdr (assq 'katex tip-backends))))
+               (unless (memq 'text-mode (tip-backend-major-modes b))
+                 (setf (tip-backend-major-modes b)
+                       (cons 'text-mode (tip-backend-major-modes b))))
+               (when (fboundp 'tip-active-backend-reset)
+                 (tip-active-backend-reset))))
+           (tip-mode 1)
+           (when (fboundp 'tip-live-mode) (tip-live-mode -1))
+           (when-let ((win (get-buffer-window buf t)))
+             (select-window win))
+           (pop-to-buffer-same-window buf)
+           (setq-local header-line-format
+                       '(:eval (tip-test--header-line)))
+           ,@body)
        (when (and (buffer-live-p buf)
                   (> tip-test--inter-test-sleep 0))
          (with-current-buffer buf
@@ -314,21 +377,34 @@ where STATUS is one of `pass', `fail', `error', `timeout'."
     (list :name name :status status :error errmsg
           :elapsed (- (float-time) start))))
 
+(defvar tip-test-filter nil
+  "When non-nil, only tests whose name matches this substring run.
+Read from env TIP_IT_TEST at daemon startup (see `daemon-init.el').
+`nil' or an empty string disables filtering.")
+
 (defun tip-test-run-all ()
   "Run every registered test in order of registration.  Returns
 a plist (:results LIST :passed N :failed N :skipped N).  Skipped
-tests (via `ert-skip') don't count as failures."
-  (let ((results nil) (passed 0) (failed 0) (skipped 0))
+tests (via `ert-skip') don't count as failures.  If `tip-test-filter'
+is a non-empty string, only tests whose name contains it as a
+substring run."
+  (let ((results nil) (passed 0) (failed 0) (skipped 0)
+        (filter (and (stringp tip-test-filter)
+                     (not (string-empty-p tip-test-filter))
+                     tip-test-filter)))
     (dolist (cell (reverse tip-test--tests))
-      (let* ((name (car cell))
-             (r (tip-test-run-one name)))
-        (push r results)
-        (pcase (plist-get r :status)
-          ('pass (cl-incf passed))
-          ('skip (cl-incf skipped))
-          (_     (cl-incf failed)))))
+      (let ((name (car cell)))
+        (when (or (null filter)
+                  (string-match-p (regexp-quote filter) (symbol-name name)))
+          (let ((r (tip-test-run-one name)))
+            (push r results)
+            (pcase (plist-get r :status)
+              ('pass (cl-incf passed))
+              ('skip (cl-incf skipped))
+              (_     (cl-incf failed)))))))
     (list :results (nreverse results)
-          :passed passed :failed failed :skipped skipped)))
+          :passed passed :failed failed :skipped skipped
+          :filter filter)))
 
 (defun tip-test-format-summary (summary)
   "Pretty-print a SUMMARY plist as a multi-line string."

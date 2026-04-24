@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tip-core-typst",
     "crates/tip-core-latex",
+    "crates/tip-core-katex",
     "crates/tip-protocol",
     "crates/tip-server",
     "testkit",

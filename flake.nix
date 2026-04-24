@@ -132,7 +132,18 @@
         '';
 
         demoEmacs = (pkgs.emacsPackagesFor pkgs.emacs-pgtk).emacsWithPackages
-          (ep: [ typst-ts-mode ep.ef-themes ep.spacious-padding ep.demo-it ep.keycast ]);
+          (ep: [ typst-ts-mode ep.ef-themes ep.spacious-padding ep.demo-it ep.keycast
+                 ep.markdown-mode ]);
+
+        # Markdown tree-sitter grammar — the grammar derivation outputs
+        # `$out/parser` as a .so; emacs' treesit-extra-load-path expects
+        # `libtree-sitter-markdown.so`, so symlink into shape (same
+        # pattern as typstGrammarDir above).
+        markdownGrammarDir = pkgs.runCommand "tip-markdown-grammar-dir" { } ''
+          mkdir -p $out
+          ln -s ${pkgs.tree-sitter-grammars.tree-sitter-markdown}/parser \
+                $out/libtree-sitter-markdown.so
+        '';
 
         # Pennstander Math — a distinctive math font used by the
         # custom-font section of demo/tip-demo.typ.  Fetched from
@@ -230,6 +241,67 @@
                                          (current-buffer)))))))
         '';
 
+        # ----- katex demo: GUI emacs previewing KaTeX in a markdown file -----
+        katexDemoMd = pkgs.writeText "tip-katex-demo.md" ''
+          # KaTeX inline-math preview demo
+
+          Inline math: $a^2 + b^2 = c^2$ and $\frac{1}{1+x}$.
+
+          Summation with limits: $\sum_{i=0}^{n} i = \frac{n(n+1)}{2}$.
+
+          Display math:
+
+          $$
+          \int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}
+          $$
+
+          Alignment:
+
+          $$
+          \begin{aligned}
+          x + y &= 5 \\
+          2x - y &= 1
+          \end{aligned}
+          $$
+
+          Inline macro (Kodama-style, per-fragment):
+          $\newcommand{\RR}{\mathbb{R}} f : \RR \to \RR$
+
+          This code block should NOT render:
+
+          ```python
+          def pythag(a, b):
+              return (a**2 + b**2)**0.5  # $not-math$
+          ```
+
+          Backslash delimiters also work: \( \alpha + \beta \) and \[ \gamma = \delta \].
+
+          Code span `$not-math$` stays as source.
+        '';
+
+        katexDemoInit = pkgs.writeText "tip-katex-demo-init.el" ''
+          (setq inhibit-startup-screen t
+                make-backup-files nil
+                auto-save-default nil
+                frame-title-format "tip-mode katex demo (markdown + RaTeX)")
+          (when (fboundp 'pixel-scroll-precision-mode)
+            (pixel-scroll-precision-mode 1))
+          (add-to-list 'treesit-extra-load-path "${markdownGrammarDir}/")
+          (add-to-list 'load-path "${toString ./.}")
+          (require 'markdown-mode)
+          (require 'tip)
+          (require 'tip-markdown)
+          (add-to-list 'auto-mode-alist '("\\.md\\'" . markdown-mode))
+          (find-file "${katexDemoMd}")
+          (tip-mode 1)
+          (run-with-idle-timer 0.3 nil #'tip-render-all)
+        '';
+
+        katexDemoScript = pkgs.writeShellScript "tip-katex-demo" ''
+          export PATH=${tip-server}/bin:$PATH
+          exec ${demoEmacs}/bin/emacs -Q -l ${katexDemoInit} "$@"
+        '';
+
         demoScript = pkgs.writeShellScript "tip-demo" ''
           export PATH=${tip-server}/bin:$PATH
           # TIP-server's TipWorld picks this up at startup (see
@@ -259,6 +331,13 @@
           program = "${demoScript}";
         };
 
+        # `nix run .#katex-demo` — GUI emacs previewing KaTeX math in
+        # a markdown buffer via the RaTeX-backed katex backend.
+        apps.katex-demo = {
+          type = "app";
+          program = "${katexDemoScript}";
+        };
+
         # `nix run .#integration-tests` — one-shot run of the
         # integration-tests/ suite in a fresh pinned emacs daemon with
         # tip-server, typst-ts-mode, and the typst tree-sitter grammar
@@ -274,6 +353,8 @@
             # tree-sitter grammar via EMACSLOADPATH override rather than
             # per-invocation flags so run.sh is vanilla.
             export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
+            # Second grammar dir: markdown for katex tests.
+            export TIP_IT_MARKDOWN_GRAMMAR_PATH=${markdownGrammarDir}
             export TIP_IT_DIR=${./integration-tests}
             # tip.el lives at repo root (one level above integration-tests/
             # in the source tree).  Pin it explicitly because daemon-init

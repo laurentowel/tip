@@ -31,6 +31,7 @@
 (require 'tip-render)
 (require 'tip-typst)
 (require 'tip-latex)
+(require 'tip-markdown)
 (require 'tip-live)
 (require 'tip-errors)
 (require 'tip-diagnostic)
@@ -145,6 +146,19 @@ expanding the SVG viewBox; does not require recompilation.
 When nil, the SVG background is filled with the Emacs default
 background color (and swapped on theme change)."
   :type 'boolean
+  :group 'tip)
+
+(defcustom tip-cursor-inside-overlay '(bar . 2)
+  "Cursor shape to use while point sits on a tip image overlay.
+Emacs draws the regular block cursor at the overlay's pixel area,
+which on `:ascent center' block images looks like a giant black
+rectangle covering the math.  A thin bar avoids the visual block
+while still showing the user where point is.
+
+The buffer's normal `cursor-type' is restored the moment point
+leaves any tip overlay.  Set to nil to disable this swap."
+  :type '(choice (const :tag "Don't change cursor" nil)
+                 (sexp :tag "Cursor type while inside overlay"))
   :group 'tip)
 
 (defcustom tip-verbose nil
@@ -486,6 +500,7 @@ Automatically renders visible fragments and enables live preview."
           (setq preview-toggle--marker (make-marker)))
         (add-hook 'pre-command-hook #'preview-toggle--pre-command nil 'local)
         (add-hook 'post-command-hook #'preview-toggle--post-command nil 'local)
+        (add-hook 'post-command-hook #'tip--update-cursor-type nil 'local)
         ;; Live preview via childframe (off by default, user enables with M-x tip-live-mode)
         ;; C-c ' to edit fragment in indirect buffer
         (tip-edit-setup-keys)
@@ -527,7 +542,36 @@ Automatically renders visible fragments and enables live preview."
     (when (bound-and-true-p tip-flymake-mode) (tip-flymake-mode -1))
     (remove-hook 'eldoc-documentation-functions #'tip--eldoc-error t)
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
+    (remove-hook 'post-command-hook #'tip--update-cursor-type t)
+    (when (local-variable-p 'tip--saved-cursor-type)
+      (setq cursor-type tip--saved-cursor-type)
+      (kill-local-variable 'tip--saved-cursor-type))
     (preview-toggle-mode -1)))
+
+(defvar-local tip--saved-cursor-type nil
+  "Buffer's original `cursor-type' before tip swapped it.
+nil means \"no swap currently active\".  Set by `tip--update-cursor-type'.")
+
+(defun tip--update-cursor-type ()
+  "Swap `cursor-type' to `tip-cursor-inside-overlay' when point sits on
+a tip image overlay, restore it otherwise.  No-op if the user set
+`tip-cursor-inside-overlay' to nil."
+  (when tip-cursor-inside-overlay
+    (let ((on-image
+           (seq-some (lambda (ov)
+                       (and (eq (overlay-get ov 'tip) 'tip)
+                            (let ((d (overlay-get ov 'display)))
+                              (or (eq (car-safe d) 'image)
+                                  (and (consp d) (consp (car d))
+                                       (eq (car (car d)) 'image))))))
+                     (overlays-at (point)))))
+      (cond
+       ((and on-image (not (local-variable-p 'tip--saved-cursor-type)))
+        (setq-local tip--saved-cursor-type cursor-type)
+        (setq cursor-type tip-cursor-inside-overlay))
+       ((and (not on-image) (local-variable-p 'tip--saved-cursor-type))
+        (setq cursor-type tip--saved-cursor-type)
+        (kill-local-variable 'tip--saved-cursor-type))))))
 
 ;;; * auto-compile minor mode
 

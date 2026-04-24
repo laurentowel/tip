@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum BackendId {
     Typst,
     Latex,
+    Katex,
 }
 
 impl Default for BackendId {
