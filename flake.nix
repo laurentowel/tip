@@ -145,6 +145,15 @@
                 $out/libtree-sitter-markdown.so
         '';
 
+        # LaTeX tree-sitter grammar — required by the new tip-latex
+        # parser (legacy regex parser was removed once treesit reached
+        # parity).  Same shape as typst/markdown.
+        latexGrammarDir = pkgs.runCommand "tip-latex-grammar-dir" { } ''
+          mkdir -p $out
+          ln -s ${pkgs.tree-sitter-grammars.tree-sitter-latex}/parser \
+                $out/libtree-sitter-latex.so
+        '';
+
         # Pennstander Math — a distinctive math font used by the
         # custom-font section of demo/tip-demo.typ.  Fetched from
         # upstream and pinned by hash.  Not in nixpkgs, so inline.
@@ -355,6 +364,8 @@
             export TIP_IT_GRAMMAR_PATH=${typstGrammarDir}
             # Second grammar dir: markdown for katex tests.
             export TIP_IT_MARKDOWN_GRAMMAR_PATH=${markdownGrammarDir}
+            # Third: latex grammar for the new treesit-based latex parser.
+            export TIP_IT_LATEX_GRAMMAR_PATH=${latexGrammarDir}
             export TIP_IT_DIR=${./integration-tests}
             # tip.el lives at repo root (one level above integration-tests/
             # in the source tree).  Pin it explicitly because daemon-init

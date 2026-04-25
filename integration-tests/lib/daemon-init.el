@@ -59,6 +59,9 @@
   (let ((mp (getenv "TIP_IT_MARKDOWN_GRAMMAR_PATH")))
     (when (and mp (file-directory-p mp))
       (add-to-list 'treesit-extra-load-path (file-name-as-directory mp))))
+  (let ((lp (getenv "TIP_IT_LATEX_GRAMMAR_PATH")))
+    (when (and lp (file-directory-p lp))
+      (add-to-list 'treesit-extra-load-path (file-name-as-directory lp))))
   (load (expand-file-name "tip.el" repo-root) nil t)
   (require 'tip-test))
 

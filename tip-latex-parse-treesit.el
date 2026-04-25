@@ -2,9 +2,10 @@
 
 ;;; Commentary:
 
-;; Tree-sitter (alex-pinkus/tree-sitter-latex; same grammar texlab uses)
-;; alternative to the regex parser in tip-latex.el.  Loaded only when
-;; `tip-latex-parser' resolves to `treesit'.
+;; Tree-sitter (alex-pinkus/tree-sitter-latex; same grammar texlab uses).
+;; This is the only LaTeX fragment parser tip ships — the previous
+;; regex parser was removed once treesit reached parity (see git log
+;; "very good, the legacy non-treesit code can be dumped").
 ;;
 ;; Cache story: there is none.  treesit's incremental parser always
 ;; reflects the current buffer state, so callers can ask for
@@ -102,6 +103,21 @@ C-n compounds at high key-repeat rates.")
         (setq ranges (seq-remove
                       (lambda (r) (tip-latex--treesit-inside-verb-p (car r)))
                       ranges))
+        ;; Drop nested fragments — keep only outermost math nodes.
+        ;; Treesit reports `$a$' inside `\\text{$a$}' (math-in-text) and
+        ;; `\\begin{aligned}' inside `\\[...\\]' as separate nodes; we
+        ;; only want to compile the OUTER one (compiling the inner
+        ;; alone produces wrong context).  After sorting by start asc,
+        ;; a range is outermost iff it isn't strictly contained in the
+        ;; previously kept range (sweep-line variant).
+        (setq ranges
+              (let (kept)
+                (dolist (r ranges)
+                  (unless (and kept
+                               (<= (caar kept) (car r))
+                               (>= (cdar kept) (cdr r)))
+                    (push r kept)))
+                (nreverse kept)))
         (setq tip-latex--treesit-fragment-cache (cons tick ranges))
         ranges))))
 

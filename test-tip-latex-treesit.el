@@ -27,8 +27,7 @@
        (insert ,text)
        (latex-mode)
        (let ((tip-latex--treesit-parser nil))   ; force re-create
-         (let ((tip-latex-parser 'treesit))
-           ,@body)))))
+         ,@body))))
 
 (defun tlt-frags ()
   "Return collector output as `(START END TEXT)' triples (1-based positions)."
