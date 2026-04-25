@@ -109,8 +109,33 @@ impl LatexCompiler {
         write_batch_tex(&tex_path, preamble, fragments, display_math_width)
             .map_err(|e| LatexError::Io(format!("write batch.tex: {e}")))?;
 
+        // Stub microtype.sty in the tmpdir so LaTeX picks up our no-op
+        // version instead of the real one.  The user's paper may load
+        // microtype with `expansion=true', which calls METAFONT to
+        // build scaled font metrics (cmr5+20.tfm etc.) that aren't
+        // always available — bubbles up as
+        //   "Font csnameendcsname=cmr5+20 at 5.0pt not loadable"
+        // on every fragment.  Stubbing microtype is safe for previews:
+        // the package is purely typographic (kerning, expansion); none
+        // of its effects matter for cropped math.
+        let stub_path = tmp.path().join("microtype.sty");
+        fs::write(&stub_path, MICROTYPE_STUB)
+            .map_err(|e| LatexError::Io(format!("write microtype stub: {e}")))?;
+
         // Step 1: latex → DVI
         let cwd = working_dir.unwrap_or(tmp.path());
+        // Prepend the tmpdir to TEXINPUTS so the microtype stub above
+        // is found before the system one.  Trailing `:' keeps the
+        // default search path active.  Note: LaTeX requires the
+        // double-`:' or `;' (depends on platform) to mean "default
+        // path appended"; a single trailing `:' is enough on Unix.
+        let texinputs = {
+            let prefix = tmp.path().to_string_lossy().into_owned();
+            match std::env::var_os("TEXINPUTS") {
+                Some(existing) => format!("{prefix}:{}", existing.to_string_lossy()),
+                None => format!("{prefix}:"),
+            }
+        };
         let latex_output = Command::new("latex")
             .args([
                 "-interaction=nonstopmode",
@@ -120,6 +145,7 @@ impl LatexCompiler {
             .arg(tmp.path())
             .arg(&tex_path)
             .current_dir(cwd)
+            .env("TEXINPUTS", &texinputs)
             .output()
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => LatexError::ToolMissing("latex".into()),
@@ -298,7 +324,6 @@ fn write_batch_tex(
     // microtype is purely cosmetic and irrelevant to math fragments,
     // so disable it for the preview compile.
     let preamble_body = strip_begin_document(preamble);
-    let preamble_body = inject_microtype_disable(preamble_body);
     writeln!(f, "{}", preamble_body)?;
     // xcolor — required for our \color[HTML]{...} injection in the handler.
     writeln!(
@@ -365,69 +390,44 @@ fn strip_begin_document(preamble: &str) -> &str {
     preamble
 }
 
-/// Disable microtype for the preview compile.
-///
-/// microtype's `expansion=true' / `protrusion=true' options trigger
-/// METAFONT runs to build scaled font metrics (e.g. `cmr8+20.tfm')
-/// that aren't always present even with cm-super/lmodern installed.
-/// The errors bubble up to every fragment as
-/// "Font ...=cmr8+20 at 8.0pt not loadable".
-///
-/// We can't just rewrite the user's `\usepackage[...]{microtype}' —
-/// the user's preamble may load microtype indirectly via
-/// `\input{header}', and we don't expand \input here.  Instead,
-/// append a runtime override: `\AtBeginDocument{\microtypesetup{...}}'
-/// fires AFTER every \usepackage has run, so the package is fully
-/// loaded but every adjustment is disabled before any document
-/// content is shipped.  No-op when microtype isn't loaded (the
-/// `\@ifpackageloaded' guard skips the setup).
-fn inject_microtype_disable(preamble: &str) -> String {
-    let mut out = String::with_capacity(preamble.len() + 256);
-    out.push_str(preamble);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(
-        "\\AtBeginDocument{\\makeatletter\\@ifpackageloaded{microtype}\
-{\\microtypesetup{activate={false,false},protrusion=false,expansion=false}}\
-{}\\makeatother}\n",
-    );
-    out
-}
+/// No-op microtype.sty written to the compile tmpdir; TEXINPUTS is
+/// prepended so latex picks this up before the real one.
+const MICROTYPE_STUB: &str = r#"\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{microtype}[2026/01/01 v0.0 tip preview stub]
+% Swallow the user's options without complaint.
+\DeclareOption*{}\ProcessOptions\relax
+% No-ops for the public API surface most papers touch.
+\providecommand{\microtypesetup}[1]{}
+\providecommand{\microtypecontext}[1]{}
+\providecommand{\textls}[2][]{#2}
+\providecommand{\lsstyle}{}
+\providecommand{\noprotrusion}{}
+\providecommand{\DisableLigatures}[2][]{}
+\providecommand{\DeclareMicrotypeAlias}[2]{}
+\providecommand{\DeclareMicrotypeSet}[3]{}
+\providecommand{\DeclareMicrotypeSetDefault}[2]{}
+\providecommand{\DeclareMicrotypeVariants}[1]{}
+\providecommand{\UseMicrotypeSet}[2][]{}
+\endinput
+"#;
+
 
 #[cfg(test)]
 mod strip_begin_tests {
     use super::*;
 
     #[test]
-    fn inject_microtype_appends_runtime_override() {
-        let pre = "\\documentclass{article}\n\\usepackage{microtype}\n";
-        let out = inject_microtype_disable(pre);
-        assert!(out.contains("\\AtBeginDocument{\\makeatletter\\@ifpackageloaded{microtype}"));
-        assert!(out.contains("activate={false,false}"));
-        // Original content survives intact — we just append.
-        assert!(out.starts_with(pre));
-    }
-
-    #[test]
-    fn inject_microtype_works_when_loaded_via_input() {
-        // The user's preamble doesn't mention microtype directly; it
-        // loads via `\input{header}'.  Server can't expand the input,
-        // so it appends an `AtBeginDocument' override that fires once
-        // EVERY \usepackage (including those from \input'd files) has
-        // run.  Verify the override is appended even with no
-        // microtype string in the preamble.
-        let pre = "\\documentclass{article}\n\\input{header}\n";
-        let out = inject_microtype_disable(pre);
-        assert!(out.contains("\\AtBeginDocument"));
-        assert!(out.contains("microtype"));
-    }
-
-    #[test]
-    fn inject_microtype_ends_with_newline_safety() {
-        let pre = "\\usepackage{a}";   // no trailing newline
-        let out = inject_microtype_disable(pre);
-        assert!(out.starts_with("\\usepackage{a}\n"));
+    fn microtype_stub_provides_required_commands() {
+        // The stub must define the public commands microtype users
+        // commonly reference, otherwise their preamble breaks during
+        // the preview compile.
+        for cmd in &[
+            "\\providecommand{\\microtypesetup}",
+            "\\providecommand{\\textls}",
+            "\\providecommand{\\noprotrusion}",
+        ] {
+            assert!(MICROTYPE_STUB.contains(cmd), "stub missing {cmd}");
+        }
     }
 
     #[test]
@@ -681,6 +681,18 @@ fn parse_preview_errors(
 
         // Warning line (no path:line: prefix).
         if current.is_some() && is_warning(rest) {
+            // Drop noise that's irrelevant to math fragments and
+            // always present in preview compiles (tip doesn't run
+            // bibtex / makeindex / etc. between fragments):
+            //   - "Citation `key' on page N undefined" — every \cite
+            //     fires one.
+            //   - "Reference `key' on page N undefined" — same for
+            //     \ref / \eqref / \cref to labels not yet resolved.
+            //   - "There were undefined references." — summary that
+            //     LaTeX emits after the document body.
+            if is_unresolved_ref_warning(rest) {
+                continue;
+            }
             commit(&mut pending_err, &mut out, current, start_line);
             pending_err = Some((rest.trim().to_string(), None, String::new()));
             continue;
@@ -726,6 +738,19 @@ fn split_file_line_prefix(line: &str) -> (Option<u32>, &str) {
         i += 1;
     }
     (None, line)
+}
+
+/// Filters out the "Citation `key' on page N undefined" / "Reference
+/// ... undefined" / "There were undefined references" noise that
+/// appears in every preview compile (we don't run bibtex / makeindex
+/// between fragments).  These never affect math rendering and would
+/// otherwise spam the user's flymake / echo-area diagnostics.
+fn is_unresolved_ref_warning(msg: &str) -> bool {
+    let trimmed = msg.trim_start_matches("LaTeX Warning: ");
+    trimmed.starts_with("Citation ")
+        || trimmed.starts_with("Reference ")
+        || trimmed.starts_with("There were undefined")
+        || trimmed.starts_with("There were multiply-defined labels")
 }
 
 fn is_warning(msg: &str) -> bool {
