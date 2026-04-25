@@ -457,7 +457,7 @@ fn build_scoped_source(
     document_source: &str,
     frag_start: usize,
     frag_end: usize,
-    _color: &str,
+    color: &str,
     is_multiline: bool,
     page_setup_override: Option<&str>,
     preamble_override: Option<&str>,
@@ -492,6 +492,13 @@ fn build_scoped_source(
 
     let fragment = &document_source[frag_start..frag_end];
 
+    // The color override goes LAST among the setup chunks so it wins
+    // over any client-supplied `set text(rgb(...))' in preamble_override
+    // and document-level rules in skeleton.  Server passes the
+    // sentinel STANDIN_HEX here; the post-render pass rewrites it to
+    // SVG `currentColor' (see typst_backend.rs).
+    let color_override = format!("#show math.equation: set text(rgb(\"{color}\"))\n");
+
     // page_setup and client_preamble go AFTER skeleton so they override
     // document-level rules (page layout, text size, colors).
     // Join non-empty sections with single newlines to avoid blank lines
@@ -501,6 +508,7 @@ fn build_scoped_source(
         skeleton.trim(),
         preamble_override.unwrap_or("").trim(),
         page_setup.trim(),
+        color_override.trim(),
         fragment,
         closing.as_str(),
     ].into_iter().filter(|s| !s.is_empty()).collect();

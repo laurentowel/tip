@@ -26,6 +26,7 @@
 (declare-function tip--color-to-hex "tip" (color))
 (defvar tip-transparent-bg)
 (defvar tip-server-executable)
+(defvar tip-project-root-path)
 
 ;;; * customization
 
@@ -422,9 +423,6 @@ Multi-file projects are supported by the server-side graph walk."
 
 ;;; * multi-file detection
 
-(defvar-local tip-latex--include-warned nil
-  "t once we've warned about \\input/\\include/\\subimport in this buffer.")
-
 (defvar-local tip-latex--has-includes 'unknown
   "Buffer-local cache: `t', `nil', or the sentinel `unknown'.
 Set by `tip-latex--buffer-has-includes-p' on first check; invalidated
@@ -462,16 +460,6 @@ refreshes it, so continuous typing doesn't re-scan per keystroke."
   (tip-latex--fragments-schedule-rescan))
 
 (add-hook 'after-change-functions #'tip-latex--on-change)
-
-(defun tip-latex--refuse-if-includes ()
-  "If the buffer has \\input/\\include, warn once and return t.
-Callers that refuse to produce previews use the return value to short-circuit."
-  (when (tip-latex--buffer-has-includes-p)
-    (unless tip-latex--include-warned
-      (setq tip-latex--include-warned t)
-      (message "tip-latex: buffer contains \\input/\\include/\\subimport — \
-multi-file support is v2; previews disabled in this buffer."))
-    t))
 
 ;;; * preamble extraction
 

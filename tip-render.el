@@ -89,8 +89,12 @@ Useful after restarting tip-server or swapping its binary."
   (when (called-interactively-p 'interactive)
     (message "tip cache cleared%s" (if all-buffers " (all buffers)" ""))))
 
-(defun tip--cache-key (content fg)
-  (cons content fg))
+(defun tip--cache-key (content &rest _)
+  ;; Server-side currentColor rendering means the SAME content produces
+  ;; the SAME SVG regardless of the requested fg.  So the key is just
+  ;; the content; the historical FG arg is accepted-and-ignored for
+  ;; callsite compatibility.
+  content)
 
 (defun tip--caching-enabled-p ()
   "Return non-nil if the compile-result cache is safe for the active backend.
@@ -124,25 +128,25 @@ buffer if you hit scope-sensitivity there too."
                tip--compile-cache)
       (when min-key (remhash min-key tip--compile-cache)))))
 
-(defun tip--cache-put (content fg plist)
-  "Insert PLIST for (CONTENT . FG) into the cache.
+(defun tip--cache-put (content _fg plist)
+  "Insert PLIST for CONTENT into the cache.
 Stamps the entry with the current clock, then enforces
-`tip-cache-max-entries' by evicting the LRU entry when exceeded."
+`tip-cache-max-entries' by evicting the LRU entry when exceeded.
+The historical FG arg is accepted-and-ignored — see `tip--cache-key'."
   (let ((cache (tip--compile-cache)))
-    (puthash (tip--cache-key content fg)
+    (puthash (tip--cache-key content)
              (plist-put (copy-sequence plist) :ts (tip--cache-next-ts))
              cache)
     (when (and (bound-and-true-p tip-cache-max-entries)
                (> (hash-table-count cache) tip-cache-max-entries))
       (tip--cache-evict-lru))))
 
-(defun tip--cache-get (content fg)
-  "Return cached plist for (CONTENT . FG), or nil.
+(defun tip--cache-get (content &optional _fg)
+  "Return cached plist for CONTENT, or nil.
 On hit, bumps the entry's timestamp so it survives eviction longer."
   (when tip--compile-cache
-    (when-let* ((entry (gethash (tip--cache-key content fg)
+    (when-let* ((entry (gethash (tip--cache-key content)
                                 tip--compile-cache)))
-      ;; Touch: update :ts in place.
       (plist-put entry :ts (tip--cache-next-ts))
       entry)))
 

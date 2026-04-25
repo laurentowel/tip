@@ -749,20 +749,25 @@ Called from `after-change-functions'.
 Two cases get cleaned up:
 1. Zero-width overlays — deletion shrunk an overlay's bounds to a
    point.  These are always stale.
-2. Error overlays touching the edit range — the user is mid-fix;
-   keeping the warn/err face on top of their typing reads as stale
-   noise.  The next cursor-leave recompiles and re-establishes the
-   error if it's still there.  Image overlays (no
-   `tip-error-severity' prop) are NOT cleared on edit — the existing
-   image stays put until the next compile cycle replaces it."
+2. Error overlays whose FRAGMENT range is touched by the edit.
+   We use `tip-frag-beg'/`tip-frag-end' rather than the overlay's
+   own range because the error underline often covers a sub-range
+   (the parsed hint) and the user's typing may happen elsewhere
+   inside the same fragment.  The next cursor-leave recompiles and
+   re-establishes the error if still genuine.  Image overlays
+   (without `tip-error-severity') stay put until the next compile
+   cycle replaces them."
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
       (cond
        ((>= (overlay-start ov) (overlay-end ov))
         (delete-overlay ov))
        ((and (overlay-get ov 'tip-error-severity)
-             (< (overlay-start ov) end)
-             (> (overlay-end ov) beg))
+             (let ((fb (or (overlay-get ov 'tip-frag-beg)
+                           (overlay-start ov)))
+                   (fe (or (overlay-get ov 'tip-frag-end)
+                           (overlay-end ov))))
+               (and (< fb end) (> fe beg))))
         (delete-overlay ov))))))
 
 ;;; * cleanup
