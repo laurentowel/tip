@@ -148,19 +148,30 @@ background color (and swapped on theme change)."
   :type 'boolean
   :group 'tip)
 
-(defcustom tip-image-face nil
+(defcustom tip-image-face 'auto
   "Face used as the image overlay's color source.
-When nil (default), the rendered math picks up `currentColor' from
-whatever face Emacs applies at the image's position — so math inside
-a heading inherits the heading face, math inside an `emph' inherits
-italic-ish coloring, and so on.  Some users find this behavior
-pleasant; others find it distracting when major modes fontify math
-delimiters (e.g. `font-latex-math-face' giving all math a purple
-tint).  Set to `default' to pin every overlay to the default face,
-ignoring the fontification beneath.  Any face symbol works — you
-could also pin to `shadow', `font-lock-comment-face', etc."
-  :type '(choice (const :tag "Inherit from face at point (default)" nil)
+- `auto' (default): compute the face surrounding the fragment,
+  filter out `tip-image-face-blocklist', use the remainder.  Mirrors
+  org-latex-preview's `colors-around' filter — math inherits from
+  headings/emph but skips mode-specific math fontification.
+- nil: no filter — math picks up whatever face Emacs sees at the
+  image position (which in `latex-mode' is `font-latex-math-face',
+  giving every fragment a uniform tint).
+- a face symbol (`default', `shadow', ...): pin every overlay to
+  that face, ignoring buffer fontification entirely."
+  :type '(choice (const :tag "Auto (inherit but filter via blocklist)" auto)
+                 (const :tag "No filter (face-at-point as-is)" nil)
                  (face :tag "Pin to face"))
+  :group 'tip)
+
+(defcustom tip-image-face-blocklist
+  '(font-latex-math-face)
+  "Faces excluded by `tip-image-face' = `auto'.
+The default blocks only `font-latex-math-face' — the most common
+case where major-mode fontification leaks into math overlays.  Add
+your own modes' math/keyword/comment faces if you see math
+inheriting unwanted tints."
+  :type '(repeat face)
   :group 'tip)
 
 (defcustom tip-cursor-inside-overlay '(bar . 2)
@@ -541,7 +552,11 @@ Automatically renders visible fragments and enables live preview."
         ;; Clean up stale overlays on buffer changes
         (add-hook 'after-change-functions #'tip--cleanup-stale-overlays nil t)
         ;; Track theme changes
-        (tip-follow-theme-mode 1)
+        ;; Font-size changes resolved at overlay-creation time, so
+        ;; rescale on `buffer-face-mode-hook' (variable-pitch toggle,
+        ;; fontaine-set-preset, etc.).  Theme-color changes don't need
+        ;; tracking — SVGs use `currentColor'.
+        (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t)
         ;; Kodama integration (auto-detect)
         (when (fboundp 'tip-kodama-maybe-enable)
           (tip-kodama-maybe-enable))
@@ -571,7 +586,7 @@ Automatically renders visible fragments and enables live preview."
       (cancel-timer tip-echo--timer)
       (setq tip-echo--timer nil))
     (when tip-live-mode (tip-live-mode -1))
-    (tip-follow-theme-mode -1)
+    (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)
     (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
     (when (bound-and-true-p tip-flymake-mode) (tip-flymake-mode -1))
     (remove-hook 'eldoc-documentation-functions #'tip--eldoc-error t)
@@ -728,13 +743,27 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
 
 ;;; * stale overlay cleanup
 
-(defun tip--cleanup-stale-overlays (_beg _end _len)
-  "Remove zero-width tip overlays left behind after text deletion.
-Called from `after-change-functions'."
+(defun tip--cleanup-stale-overlays (beg end _len)
+  "Remove tip overlays invalidated by an edit in BEG..END.
+Called from `after-change-functions'.
+Two cases get cleaned up:
+1. Zero-width overlays — deletion shrunk an overlay's bounds to a
+   point.  These are always stale.
+2. Error overlays touching the edit range — the user is mid-fix;
+   keeping the warn/err face on top of their typing reads as stale
+   noise.  The next cursor-leave recompiles and re-establishes the
+   error if it's still there.  Image overlays (no
+   `tip-error-severity' prop) are NOT cleared on edit — the existing
+   image stays put until the next compile cycle replaces it."
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
-      (when (>= (overlay-start ov) (overlay-end ov))
-        (delete-overlay ov)))))
+      (cond
+       ((>= (overlay-start ov) (overlay-end ov))
+        (delete-overlay ov))
+       ((and (overlay-get ov 'tip-error-severity)
+             (< (overlay-start ov) end)
+             (> (overlay-end ov) beg))
+        (delete-overlay ov))))))
 
 ;;; * cleanup
 

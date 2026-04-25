@@ -6,11 +6,11 @@
 ;; assert the observable invariant: loading a new theme doesn't drop
 ;; or corrupt any overlays.
 
-(tip-test-deftest follow-theme-mode-still-enabled-with-tip-mode
-  :doc "tip-mode activates tip-follow-theme-mode (now font-only)."
+(tip-test-deftest font-change-rescales-overlays
+  :doc "tip-mode wires buffer-face-mode-hook for font-size changes."
   :tags (theme typst)
   (tip-test-with-fresh-typst-buffer "$a$\n"
-    (should tip-follow-theme-mode)))
+    (should (memq #'tip--on-font-change buffer-face-mode-hook))))
 
 (tip-test-deftest theme-switch-preserves-overlays
   :doc "Loading a theme keeps overlays alive (currentColor in SVG)."

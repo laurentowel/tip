@@ -25,6 +25,7 @@
 (defvar tip-baseline-offset)
 (defvar tip-display-math-padding)
 (defvar tip-image-face)
+(defvar tip-image-face-blocklist)
 (defvar tip-echo-errors)
 (defvar tip-mode)
 (defvar tip-live--content-cache)
@@ -293,11 +294,59 @@ frame, batch mode, etc.)."
 
 ;;; * image spec
 
-(defun tip--make-image-spec (svg-data height-pt depth-pt &optional display-p rendered-pt)
+(defun tip--resolve-image-face (frag-beg frag-end)
+  "Return the face to attach to the overlay's image spec, or nil.
+Honors `tip-image-face':
+  nil    → return nil (Emacs picks the face at point — default).
+  symbol → that symbol (e.g. `default', `shadow').
+  `auto' → `(get-text-property (1- frag-beg) \\='face)' (or just
+           after frag-end if before is unhelpful), filtered through
+           `tip-image-face-blocklist', wrapped to fall back to
+           `default'.  Mirrors org-latex-preview's --face-around."
+  (cond
+   ((null tip-image-face) nil)
+   ((not (eq tip-image-face 'auto)) tip-image-face)
+   (t
+    (let* ((raw
+            (or (and (> frag-beg (point-min))
+                     (not (eq (char-before frag-beg) ?\n))
+                     (get-text-property (1- frag-beg) 'face))
+                (and (< frag-end (point-max))
+                     (not (eq (char-after frag-end) ?\n))
+                     (get-text-property frag-end 'face))))
+           (filtered
+            (cond
+             ((null raw) nil)
+             ((and (symbolp raw)
+                   (memq raw tip-image-face-blocklist))
+              nil)
+             ((symbolp raw) raw)
+             ((listp raw)
+              (let ((cleaned
+                     (seq-remove
+                      (lambda (f) (and (symbolp f)
+                                       (memq f tip-image-face-blocklist)))
+                      raw)))
+                (cond
+                 ((null cleaned) nil)
+                 ((= (length cleaned) 1) (car cleaned))
+                 (t cleaned)))))))
+      ;; Always include `default' as a fallback so attribute lookups
+      ;; resolve sanely.  When filtered is nil, just use default.
+      (cond
+       ((null filtered) 'default)
+       ((symbolp filtered) (list filtered 'default))
+       ((listp filtered) (append filtered '(default))))))))
+
+(defun tip--make-image-spec (svg-data height-pt depth-pt
+                                      &optional display-p rendered-pt
+                                      frag-beg frag-end)
   "Create an image display spec from SVG-DATA with HEIGHT-PT and DEPTH-PT.
 When DISPLAY-P is non-nil, use vertical centering (for display math).
 RENDERED-PT is the backend's native render size (see
-`tip--effective-scale').  Defaults to 11.0."
+`tip--effective-scale').  Defaults to 11.0.
+FRAG-BEG/FRAG-END are used by `tip-image-face' = `auto' to compute
+the surrounding face."
   (let* ((padded (if display-p
                      (tip--pad-svg-viewbox svg-data tip-display-math-padding)
                    (cons svg-data 0.0)))
@@ -326,23 +375,15 @@ RENDERED-PT is the backend's native render size (see
                                                       height-px)))
                                  50)))
                      (max 0 (min 100 (- pct tip-baseline-offset)))))))
-    (list (cons 'image
-                (append (list :type 'svg
-                              :data svg-data
-                              :height `(,height-em . em)
-                              :ascent ascent
-                              :pointer 'hand)
-                        ;; When `tip-image-face' is non-nil, pin the
-                        ;; image's currentColor source to that face —
-                        ;; useful to stop the rendered math from
-                        ;; inheriting `font-latex-math-face' or other
-                        ;; buffer-text-at-position fontification.  When
-                        ;; nil (default), Emacs picks whatever face is
-                        ;; at the image position, which is the feature
-                        ;; most users enjoy (math tints with headings,
-                        ;; emph, etc.).
-                        (when tip-image-face
-                          (list :face tip-image-face)))))))
+    (let ((face (and frag-beg frag-end
+                     (tip--resolve-image-face frag-beg frag-end))))
+      (list (cons 'image
+                  (append (list :type 'svg
+                                :data svg-data
+                                :height `(,height-em . em)
+                                :ascent ascent
+                                :pointer 'hand)
+                          (when face (list :face face))))))))
 
 ;;; * error-overlay helpers
 
@@ -593,21 +634,11 @@ Rescales overlays using current font metrics — no recompilation."
         (setq tip-live--content-cache "")
         (setq tip-echo--content-cache "")))))
 
-;;; * minor mode
-
-;;;###autoload
-(define-minor-mode tip-follow-theme-mode
-  "Automatically rescale tip overlays on font-size changes.
-Theme-color changes no longer require any update — SVGs emit
-`fill=\"currentColor\"' and Emacs picks the face's :foreground at
-display time.  The minor mode still exists (and is still enabled by
-`tip-mode') because font-size changes DO require rescaling the image
-spec (`(N . em)' is resolved at overlay-creation time)."
-  :init-value nil
-  :lighter ""
-  (if tip-follow-theme-mode
-      (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t)
-    (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)))
+;; tip-follow-theme-mode used to live here as a separate minor mode that
+;; (a) hooked enable-theme-functions to recolor SVGs and (b) hooked
+;; buffer-face-mode-hook to rescale on font change.  (a) is no longer
+;; needed (currentColor handles theme), and (b) is now wired directly
+;; from `tip-mode' — no separate toggle adds value.
 
 (provide 'tip-render)
 
