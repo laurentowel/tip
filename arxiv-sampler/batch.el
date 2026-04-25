@@ -22,6 +22,12 @@
           (or (getenv "TIP_SERVER_EXECUTABLE")
               (expand-file-name "tip-server/target/release/tip-server"
                                 tip-sampler-repo))))
+  ;; tip-latex now needs the tree-sitter-latex grammar.  Honor
+  ;; TIP_LATEX_GRAMMAR_PATH for sandboxed runs (nix flake passes one).
+  (require 'treesit nil t)
+  (let ((g (getenv "TIP_LATEX_GRAMMAR_PATH")))
+    (when (and g (file-directory-p g) (boundp 'treesit-extra-load-path))
+      (add-to-list 'treesit-extra-load-path (file-name-as-directory g))))
   (setq tip-verbose nil tip-enable-debug nil)
   (load (expand-file-name "tip.el" tip-sampler-repo) nil t))
 

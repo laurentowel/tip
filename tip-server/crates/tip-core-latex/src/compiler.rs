@@ -290,7 +290,15 @@ fn write_batch_tex(
         writeln!(f, "\\documentclass{{article}}")?;
     }
     // User preamble, up to (but not including) \begin{document} if present.
+    // Inject `\PassOptionsToPackage{draft}{microtype}' after the
+    // user's \documentclass.  microtype's `expansion=true' /
+    // `protrusion=true' options trigger METAFONT to build scaled font
+    // metrics on the fly (e.g. `cmr8+20'); the run fails on systems
+    // that lack those metrics even with cm-super/lmodern installed.
+    // microtype is purely cosmetic and irrelevant to math fragments,
+    // so disable it for the preview compile.
     let preamble_body = strip_begin_document(preamble);
+    let preamble_body = inject_microtype_disable(preamble_body);
     writeln!(f, "{}", preamble_body)?;
     // xcolor — required for our \color[HTML]{...} injection in the handler.
     writeln!(
@@ -357,9 +365,70 @@ fn strip_begin_document(preamble: &str) -> &str {
     preamble
 }
 
+/// Disable microtype for the preview compile.
+///
+/// microtype's `expansion=true' / `protrusion=true' options trigger
+/// METAFONT runs to build scaled font metrics (e.g. `cmr8+20.tfm')
+/// that aren't always present even with cm-super/lmodern installed.
+/// The errors bubble up to every fragment as
+/// "Font ...=cmr8+20 at 8.0pt not loadable".
+///
+/// We can't just rewrite the user's `\usepackage[...]{microtype}' —
+/// the user's preamble may load microtype indirectly via
+/// `\input{header}', and we don't expand \input here.  Instead,
+/// append a runtime override: `\AtBeginDocument{\microtypesetup{...}}'
+/// fires AFTER every \usepackage has run, so the package is fully
+/// loaded but every adjustment is disabled before any document
+/// content is shipped.  No-op when microtype isn't loaded (the
+/// `\@ifpackageloaded' guard skips the setup).
+fn inject_microtype_disable(preamble: &str) -> String {
+    let mut out = String::with_capacity(preamble.len() + 256);
+    out.push_str(preamble);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(
+        "\\AtBeginDocument{\\makeatletter\\@ifpackageloaded{microtype}\
+{\\microtypesetup{activate={false,false},protrusion=false,expansion=false}}\
+{}\\makeatother}\n",
+    );
+    out
+}
+
 #[cfg(test)]
 mod strip_begin_tests {
     use super::*;
+
+    #[test]
+    fn inject_microtype_appends_runtime_override() {
+        let pre = "\\documentclass{article}\n\\usepackage{microtype}\n";
+        let out = inject_microtype_disable(pre);
+        assert!(out.contains("\\AtBeginDocument{\\makeatletter\\@ifpackageloaded{microtype}"));
+        assert!(out.contains("activate={false,false}"));
+        // Original content survives intact — we just append.
+        assert!(out.starts_with(pre));
+    }
+
+    #[test]
+    fn inject_microtype_works_when_loaded_via_input() {
+        // The user's preamble doesn't mention microtype directly; it
+        // loads via `\input{header}'.  Server can't expand the input,
+        // so it appends an `AtBeginDocument' override that fires once
+        // EVERY \usepackage (including those from \input'd files) has
+        // run.  Verify the override is appended even with no
+        // microtype string in the preamble.
+        let pre = "\\documentclass{article}\n\\input{header}\n";
+        let out = inject_microtype_disable(pre);
+        assert!(out.contains("\\AtBeginDocument"));
+        assert!(out.contains("microtype"));
+    }
+
+    #[test]
+    fn inject_microtype_ends_with_newline_safety() {
+        let pre = "\\usepackage{a}";   // no trailing newline
+        let out = inject_microtype_disable(pre);
+        assert!(out.starts_with("\\usepackage{a}\n"));
+    }
 
     #[test]
     fn strip_begin_document_plain() {
