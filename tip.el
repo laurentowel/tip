@@ -794,31 +794,27 @@ error/image overlay with the result of the current text."
     (when-let ((bounds (tip-bounds-at-point (point))))
       (tip-send-region (car bounds) (cdr bounds)))))
 
-(defun tip--cleanup-stale-overlays (beg end _len)
-  "Remove tip overlays invalidated by an edit in BEG..END.
-Called from `after-change-functions'.
-Two cases get cleaned up:
-1. Zero-width overlays — deletion shrunk an overlay's bounds to a
-   point.  These are always stale.
-2. Error overlays whose FRAGMENT range is touched by the edit.
-   We use `tip-frag-beg'/`tip-frag-end' rather than the overlay's
-   own range because the error underline often covers a sub-range
-   (the parsed hint) and the user's typing may happen elsewhere
-   inside the same fragment.  The next cursor-leave recompiles and
-   re-establishes the error if still genuine.  Image overlays
-   (without `tip-error-severity') stay put until the next compile
-   cycle replaces them."
+(defun tip--cleanup-stale-overlays (_beg _end _len)
+  "Remove invalidated tip overlays after an edit.
+Called from `after-change-functions'.  Two unconditional sweeps:
+1. Zero-width overlays — deletion shrunk an overlay to a point.
+2. ALL error/warning overlays.  Their stored `tip-frag-beg'/`-end'
+   are static integers from when they were created and don't track
+   subsequent edits; the LaTeX fragment cache is stale-served on
+   purpose; mid-typing the opener/closer pairing can shift.  Trying
+   to detect \"is this edit in this overlay's fragment\" precisely
+   is unreliable.  Just nuke the error face on any edit — the
+   `tip--schedule-recompile' idle pass that fires alongside this
+   hook re-renders the now-current fragment, resurrecting any
+   genuine error from fresh text.
+Image overlays (without `tip-error-severity') stay put — the next
+compile cycle replaces them in place."
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
       (cond
        ((>= (overlay-start ov) (overlay-end ov))
         (delete-overlay ov))
-       ((and (overlay-get ov 'tip-error-severity)
-             (let ((fb (or (overlay-get ov 'tip-frag-beg)
-                           (overlay-start ov)))
-                   (fe (or (overlay-get ov 'tip-frag-end)
-                           (overlay-end ov))))
-               (and (< fb end) (> fe beg))))
+       ((overlay-get ov 'tip-error-severity)
         (delete-overlay ov))))))
 
 ;;; * cleanup
