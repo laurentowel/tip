@@ -174,6 +174,17 @@ inheriting unwanted tints."
   :type '(repeat face)
   :group 'tip)
 
+(defcustom tip-recompile-idle-delay 0.4
+  "Seconds of idle time after an edit before recompiling the fragment at point.
+Set to nil to disable the idle-recompile pass.  The eager
+`tip--cleanup-stale-overlays' on `after-change-functions' still runs
+regardless — this is a follow-up that re-renders the fragment so a
+fresh overlay (image or fresh error) replaces the cleared one without
+waiting for cursor-leave."
+  :type '(choice (const :tag "Disabled" nil)
+                 (number :tag "Seconds"))
+  :group 'tip)
+
 (defcustom tip-cursor-inside-overlay '(bar . 2)
   "Cursor shape to use while point sits on a tip image overlay.
 Emacs draws the regular block cursor at the overlay's pixel area,
@@ -551,6 +562,7 @@ Automatically renders visible fragments and enables live preview."
         (tip-edit-setup-keys)
         ;; Clean up stale overlays on buffer changes
         (add-hook 'after-change-functions #'tip--cleanup-stale-overlays nil t)
+        (add-hook 'after-change-functions #'tip--schedule-recompile nil t)
         ;; Track theme changes
         ;; Font-size changes resolved at overlay-creation time, so
         ;; rescale on `buffer-face-mode-hook' (variable-pitch toggle,
@@ -591,6 +603,8 @@ Automatically renders visible fragments and enables live preview."
     (when (bound-and-true-p tip-flymake-mode) (tip-flymake-mode -1))
     (remove-hook 'eldoc-documentation-functions #'tip--eldoc-error t)
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
+    (remove-hook 'after-change-functions #'tip--schedule-recompile t)
+    (tip--cancel-recompile-timer)
     (remove-hook 'post-command-hook #'tip--update-cursor-type t)
     (when (local-variable-p 'tip--saved-cursor-type)
       (setq cursor-type tip--saved-cursor-type)
@@ -742,6 +756,43 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
         (delete-overlay lov)))))
 
 ;;; * stale overlay cleanup
+
+(defvar-local tip--recompile-idle-timer nil
+  "Buffer-local idle timer for `tip-recompile-idle-delay'.")
+
+(defun tip--cancel-recompile-timer ()
+  "Cancel any pending idle-recompile timer in this buffer."
+  (when tip--recompile-idle-timer
+    (cancel-timer tip--recompile-idle-timer)
+    (setq tip--recompile-idle-timer nil)))
+
+(defun tip--schedule-recompile (&rest _)
+  "Schedule a fragment recompile after `tip-recompile-idle-delay' idle.
+Called from `after-change-functions'.  No-op when the delay is nil
+or `tip-mode' is off.  The timer-fired callback re-evaluates the
+fragment containing point so the overlay (image or fresh error)
+replaces stale ones — robust against intermediate parses where the
+opener/closer pairing shifts mid-typing."
+  (when (and tip-mode tip-recompile-idle-delay)
+    (let ((buf (current-buffer)))
+      (tip--cancel-recompile-timer)
+      (setq tip--recompile-idle-timer
+            (run-with-idle-timer
+             tip-recompile-idle-delay nil
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (setq tip--recompile-idle-timer nil)
+                   (tip--recompile-fragment-at-point)))))))))
+
+(defun tip--recompile-fragment-at-point ()
+  "Re-evaluate the fragment containing point.
+If the cursor isn't inside any fragment (per the active backend),
+do nothing.  Sends a fresh compile request — replaces any stale
+error/image overlay with the result of the current text."
+  (when (and tip-mode (eq (current-buffer) (window-buffer)))
+    (when-let ((bounds (tip-bounds-at-point (point))))
+      (tip-send-region (car bounds) (cdr bounds)))))
 
 (defun tip--cleanup-stale-overlays (beg end _len)
   "Remove tip overlays invalidated by an edit in BEG..END.
