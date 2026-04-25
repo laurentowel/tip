@@ -140,16 +140,67 @@ cache."
 
 ;;;###autoload
 (defun tip-latex-install-treesit-grammar ()
-  "Install the alex-pinkus/tree-sitter-latex grammar via `treesit'.
-Same grammar texlab uses; widely tested.  Adds the URL to
-`treesit-language-source-alist' if not present."
+  "Build and install the latex-lsp/tree-sitter-latex grammar.
+Upstream does not commit `parser.c', so the standard
+`treesit-install-language-grammar' path can't pull a pre-generated
+artifact.  Workflow:
+  1. clone https://github.com/latex-lsp/tree-sitter-latex
+  2. run `tree-sitter generate' inside it
+  3. compile the produced parser.c (and scanner.c / scanner.cc, if any)
+     into `~/.emacs.d/tree-sitter/libtree-sitter-latex.<so|dylib|dll>'
+
+Requires the `tree-sitter' CLI on `PATH' — install via
+`cargo install tree-sitter-cli', `npm i -g tree-sitter-cli', or your
+distro package.  And a C compiler (cc/gcc).  Pattern adapted from
+cdmath's grammar bootstrap."
   (interactive)
-  (unless (boundp 'treesit-language-source-alist)
-    (user-error "treesit not available in this Emacs"))
-  (unless (alist-get 'latex treesit-language-source-alist)
-    (add-to-list 'treesit-language-source-alist
-                 '(latex "https://github.com/latex-lsp/tree-sitter-latex")))
-  (treesit-install-language-grammar 'latex))
+  (unless (executable-find "tree-sitter")
+    (user-error
+     "tree-sitter CLI not found.  Install it via `cargo install tree-sitter-cli', \
+`npm i -g tree-sitter-cli', or your package manager and retry"))
+  (let* ((url "https://github.com/latex-lsp/tree-sitter-latex")
+         (tmp (make-temp-file "tip-latex-grammar-" t))
+         (repo (expand-file-name "tree-sitter-latex" tmp))
+         (log "*tip-latex-install*"))
+    (with-current-buffer (get-buffer-create log) (erase-buffer))
+    (message "tip-latex: cloning %s..." url)
+    (unless (zerop (call-process "git" nil log nil "clone" "--depth" "1" url repo))
+      (pop-to-buffer log)
+      (error "git clone failed"))
+    (let ((default-directory repo))
+      (message "tip-latex: running `tree-sitter generate'...")
+      (unless (zerop (call-process "tree-sitter" nil log nil "generate"))
+        (pop-to-buffer log)
+        (error "tree-sitter generate failed")))
+    (let* ((src-dir (expand-file-name "src" repo))
+           (parser-c (expand-file-name "parser.c" src-dir))
+           (scanner-c (expand-file-name "scanner.c" src-dir))
+           (scanner-cc (expand-file-name "scanner.cc" src-dir))
+           (out-dir (expand-file-name "tree-sitter" user-emacs-directory))
+           (ext (pcase system-type
+                  ('darwin "dylib")
+                  ('windows-nt "dll")
+                  (_ "so")))
+           (so-path (expand-file-name (format "libtree-sitter-latex.%s" ext)
+                                      out-dir))
+           (cc (or (executable-find "cc") (executable-find "gcc")
+                   (user-error "No C compiler found (cc/gcc)")))
+           (c++ (or (executable-find "c++") (executable-find "g++") cc))
+           (compiler (if (file-exists-p scanner-cc) c++ cc))
+           (srcs (delq nil (list parser-c
+                                 (and (file-exists-p scanner-c) scanner-c)
+                                 (and (file-exists-p scanner-cc) scanner-cc))))
+           (args (append (list "-fPIC" "-shared" "-O2" "-I" src-dir
+                               "-o" so-path)
+                         srcs)))
+      (unless (file-exists-p parser-c)
+        (error "parser.c not produced; tree-sitter generate may have failed silently"))
+      (make-directory out-dir t)
+      (message "tip-latex: compiling %s..." (file-name-nondirectory so-path))
+      (unless (zerop (apply #'call-process compiler nil log nil args))
+        (pop-to-buffer log)
+        (error "C compilation failed"))
+      (message "tip-latex: installed %s" so-path))))
 
 (provide 'tip-latex-parse-treesit)
 
