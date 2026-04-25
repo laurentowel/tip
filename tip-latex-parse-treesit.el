@@ -66,6 +66,45 @@ prompt during batch / headless runs."
   '("inline_formula" "displayed_equation" "math_environment")
   "Tree-sitter latex node types that carry a math fragment.")
 
+(defvar-local tip-latex--treesit-fragment-cache nil
+  "Cons (TICK . RANGES) — one entry per `buffer-chars-modified-tick'.
+RANGES is a sorted list of `(START . END)' integer ranges (1-based
+buffer positions) covering every math node in the buffer, with
+verb-span false-positives filtered out.
+
+Because the tick only changes on text edits, repeated cursor-motion
+queries reuse the same cache.  Treesit's parser is incremental on
+edits, so the next computation after an edit is still fast — but
+calling `treesit-query-capture' over the whole buffer N times per
+C-n compounds at high key-repeat rates.")
+
+(defun tip-latex--treesit-all-fragments ()
+  "Return cached `(START . END)' ranges for all math nodes; recompute on edit."
+  (let ((tick (buffer-chars-modified-tick)))
+    (if (and tip-latex--treesit-fragment-cache
+             (eq (car tip-latex--treesit-fragment-cache) tick))
+        (cdr tip-latex--treesit-fragment-cache)
+      (let* ((parser (tip-latex--treesit-parser))
+             (ranges nil))
+        (when parser
+          (let ((root (treesit-parser-root-node parser)))
+            (dolist (type tip-latex--treesit-math-node-types)
+              (condition-case _
+                  (dolist (cell (treesit-query-capture
+                                 root `((,(intern type)) @n)))
+                    (let ((node (cdr cell)))
+                      (push (cons (treesit-node-start node)
+                                  (treesit-node-end node))
+                            ranges)))
+                (treesit-query-error nil)))))
+        (setq ranges (sort ranges (lambda (a b) (< (car a) (car b)))))
+        ;; Drop verb false-positives once, not per-call.
+        (setq ranges (seq-remove
+                      (lambda (r) (tip-latex--treesit-inside-verb-p (car r)))
+                      ranges))
+        (setq tip-latex--treesit-fragment-cache (cons tick ranges))
+        ranges))))
+
 (defun tip-latex--treesit-inside-verb-p (start)
   "Return non-nil if START sits inside a `\\verb|...|' span.
 The latex grammar parses the inner `$...$' as `inline_formula' even
@@ -88,54 +127,31 @@ isn't closed by a matching delimiter before START."
   "Return math fragments overlapping [BEG, END) via the treesit parser.
 Format matches the regex collector: alists with string keys
 `start' / `end' carrying 0-based byte offsets.  AVOID-POS, when
-non-nil, is excluded — the fragment containing AVOID-POS is dropped
-(the cursor-leave path uses this to not re-render the fragment the
-user just exited)."
-  (let* ((parser (tip-latex--treesit-parser))
-         (frags nil))
-    (when parser
-      (let ((root (treesit-parser-root-node parser)))
-        (dolist (type tip-latex--treesit-math-node-types)
-          (condition-case _
-              (dolist (cell (treesit-query-capture
-                             root `((,(intern type)) @n)))
-                (let* ((node (cdr cell))
-                       (s (treesit-node-start node))
-                       (e (treesit-node-end node)))
-                  (when (and (< s end) (> e beg)
-                             (not (and avoid-pos
-                                       (<= s avoid-pos)
-                                       (< avoid-pos e)))
-                             (not (tip-latex--treesit-inside-verb-p s)))
-                    (push (cons s e) frags))))
-            (treesit-query-error nil)))))
-    (mapcar (lambda (r)
-              `(("start" . ,(1- (position-bytes (car r))))
-                ("end"   . ,(1- (position-bytes (cdr r))))))
-            (sort frags (lambda (a b) (< (car a) (car b)))))))
+non-nil, drops the fragment that contains it (cursor-leave path
+uses this to not re-render the fragment the user just exited).
+Reads from `tip-latex--treesit-all-fragments' which caches by
+buffer-modified-tick — cursor-motion calls hit cache."
+  (let (out)
+    (dolist (r (tip-latex--treesit-all-fragments))
+      (let ((s (car r)) (e (cdr r)))
+        (when (and (< s end) (> e beg)
+                   (not (and avoid-pos (<= s avoid-pos) (< avoid-pos e))))
+          (push `(("start" . ,(1- (position-bytes s)))
+                  ("end"   . ,(1- (position-bytes e))))
+                out))))
+    (nreverse out)))
 
 (defun tip-latex-treesit-bounds-at-point (pos)
   "Return `(BEG . END)' of the math fragment at POS via treesit.
-Half-open: BEG ≤ POS < END.  Synchronous — no debounce, no stale
-cache."
-  (let* ((parser (tip-latex--treesit-parser))
-         (best nil))
-    (when parser
-      (let ((root (treesit-parser-root-node parser)))
-        (dolist (type tip-latex--treesit-math-node-types)
-          (condition-case _
-              (dolist (cell (treesit-query-capture
-                             root `((,(intern type)) @n)))
-                (let* ((node (cdr cell))
-                       (s (treesit-node-start node))
-                       (e (treesit-node-end node)))
-                  (when (and (<= s pos) (< pos e)
-                             (not (tip-latex--treesit-inside-verb-p s)))
-                    ;; Smallest enclosing wins.
-                    (when (or (null best)
-                              (< (- e s) (- (cdr best) (car best))))
-                      (setq best (cons s e))))))
-            (treesit-query-error nil)))))
+Half-open: BEG ≤ POS < END.  Synchronous; no stale cache (the
+underlying fragment list is recomputed on every buffer edit and
+reused across cursor motion)."
+  (let ((best nil))
+    (dolist (r (tip-latex--treesit-all-fragments))
+      (let ((s (car r)) (e (cdr r)))
+        (when (and (<= s pos) (< pos e))
+          (when (or (null best) (< (- e s) (- (cdr best) (car best))))
+            (setq best (cons s e))))))
     best))
 
 ;;;###autoload
