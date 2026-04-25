@@ -176,7 +176,9 @@ Returns non-nil on success.  Equivalent to one iteration of
            (is-single-line-display (eq class 'display-single))
            (is-display (memq class '(display-single display-multi block)))
            (img-spec (tip--make-image-spec svg-data height-pt depth-pt
-                                           is-display font-size-pt))
+                                           is-display font-size-pt
+                                           frag-beg frag-end))
+           (image-face (tip--resolve-image-face frag-beg frag-end))
            (ov-beg (if (and is-display
                             (> frag-beg (point-min))
                             (eq (char-before frag-beg) ?\n)
@@ -193,6 +195,11 @@ Returns non-nil on success.  Equivalent to one iteration of
       (overlay-put ov 'tip-font-size-pt font-size-pt)
       (overlay-put ov 'tip-svg svg-data)
       (overlay-put ov 'display img-spec)
+      ;; When `tip-image-face' computed a face, also pin it on the
+      ;; overlay itself.  Emacs merges buffer-text-face under the image
+      ;; for currentColor resolution; setting overlay 'face takes
+      ;; priority and gives a clean single source.
+      (when image-face (overlay-put ov 'face image-face))
       (overlay-put ov 'modification-hooks
                    (list #'tip--invalidate-on-modification))
       (when (and is-single-line-display tip-display-indicator)
@@ -547,8 +554,10 @@ diagnostic is echoed and later errors get minimal visual weight."
                  (is-single-line-display (eq class 'display-single))
                  (is-display (memq class '(display-single display-multi block)))
                  (img-spec (tip--make-image-spec svg-data height-pt depth-pt
-                                                 is-display font-size-pt))
+                                                 is-display font-size-pt
+                                                 frag-beg frag-end))
                  (display img-spec)
+                 (image-face (tip--resolve-image-face frag-beg frag-end))
                  ;; For display math, eat a preceding blank line so the
                  ;; overlay doesn't leave an orphan gap.
                  (ov-beg (if (and is-display
@@ -566,6 +575,7 @@ diagnostic is echoed and later errors get minimal visual weight."
             (overlay-put ov 'tip-width-pt (or width-pt 0))
             (overlay-put ov 'tip-font-size-pt font-size-pt)
             (overlay-put ov 'tip-svg svg-data)
+            (when image-face (overlay-put ov 'face image-face))
             ;; Populate the compile cache (so cursor transitions don't
             ;; re-compile), but only for backends where the (content+fg)
             ;; key actually captures the full compile input.  See
