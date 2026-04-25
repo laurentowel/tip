@@ -272,6 +272,12 @@ RUST_BACKTRACE is only consulted when the process actually panics."
                      tip-cache-clear-on-server-restart
                      (fboundp 'tip-cache-clear))
             (tip-cache-clear t))
+          ;; New server has no synced buffers — invalidate every
+          ;; buffer's last-sync tick so the next compile re-syncs.
+          (dolist (buf (buffer-list))
+            (with-current-buffer buf
+              (when (local-variable-p 'tip--last-sync-tick)
+                (setq tip--last-sync-tick nil))))
           (let ((dirs (tip--resolve-font-dirs)))
             (when dirs
               (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
@@ -392,18 +398,32 @@ CALLBACK is called with the result alist when response arrives."
       (tip-debug-msg "tip-server send: %s" (string-trim json))
       (process-send-string tip--server-process json))))
 
+(defvar-local tip--last-sync-tick nil
+  "`buffer-chars-modified-tick' value at the last successful sync.
+Compared in `tip--sync-buffer' to skip redundant whole-buffer sends
+when nothing has changed.  Reset to nil when the server restarts or
+the cache is cleared (see `tip-cache-clear-on-server-restart').")
+
 (defun tip--sync-buffer ()
   "Sync current buffer content to tip-server.
-Always sends the full buffer, ignoring narrowing."
-  (let ((params
-         `(("uri" . ,(buffer-file-name))
-           ("content" . ,(save-restriction
-                           (widen)
-                           (buffer-substring-no-properties (point-min) (point-max)))))))
-    (when-let ((root (and (fboundp 'tip--resolve-project-root)
-                          (tip--resolve-project-root))))
-      (push (cons "project_root" root) params))
-    (tip--send-request "sync" params)))
+Skips when `buffer-chars-modified-tick' hasn't advanced since the
+last sync.  Cursor toggles in/out of fragments don't change the tick,
+so tight C-n/C-p loops don't reship the buffer.  Forces a fresh send
+when the server process changed (e.g. after restart) — see
+`tip-ensure'."
+  (let ((tick (buffer-chars-modified-tick)))
+    (unless (eq tip--last-sync-tick tick)
+      (setq tip--last-sync-tick tick)
+      (let ((params
+             `(("uri" . ,(buffer-file-name))
+               ("content" . ,(save-restriction
+                               (widen)
+                               (buffer-substring-no-properties (point-min)
+                                                               (point-max)))))))
+        (when-let ((root (and (fboundp 'tip--resolve-project-root)
+                              (tip--resolve-project-root))))
+          (push (cons "project_root" root) params))
+        (tip--send-request "sync" params)))))
 
 (provide 'tip-server-proc)
 
