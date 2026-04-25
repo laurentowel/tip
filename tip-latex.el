@@ -27,6 +27,8 @@
 (defvar tip-transparent-bg)
 (defvar tip-server-executable)
 (defvar tip-project-root-path)
+(declare-function tip-latex-treesit-collect-fragments  "tip-latex-parse-treesit")
+(declare-function tip-latex-treesit-bounds-at-point    "tip-latex-parse-treesit")
 
 ;;; * customization
 
@@ -253,6 +255,32 @@ only whitespace between its delimiters.  Used to skip empty math like
         (push r outer)))
     (nreverse outer)))
 
+;;; * parser dispatcher
+
+(defcustom tip-latex-parser 'auto
+  "Which parser detects LaTeX math fragments.
+- `auto' (default): treesit when the latex grammar is installed,
+  regex otherwise.
+- `regex': legacy buffer-scan parser.  Always works.  Has an
+  intentional stale-cache window during active editing, which can
+  delay or skip fragment-detection on rapid C-e out of a fragment.
+- `treesit': require the alex-pinkus tree-sitter-latex grammar.
+  Synchronous, always-fresh; same parser texlab uses.  Install via
+  `M-x tip-latex-install-treesit-grammar'."
+  :type '(choice (const auto) (const regex) (const treesit))
+  :group 'tip)
+
+(defun tip-latex--effective-parser ()
+  "Resolve `tip-latex-parser' to either `regex' or `treesit'."
+  (pcase tip-latex-parser
+    ('regex 'regex)
+    ('treesit 'treesit)
+    (_ (if (and (require 'tip-latex-parse-treesit nil t)
+                (fboundp 'treesit-ready-p)
+                (treesit-ready-p 'latex t))
+           'treesit
+         'regex))))
+
 ;;; * fragment collection
 
 (defun tip-latex-collect-fragments (beg end &optional avoid-pos)
@@ -281,10 +309,14 @@ Full-buffer results are cached buffer-locally keyed on
 doesn't count) invalidates.  `avoid-pos' is applied AFTER the
 cache hit, so cursor-movement callers share one scan per buffer
 edit."
-  (let ((cached (tip-latex--fragments-cached beg end avoid-pos)))
-    (if cached
-        cached
-      (tip-latex--fragments-compute beg end avoid-pos))))
+  (if (eq (tip-latex--effective-parser) 'treesit)
+      (progn
+        (require 'tip-latex-parse-treesit)
+        (tip-latex-treesit-collect-fragments beg end avoid-pos))
+    (let ((cached (tip-latex--fragments-cached beg end avoid-pos)))
+      (if cached
+          cached
+        (tip-latex--fragments-compute beg end avoid-pos)))))
 
 (defvar-local tip-latex--fragments-cache nil
   "(TICK . FRAGMENTS) — buffer-wide fragment list from the most
@@ -410,16 +442,21 @@ block the current edit."
 Half-open: valid only when BEG <= POS < END.
 
 Multi-file projects are supported by the server-side graph walk."
-  (let* ((scan-beg (max (point-min) (- pos 4096)))
-         (scan-end (min (point-max) (+ pos 4096)))
-         (frags (tip-latex-collect-fragments scan-beg scan-end)))
-    (cl-some
-     (lambda (frag)
-       (let ((b (byte-to-position (1+ (alist-get "start" frag nil nil #'equal))))
-             (e (byte-to-position (1+ (alist-get "end"   frag nil nil #'equal)))))
-         (when (and (<= b pos) (< pos e))
-           (cons b e))))
-     frags)))
+  (cond
+   ((eq (tip-latex--effective-parser) 'treesit)
+    (require 'tip-latex-parse-treesit)
+    (tip-latex-treesit-bounds-at-point pos))
+   (t
+    (let* ((scan-beg (max (point-min) (- pos 4096)))
+           (scan-end (min (point-max) (+ pos 4096)))
+           (frags (tip-latex-collect-fragments scan-beg scan-end)))
+      (cl-some
+       (lambda (frag)
+         (let ((b (byte-to-position (1+ (alist-get "start" frag nil nil #'equal))))
+               (e (byte-to-position (1+ (alist-get "end"   frag nil nil #'equal)))))
+           (when (and (<= b pos) (< pos e))
+             (cons b e))))
+       frags)))))
 
 ;;; * multi-file detection
 
