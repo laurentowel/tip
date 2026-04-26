@@ -452,6 +452,89 @@ For `text-scale-adjust` (C-x C-+/-), no hook is needed — Emacs re-evaluates `(
 - **No DWIM (Do What I Mean)**: Avoid implicit automatic behavior that the user didn't ask for. Compilation only happens when the user triggers it (explicit commands, or preview-toggle on cursor leave which is a direct consequence of user movement). No background idle-timer auto-compilation, no guessing intent. Every action should be traceable to a user gesture. This keeps behavior predictable and debuggable.
 - **Performance-conscious hooks**: `tip-server-response-functions` hook runs after every server response. Keep handlers cheap — don't add timers or heavy processing here.
 
+## Pending Refactor: tip-core-typst code structure (April 2026)
+
+After landing the full-doc batch strategy + perf optimization (75×
+speedup, span index), the user requested a polish pass on
+`tip-server/crates/tip-core-typst/`.  Plan, in commit order:
+
+### Step 1 — Rename "full-doc" → "top-down"
+
+`top-down` describes the *strategy* (start from the laid-out
+document, descend into fragments) better than `full-doc` (which
+just describes the compile step).  Pairs naturally with `bottom-up`
+for synth (build each fragment from scratch).
+
+Renames:
+- File: `compiler.rs` → `bottom_up.rs`
+- File: `full_doc.rs` → `top_down.rs`
+- Struct: `FragmentCompiler` → `BottomUpCompiler`
+- Struct: `FullDocCompiler` → `TopDownCompiler`
+- Enum variant: `CompileStrategy::Synthetic` → `BottomUp`
+- Enum variant: `CompileStrategy::FullDoc` → `TopDown`
+- Env var values: accept `top-down`/`topdown`/`top_down`; keep
+  `full-doc` aliases for one release for backward compat.
+- Update all callers (`tip-server` crate dispatch, tests, comments).
+
+### Step 2 — Split `top_down.rs` into submodules
+
+Currently 1700+ lines (most are tests).  Move to:
+
+```
+top_down/
+  mod.rs        # public re-exports + TopDownCompiler::compile_all
+  flatten.rs    # FlatLeaf, GroupRecord, flatten_leaves, build_span_index
+  extract.rs    # extract_from_index, baseline picker, font-size picker, ItemBounds
+  tests.rs      # all #[test] functions + bench fixtures
+```
+
+No behavior change.  Just file moves.
+
+### Step 3 — Extract shared baseline/geometry helpers
+
+Currently `compiler.rs` (synth) has `find_ink_extent`,
+`find_baseline_depth`, `pick_baseline_y`, `find_group_baseline`;
+`full_doc.rs` has its own run-pass + Group-baseline picker.
+Both compute the same conceptual baseline.
+
+Create `baseline.rs` (or `geometry.rs`) module:
+- Shared `ItemBounds` struct.
+- Shared baseline picker with the priority ordering full-doc uses
+  (outermost Group → external → frag_max).
+- `find_ink_extent` shared with explicit y-flip handling.
+
+Migrate both strategies to use the shared module.  This
+**naturally fixes the synth math-axis bug** for nested towers
+(synth's `find_group_baseline` returns the math axis instead of
+the line baseline; the shared picker uses outermost-Group-with-
+in-range correctly).  No more divergence between the two.
+
+### Step 4 — Audit public API
+
+`top_down.rs` currently exposes test-only types: `LeafSpan`,
+`compile_real_document`, `extract_fragment_svg`,
+`collect_leaf_spans`, `fragment_items`.  Most aren't used outside
+`top_down`'s own tests.
+
+- Move test-only items behind `#[cfg(test)]` or to test modules.
+- Keep public surface minimal: `TopDownCompiler::compile_all` and
+  `CompileStrategy`.
+- `CompileStrategy::from_env` could move out of `lib.rs` to where
+  it's used (the dispatch in `typst_backend.rs`); leaves `lib.rs`
+  with just the shared vocabulary.
+
+### Acceptance
+
+- All 21 unit tests + 8 bench fixtures still pass.
+- The sweep test (synth-vs-full-doc agreement) still 0% height /
+  ≤2% width.
+- Heuristic count unchanged (still 0 — [H1]–[H4] eliminated stays).
+- Synth's baseline for the 7-level sub tower now matches full-doc
+  (a real correctness improvement falling out of step 3).
+
+Each step lands as its own commit so bisection works if anything
+regresses.
+
 ## Rust Learning Notes
 
 `/workspace/learn-rust/rust-basics.md` — the user is learning Rust by studying tip-server. When answering Rust questions, actively update this file with new concepts and add exercises (answers go in `/workspace/learn-rust/.answers/`).
