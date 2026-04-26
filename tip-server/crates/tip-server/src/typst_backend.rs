@@ -37,7 +37,25 @@ impl TypstBackend {
     pub fn handle_init(&mut self, params: InitParams) -> ResponseResult {
         let dirs: Vec<&str> = params.font_dirs.iter().map(|s| s.as_str()).collect();
         self.world = TipWorld::with_font_dirs(&dirs);
-        ResponseResult::Init { ok: true }
+        // Version handshake: compare client's reported version to the
+        // server's PROTOCOL_VERSION.  Mismatch is non-fatal — we still
+        // serve the request; the client decides whether to warn/refuse.
+        let mismatch = match params.client_version.as_deref() {
+            Some(v) if v != tip_protocol::messages::PROTOCOL_VERSION => format!(
+                "client speaks {} but server speaks {}",
+                v,
+                tip_protocol::messages::PROTOCOL_VERSION
+            ),
+            _ => String::new(),
+        };
+        if !mismatch.is_empty() {
+            eprintln!("tip-server: protocol version mismatch — {}", mismatch);
+        }
+        ResponseResult::Init {
+            ok: true,
+            server_version: tip_protocol::messages::PROTOCOL_VERSION.to_string(),
+            version_mismatch: mismatch,
+        }
     }
 
     pub fn handle_sync(&mut self, params: SyncParams) -> ResponseResult {
@@ -285,8 +303,52 @@ mod tests {
     #[test]
     fn init_returns_ok() {
         let mut b = TypstBackend::new();
-        let resp = b.handle_init(InitParams { font_dirs: vec![] });
-        assert_eq!(resp, ResponseResult::Init { ok: true });
+        let resp = b.handle_init(InitParams {
+            font_dirs: vec![],
+            client_version: None,
+        });
+        assert_eq!(
+            resp,
+            ResponseResult::Init {
+                ok: true,
+                server_version: tip_protocol::messages::PROTOCOL_VERSION.to_string(),
+                version_mismatch: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn init_matching_version_no_mismatch() {
+        let mut b = TypstBackend::new();
+        let resp = b.handle_init(InitParams {
+            font_dirs: vec![],
+            client_version: Some(tip_protocol::messages::PROTOCOL_VERSION.to_string()),
+        });
+        match resp {
+            ResponseResult::Init { ok, version_mismatch, .. } => {
+                assert!(ok);
+                assert!(version_mismatch.is_empty());
+            }
+            other => panic!("expected Init, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn init_mismatched_version_reports() {
+        let mut b = TypstBackend::new();
+        let resp = b.handle_init(InitParams {
+            font_dirs: vec![],
+            client_version: Some("9.99".into()),
+        });
+        match resp {
+            ResponseResult::Init { ok, version_mismatch, .. } => {
+                // Mismatch is non-fatal.
+                assert!(ok);
+                assert!(version_mismatch.contains("9.99"));
+                assert!(version_mismatch.contains(tip_protocol::messages::PROTOCOL_VERSION));
+            }
+            other => panic!("expected Init, got {:?}", other),
+        }
     }
 
     #[test]

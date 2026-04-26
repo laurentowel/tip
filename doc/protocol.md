@@ -49,6 +49,49 @@ source for field types and serde attributes is
 intent.  Keep them aligned: any wire-visible change in messages.rs
 needs a paragraph here.
 
+### Versioning
+
+The protocol carries an explicit version: `PROTOCOL_VERSION` on the
+Rust side (`messages.rs`), `tip-protocol-version` on the elisp side
+(`tip-server-proc.el`).  Format: `MAJOR.MINOR`.  Current value:
+**`0.1`**.
+
+Bump rules:
+
+- **Bump major** on a breaking change: removed field, renamed enum
+  variant, type change, removed method, semantics change a client
+  written for the old version would handle wrong.
+- **Bump minor** on an additive change a client can ignore: new
+  optional field with `#[serde(default)]`, new method, new optional
+  response variant.
+- **Don't bump** on doc-only edits, internal refactors that don't
+  cross the wire, test-only additions.
+
+The `init` request carries a `client_version` field; the `init`
+response echoes the server's version as `server_version` and
+records any mismatch in `version_mismatch`.  See [`init`](#init--initialize-server-state)
+for the wire shape.  Mismatch is **non-fatal** — both sides log a
+warning (`display-warning` on the elisp side, `eprintln!` on the
+Rust side) but the session proceeds.  Strict refusal is reserved
+for a 1.x bump where the protocol stabilizes.
+
+### Backend Dispatch
+
+Most requests carry a `backend` field selecting which subsystem
+handles them.  Values:
+
+| Wire string | Implementation                              |
+|-------------|---------------------------------------------|
+| `"typst"`   | tip-core-typst (default; omitted = typst)   |
+| `"latex"`   | tip-core-latex                              |
+| `"katex"`   | tip-core-katex (web/HTML targets)           |
+
+The client chooses the backend from the buffer's active major mode
+(`major-mode` → `tip-backend` struct → backend id), not from the URI
+extension — buffers may have nonstandard extensions or no file at
+all.  When `backend` is omitted on the wire, the server defaults to
+`typst` (matches `BackendId::default()`).
+
 ### URI Semantics
 
 The `uri` field on `sync` / `compile_fragments` / `compile_live` is
@@ -87,66 +130,178 @@ contract.
 
 ### Request Envelope
 
-Every request has an `id` and a `method`:
+Every request has an `id` and a `method`; methods that carry params
+have a `params` object:
 
 ```json
 {"id": 1, "method": "sync", "params": {...}}
 ```
 
-The `id` is a monotonically increasing integer. The response carries the same `id` so the client can match it to the pending callback.
+The `id` is a monotonically increasing integer. The response carries
+the same `id` so the client can match it to the pending callback.
+
+The full set of methods is enumerated by `Request` in `messages.rs`:
+
+| Method                 | Params type                  | Response `kind`      |
+|------------------------|------------------------------|----------------------|
+| `init`                 | `InitParams`                 | `init`               |
+| `sync`                 | `SyncParams`                 | `sync`               |
+| `compile_fragments`    | `CompileFragmentsParams`     | `fragments`          |
+| `compile_live`         | `CompileLiveParams`          | `live`               |
+| `debug_skeleton`       | `DebugSkeletonParams`        | `debug_skeleton`     |
+| `health_check`         | (none)                       | `health`             |
+| `list_project_files`   | `ListProjectFilesParams`     | `project_files`      |
+| `shutdown`             | (none)                       | `shutdown`           |
+
+Any method may also yield `{"kind": "error", "error": "..."}` on a
+server-side failure (deserialization error, panic boundary, missing
+backend).
+
+### `init` — Initialize Server State
+
+```json
+{"id": 0, "method": "init", "params": {
+  "font_dirs": ["/home/user/fonts", "/opt/math-fonts"],
+  "client_version": "0.1"
+}}
+```
+
+Response:
+
+```json
+{"id": 0, "result": {
+  "kind": "init",
+  "ok": true,
+  "server_version": "0.1",
+  "version_mismatch": ""
+}}
+```
+
+Sent once per session, before any other backend-touching method.
+
+`font_dirs` (optional, default `[]`): paths added to the Typst
+backend's `FontSearcher`, on top of the embedded font set and the
+system fonts already discovered.
+
+`client_version` (optional): wire-protocol version the client was
+built against — the elisp side reads `tip-protocol-version`, the
+Rust side reads `PROTOCOL_VERSION`.  Omitted = pre-handshake client.
+
+The response carries `server_version` (the server's
+`PROTOCOL_VERSION`) and `version_mismatch`.  When the client's
+version differs, `version_mismatch` is a human-readable summary like
+`"client speaks 9.99-bogus but server speaks 0.1"`; otherwise it's
+empty (and may be omitted from the wire by `skip_serializing_if`).
+Mismatch is non-fatal — see [Versioning](#versioning).
 
 ### `sync` — Send Buffer Content
 
 ```json
 {"id": 1, "method": "sync", "params": {
+  "backend": "typst",
   "uri": "/path/to/file.typ",
-  "content": "The full buffer content as a string"
+  "content": "The full buffer content as a string",
+  "project_root": "/path/to/project"
 }}
 ```
 
 Response: `{"id": 1, "result": {"kind": "sync", "ok": true}}`
 
-This must be sent before any `compile_fragments` request. The server:
-1. Stores the content in an in-memory document store
-2. Walks up from the file's directory to find the project root (`typst.toml`, `Kodama.toml`, `.git`)
-3. Sets the root on the `TipWorld` so relative imports resolve correctly
-4. Sets the main file's virtual path relative to root (critical for `#import "../..."`)
+Must precede any `compile_fragments` / `compile_live` /
+`debug_skeleton` request for the same `uri`.  The server:
 
-### `compile_fragments` — Compile Math Fragments
+1. Stores `content` in an in-memory document store keyed by `uri`.
+2. Resolves the project root: `project_root` if present (used as-is,
+   no walk); else walks up from the URI's parent directory looking
+   for `typst.toml`, `Kodama.toml`, `.git`.
+3. Sets the root on `TipWorld` so relative imports resolve.
+4. Sets the main file's virtual path relative to root (critical for
+   `#import "../..."`).
+
+`project_root` is optional and omitted from the wire when absent
+(`#[serde(skip_serializing_if = "Option::is_none")]`).  Used to
+honor a buffer-local `tip-project-root-path` override and (future)
+to anchor multi-file LaTeX projects.
+
+See [URI Semantics](#uri-semantics) above for `uri` rules.
+
+### `compile_fragments` — Batch Compile
 
 ```json
 {"id": 2, "method": "compile_fragments", "params": {
+  "backend": "typst",
   "uri": "/path/to/file.typ",
   "fragments": [
     {"start": 42, "end": 58},
     {"start": 100, "end": 115}
   ],
   "color": "#000000",
-  "preamble": "#show math.equation: set text(rgb(\"#000000\"))\n#set page(fill: rgb(\"#ffffff\"))\n",
-  "page_setup": null
+  "preamble": "#show math.equation: set text(rgb(\"#000000\"))\n",
+  "page_setup": null,
+  "display_math_width": null
 }}
 ```
 
-`start` and `end` are **0-indexed byte offsets** into the synced content. Not character positions — Emacs converts via `position-bytes`.
+Field reference:
+
+| Field                | Type                | Default | Notes                                                                                                |
+|----------------------|---------------------|---------|------------------------------------------------------------------------------------------------------|
+| `backend`            | string              | `typst` | See [Backend Dispatch](#backend-dispatch).                                                           |
+| `uri`                | string              | —       | Required.  See [URI Semantics](#uri-semantics).                                                      |
+| `fragments`          | array               | —       | Required.  Each `{start, end}` is a half-open byte range.                                            |
+| `color`              | string              | —       | Foreground color as `#RRGGBB`.  Used in the preamble and as a sentinel for `currentColor` rewriting. |
+| `preamble`           | string \| null      | null    | Backend-specific prelude injected before each fragment.  Typst docs above; LaTeX expects packages.   |
+| `page_setup`         | string \| null      | null    | Typst page-setup string.  When null the server uses a sensible default (margin 0.2em, fill none).    |
+| `display_math_width` | string \| null      | null    | LaTeX dimension string (`"20em"`, `"400pt"`).  LaTeX uses for display-math centering.  Typst ignores. |
+
+`start` / `end` are **0-indexed byte offsets** into the synced
+`content`.  Emacs converts via `position-bytes`.
 
 Response:
+
 ```json
 {"id": 2, "result": {"kind": "fragments", "fragments": [
-  {"start": 42, "end": 58, "svg": "<svg>...</svg>", "height_pt": 12.5, "depth_pt": 2.3, "error": null},
-  {"start": 100, "end": 115, "svg": "", "height_pt": 0.0, "depth_pt": 0.0, "error": "unknown variable: foo"}
+  {"start": 42, "end": 58, "svg": "<svg>...</svg>",
+   "height_pt": 12.5, "depth_pt": 2.3, "width_pt": 38.2,
+   "font_size_pt": 11.0,
+   "error": null, "error_detail": null},
+  {"start": 100, "end": 115, "svg": "",
+   "height_pt": 0.0, "depth_pt": 0.0, "width_pt": 0.0,
+   "font_size_pt": null,
+   "error": "unknown variable: foo",
+   "error_detail": {"severity": "error", "message": "unknown variable: foo",
+                    "detail": null, "line_in_fragment": null, "hint": "foo"}}
 ]}}
 ```
 
-Each fragment result includes:
-- `svg`: Inline SVG string (empty on error)
-- `height_pt`: Cropped SVG height in points (for Emacs display scaling)
-- `depth_pt`: Below-baseline depth in points (for ascent calculation)
-- `error`: Error message string, or null on success
+`FragmentResult` fields:
 
-### `compile_live` — Compile Single Fragment for Live Preview
+| Field           | Type                  | Notes                                                                                                                      |
+|-----------------|-----------------------|----------------------------------------------------------------------------------------------------------------------------|
+| `start`, `end`  | usize                 | Echo of the request's range.                                                                                               |
+| `svg`           | string                | Inline SVG.  Empty on error.                                                                                               |
+| `height_pt`     | f64                   | Cropped SVG height in points.  Used to scale the Emacs image height.                                                       |
+| `depth_pt`      | f64                   | Ink below the baseline in points.  Used for `:ascent` calculation.                                                         |
+| `width_pt`      | f64                   | Ink width in points (no margins).  Default 0 when omitted.                                                                 |
+| `font_size_pt`  | f64 \| null           | Base font size used by the backend.  Typst always reports 11.0.  LaTeX reports the document class's value.  Null when unknown. |
+| `error`         | string \| null        | One-line summary; mirrors `error_detail.message` when both are present.  Clients targeting the new structured form should prefer `error_detail`. |
+| `error_detail`  | `FragmentError` \| null | Structured error.  See below.                                                                                              |
+
+`FragmentError`:
+
+| Field               | Type                | Notes                                                                                          |
+|---------------------|---------------------|------------------------------------------------------------------------------------------------|
+| `severity`          | `"error"` \| `"warning"` | Required.                                                                                      |
+| `message`           | string              | Single-line human-readable summary.                                                            |
+| `detail`            | string \| null      | Multi-line context (LaTeX log surroundings, Typst error trace).                                |
+| `line_in_fragment`  | u32 \| null         | 0-based line offset within the fragment.  LaTeX-only today; Typst reports null.                |
+| `hint`              | string \| null      | Source text reported on the error line.  Useful for locating the exact range in the buffer.   |
+
+### `compile_live` — Single-Fragment Live Preview
 
 ```json
 {"id": 3, "method": "compile_live", "params": {
+  "backend": "typst",
   "uri": "/path/to/file.typ",
   "start": 42, "end": 58,
   "color": "#000000",
@@ -155,19 +310,103 @@ Each fragment result includes:
 }}
 ```
 
-Response: `{"id": 3, "result": {"kind": "live", "start": 42, "end": 58, "svg": "...", "height_pt": 12.5, "depth_pt": 2.3}}`
+Response: `{"id": 3, "result": {"kind": "live", ...flat FragmentResult fields}}`
 
-Same as `compile_fragments` but for a single fragment, used by the live preview childframe.
+`compile_live`'s response flattens `FragmentResult` into the
+top-level result object (no enclosing `fragment` key).  Contrast
+`compile_fragments`, where results are an array under `fragments`.
+Used by `tip-live-mode`'s 0.3 s idle compile and historically by
+the childframe preview.
+
+`compile_live` is a strict subset of `compile_fragments` with one
+range — there's no `display_math_width` because live preview always
+operates on whatever the cursor's currently inside.
+
+### `debug_skeleton` — Show the Compile Skeleton
+
+```json
+{"id": 4, "method": "debug_skeleton", "params": {
+  "backend": "typst",
+  "uri": "/path/to/file.typ",
+  "start": 42, "end": 58
+}}
+```
+
+Response: `{"id": 4, "result": {"kind": "debug_skeleton", "source": "...synthetic source..."}}`
+
+Returns the exact synthesized source the bottom-up compile strategy
+*would* feed to Typst for the fragment at `[start, end)`.  Used by
+`M-x tip-show-skeleton-at-point` for debugging scope-resolution
+issues — when a compile error mentions a name that isn't visible in
+the user's buffer, the skeleton shows what context the server saw.
+
+### `health_check` — Server Diagnostics
+
+```json
+{"id": 5, "method": "health_check"}
+```
+
+Response:
+
+```json
+{"id": 5, "result": {"kind": "health", "report": {
+  "server_version": "0.1.0",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "os": "linux", "arch": "x86_64",
+  "typst": {"ok": true, "typst_version": "0.14.2", "fonts_found": 142},
+  "latex": {"ok": true,
+            "latex":       {"found": true, "path": "/usr/bin/pdflatex", "version": "TeX Live 2024", "meets_min_version": true},
+            "dvisvgm":     {"found": true, "path": "/usr/bin/dvisvgm",  "version": "2.14.2",        "meets_min_version": true},
+            "preview_sty": {"found": true, "path": null,                "version": "12.3",          "meets_min_version": true}},
+  "warnings": []
+}}}
+```
+
+Diagnostic snapshot — server build info, per-backend probe results,
+non-fatal warnings (e.g., "dvisvgm 2.8 detected; 2.14+ recommended").
+Used by `M-x tip-server-info` and as the body of bug reports.
+
+A backend's probe is `null` when the backend isn't compiled in (not
+"detected absent" — actually missing from the binary).
+
+### `list_project_files` — Enumerate Project Files
+
+```json
+{"id": 6, "method": "list_project_files", "params": {
+  "backend": "latex",
+  "uri": "/path/to/main.tex"
+}}
+```
+
+Response:
+
+```json
+{"id": 6, "result": {"kind": "project_files",
+  "root": "/path/to",
+  "files": ["/path/to/main.tex", "/path/to/chapters/intro.tex", "/path/to/macros.tex"]
+}}
+```
+
+Backends that track a project graph (LaTeX's `TexProject`) return
+the connected component reachable via `\input` / `\include` from the
+queried URI.  Backends without a graph (Typst today) return just the
+URI itself; clients fall back to a root-marker walk locally.
+
+`files` is guaranteed non-empty (at minimum the queried URI).  All
+paths absolute; all sit under `root` so a client can preserve
+relative layout when packing into a tar (e.g. for Docker transport).
 
 ### `shutdown` — Graceful Shutdown
 
 ```json
-{"id": 4, "method": "shutdown"}
+{"id": 7, "method": "shutdown"}
 ```
 
-Response: `{"id": 4, "result": {"kind": "shutdown", "ok": true}}`
+Response: `{"id": 7, "result": {"kind": "shutdown", "ok": true}}`
 
-The server sets a flag and exits the main loop after sending the response.
+The server sets an exit flag and leaves the main loop after sending
+the response.  No new requests should be sent after `shutdown`; the
+process exits cleanly within ~1 ms.
 
 ## The Emacs Side
 

@@ -24,6 +24,42 @@
 (require 'cl-lib)
 (require 'tip-backend)
 
+(defconst tip-protocol-version "0.1"
+  "Wire-protocol version, mirrored on the Rust side as
+`PROTOCOL_VERSION' in tip-server/crates/tip-protocol/src/messages.rs.
+Bumped on any breaking change to a request/response shape, an enum
+variant rename, or a removed/renamed field.  Additive changes (new
+optional field, new method) keep the version stable.  Pre-1.0 the
+protocol is in flux and either component may bump on breaking
+changes.  See doc/protocol.md for the full spec.")
+
+(defun tip--handle-init-response (result)
+  "Handle the server's response to the `init' handshake.
+Surfaces a `protocol-version-mismatch' warning when the server's
+`server_version' doesn't match the elisp `tip-protocol-version'.
+Mismatch is non-fatal — the server still serves; the warning lets
+the user know they may see schema-shape errors until they upgrade."
+  (let* ((server-ver (alist-get 'server_version result))
+         (server-mismatch (alist-get 'version_mismatch result))
+         (client-ver tip-protocol-version))
+    (cond
+     ((and (stringp server-mismatch) (not (string-empty-p server-mismatch)))
+      (display-warning
+       'tip
+       (format "protocol version mismatch (server side): %s\nClient sent %S; server is on %S.  Some methods may behave unexpectedly until both are aligned."
+               server-mismatch client-ver server-ver)
+       :warning))
+     ((and (stringp server-ver)
+           (not (string-empty-p server-ver))
+           (not (string= server-ver client-ver)))
+      ;; Server didn't flag it (e.g. older server that doesn't echo
+      ;; version_mismatch) but the strings still differ.
+      (display-warning
+       'tip
+       (format "protocol version mismatch: client speaks %S, server speaks %S."
+               client-ver server-ver)
+       :warning)))))
+
 ;; Customs that live in tip.el — forward-declared so the byte-compiler
 ;; knows they'll exist at runtime.
 (defvar tip-enable-debug)
@@ -282,9 +318,15 @@ RUST_BACKTRACE is only consulted when the process actually panics."
             (with-current-buffer buf
               (when (local-variable-p 'tip--last-sync-tick)
                 (setq tip--last-sync-tick nil))))
+          ;; Init handshake: always send (even with empty font_dirs)
+          ;; so the server can compare protocol versions.  Mismatch
+          ;; comes back in `version_mismatch'; surface it as a warning.
           (let ((dirs (tip--resolve-font-dirs)))
-            (when dirs
-              (tip--send-request "init" `(("font_dirs" . ,(vconcat dirs)))))))
+            (tip--send-request
+             "init"
+             `(("font_dirs" . ,(vconcat (or dirs nil)))
+               ("client_version" . ,tip-protocol-version))
+             #'tip--handle-init-response)))
       (message "tip-server failed to start"))))
 
 (defun tip--server-stderr-tail (&optional n-lines)

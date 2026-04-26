@@ -141,6 +141,87 @@
     (sit-for 1)
     (should (not (process-live-p tip--server-process)))))
 
+(ert-deftest tip-test-protocol-version-handshake-match ()
+  "Init with the actual `tip-protocol-version' should report no mismatch."
+  (let* ((tip-server-executable
+          (expand-file-name
+           "tip-server/target/debug/tip-server"
+           (file-name-directory load-file-name)))
+         (tip-use-docker nil)
+         (tip--server-process nil)
+         (tip--request-id 0)
+         (tip--response-buffer "")
+         (tip--pending-callbacks (make-hash-table :test 'eql))
+         (response nil)
+         (got-response nil))
+    (unless (file-executable-p tip-server-executable)
+      (ert-skip "tip-server binary not built"))
+    (tip-ensure)
+    (tip--send-request
+     "init"
+     `(("font_dirs" . [])
+       ("client_version" . ,tip-protocol-version))
+     (lambda (result)
+       (setq response result)
+       (setq got-response t)))
+    (with-timeout (5 (error "timeout"))
+      (while (not got-response)
+        (accept-process-output tip--server-process 0.1)))
+    (should got-response)
+    (should (eq (alist-get 'ok response) t))
+    (should (string= (alist-get 'server_version response)
+                     tip-protocol-version))
+    ;; version_mismatch field is omitted when empty (skip_serializing_if).
+    (should (or (null (alist-get 'version_mismatch response))
+                (string-empty-p (alist-get 'version_mismatch response))))
+    (tip--send-request "shutdown" nil)
+    (sit-for 1)))
+
+(ert-deftest tip-test-protocol-version-handshake-mismatch ()
+  "Init with a fake client_version should come back with a non-empty
+`version_mismatch' field naming both sides."
+  (let* ((tip-server-executable
+          (expand-file-name
+           "tip-server/target/debug/tip-server"
+           (file-name-directory load-file-name)))
+         (tip-use-docker nil)
+         (tip--server-process nil)
+         (tip--request-id 0)
+         (tip--response-buffer "")
+         (tip--pending-callbacks (make-hash-table :test 'eql))
+         (response nil)
+         (got-response nil))
+    (unless (file-executable-p tip-server-executable)
+      (ert-skip "tip-server binary not built"))
+    (tip-ensure)
+    (tip--send-request
+     "init"
+     '(("font_dirs" . [])
+       ("client_version" . "9.99-bogus"))
+     (lambda (result)
+       (setq response result)
+       (setq got-response t)))
+    (with-timeout (5 (error "timeout"))
+      (while (not got-response)
+        (accept-process-output tip--server-process 0.1)))
+    (should got-response)
+    ;; Mismatch is non-fatal — the server still says ok.
+    (should (eq (alist-get 'ok response) t))
+    (let ((mismatch (alist-get 'version_mismatch response)))
+      (should (stringp mismatch))
+      (should (not (string-empty-p mismatch)))
+      (should (string-match-p "9.99-bogus" mismatch))
+      (should (string-match-p tip-protocol-version mismatch)))
+    ;; The elisp-side handler should produce a `display-warning' here.
+    ;; Capture by binding `display-warning' to a stub.
+    (let ((warned nil))
+      (cl-letf (((symbol-function 'display-warning)
+                 (lambda (_type _msg &rest _) (setq warned t))))
+        (tip--handle-init-response response))
+      (should warned))
+    (tip--send-request "shutdown" nil)
+    (sit-for 1)))
+
 ;;; * Overlay management
 
 (ert-deftest tip-test-clear-region-removes-tip-overlays ()

@@ -11,6 +11,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Wire-protocol version, mirrored on the elisp side as
+/// `tip-protocol-version` in `tip-server-proc.el`.  Bumped on any
+/// breaking change to a request/response shape, an enum variant
+/// rename, or a removed/renamed field.  Additive changes (new
+/// optional field with `#[serde(default)]`, new method) keep the
+/// version stable.  Format: `MAJOR.MINOR`.  Pre-1.0 the protocol
+/// is in flux and either component may bump on breaking changes.
+pub const PROTOCOL_VERSION: &str = "0.1";
+
 /// Which backend handles a request.  The client picks this from its
 /// buffer's active backend (derived from `major-mode`), not from the
 /// URI extension — buffers may have nonstandard extensions or no file
@@ -135,6 +144,12 @@ pub struct ListProjectFilesParams {
 pub struct InitParams {
     #[serde(default)]
     pub font_dirs: Vec<String>,
+    /// Wire-protocol version the client was built against.  Compared
+    /// against `PROTOCOL_VERSION` on the server to detect mismatches.
+    /// Optional for backward compat with pre-handshake clients;
+    /// omitted = "unknown, treat as a possible mismatch."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -215,7 +230,20 @@ pub struct RequestMessage {
 #[serde(tag = "kind")]
 pub enum ResponseResult {
     #[serde(rename = "init")]
-    Init { ok: bool },
+    Init {
+        ok: bool,
+        /// Server's wire-protocol version (the value of
+        /// `PROTOCOL_VERSION` at build time).  Clients compare this
+        /// to their own version and warn / refuse on mismatch.
+        #[serde(default)]
+        server_version: String,
+        /// Set when `init.client_version` and `PROTOCOL_VERSION`
+        /// disagree.  Lets clients surface the exact mismatch
+        /// without re-deriving it.  Empty when versions match or the
+        /// client didn't send `client_version`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        version_mismatch: String,
+    },
     #[serde(rename = "sync")]
     Sync { ok: bool },
     #[serde(rename = "fragments")]
@@ -318,6 +346,7 @@ mod tests {
             id: 1,
             request: Request::Init(InitParams {
                 font_dirs: vec!["/home/user/fonts".into(), "/opt/math-fonts".into()],
+                client_version: Some("0.1".into()),
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();
