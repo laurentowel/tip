@@ -199,6 +199,72 @@ mod tests {
         }
     }
 
+    /// Regression for the `hide()`-base / superscript case:
+    ///
+    ///   #let phantom(x) = hide($#x$)
+    ///   $phantom(a)^2$
+    ///
+    /// `hide()` removes the base glyph from the frame tree, but the
+    /// `^2` superscript stays at its real laid-out y-position relative
+    /// to the (invisible) base.  The synthetic-fragment compiler can't
+    /// see that — its page contains only `^2`, so cropping makes `^2`
+    /// look baseline-aligned on itself and the apparent ascent is
+    /// wrong.  Full-doc must keep the y-position so step 3 / 4 can
+    /// recover the right baseline from the surrounding page context.
+    #[test]
+    fn hidden_base_preserves_superscript_position() {
+        let mut world = TipWorld::new();
+        let src = "\
+#let phantom(x) = hide($#x$)
+$phantom(a)^2$ vs $a^2$
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let spans = collect_leaf_spans(&world, &doc);
+
+        let r_phantom = locate(src, "$phantom(a)^2$");
+        let r_plain = locate(src, "$a^2$");
+
+        let in_phantom = fragment_items(&spans, r_phantom.start, r_phantom.end);
+        let in_plain = fragment_items(&spans, r_plain.start, r_plain.end);
+
+        // Both fragments must yield at least one visible leaf — the
+        // superscript "2" — even though the phantom version's base is
+        // hidden.
+        assert!(
+            !in_phantom.is_empty(),
+            "phantom-base superscript fragment yielded no visible items"
+        );
+        assert!(!in_plain.is_empty());
+
+        // Sanity: the phantom version has FEWER visible glyphs than
+        // the plain `a^2` — the base `a` is hidden in the first.
+        assert!(
+            in_phantom.len() < in_plain.len(),
+            "expected phantom version (no visible base) to have fewer \
+             items than plain a^2; got {} vs {}",
+            in_phantom.len(),
+            in_plain.len()
+        );
+
+        // The y-positions of the surviving glyphs ARE roughly the same
+        // height in both fragments — the superscript sits at the same
+        // vertical offset whether or not the base is visible.  We
+        // measure the topmost y in each set; they should be within a
+        // small epsilon (the `^2` glyph in both cases).
+        let top_y = |items: &[&LeafSpan]| -> f64 {
+            items.iter().map(|s| s.pos_pt.1).fold(f64::INFINITY, f64::min)
+        };
+        let y_phantom = top_y(&in_phantom);
+        let y_plain = top_y(&in_plain);
+        assert!(
+            (y_phantom - y_plain).abs() < 1.0,
+            "superscript y drifted: phantom={:.3}pt plain={:.3}pt — \
+             full-doc baseline recovery in step 3/4 will need this",
+            y_phantom,
+            y_plain
+        );
+    }
+
     #[test]
     fn leaf_spans_skip_unrelated_text() {
         let mut world = TipWorld::new();
