@@ -64,6 +64,14 @@ The source buffer is forced read-only while the edit is active so
 the user can't desync the two views by typing into the source.
 Restored on commit/abort.")
 
+(defvar-local tip-edit-indirect--virtual-uri nil
+  "URI used for sync/compile during this edit session.
+A `tip-edit-virtual://' scheme keeps the spliced compile separate
+from the source buffer's own document cache on the server, so
+`tip-mode' in the source can still resync its real content without
+clobbering ours.  Project root is sent separately via
+`project_root' so imports keep resolving against the source's tree.")
+
 (defvar tip-edit-indirect--saved-window-config nil
   "Window configuration captured on entry, restored on commit/abort.
 Single global slot — entering a second `tip-edit-indirect' while the
@@ -159,7 +167,8 @@ real project root."
       (when (boundp 'tip-live--content-cache)
         (setq tip-live--content-cache new-text))
       (let ((beg (overlay-start ov))
-            (end (overlay-end ov)))
+            (end (overlay-end ov))
+            (vuri tip-edit-indirect--virtual-uri))
         (with-current-buffer src-buf
           (tip-ensure)
           (let* ((full-text (buffer-substring-no-properties (point-min) (point-max)))
@@ -169,14 +178,14 @@ real project root."
                  (fg (tip--color-to-hex (face-attribute 'default :foreground)))
                  (byte-start (string-bytes before))
                  (byte-end (+ byte-start (string-bytes new-text))))
-            (let ((sync-params `(("uri" . ,(tip--current-uri))
+            (let ((sync-params `(("uri" . ,vuri)
                                  ("content" . ,spliced))))
               (when-let ((root (tip--resolve-project-root)))
                 (push (cons "project_root" root) sync-params))
               (tip--send-request "sync" sync-params))
             (tip--send-request
              "compile_fragments"
-             `(("uri" . ,(tip--current-uri))
+             `(("uri" . ,vuri)
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                           ("end" . ,byte-end))))
                ("color" . ,fg)
@@ -340,6 +349,10 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
                     (secure-hash 'sha256 raw-text))
         (setq-local tip-edit-indirect--source-prev-read-only
                     (buffer-local-value 'buffer-read-only src-buf))
+        (setq-local tip-edit-indirect--virtual-uri
+                    (concat "tip-edit-virtual://"
+                            (or (buffer-local-value 'buffer-file-name src-buf)
+                                (buffer-name src-buf))))
         (setq-local tip-edit-indirect--preview-timer
                     (run-with-idle-timer
                      0.3 t

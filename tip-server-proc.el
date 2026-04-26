@@ -414,19 +414,14 @@ runs with the EDITED buffer current.")
 
 (defun tip--current-uri ()
   "Return a non-nil URI string for the current buffer.
-The wire protocol's `uri' field is a required `String' on the Rust
-side; sending nil for an unsaved buffer JSON-encodes to null and
-causes the server to exit on a deserialization error.  Fall back to
-a synthetic path under /tmp/tip-unsaved/ so the request still
-deserializes and the server can do something reasonable.  The synth
-URI won't match any real project root, but project-root discovery
-already tolerates that (no markers found, fallback to the URI's
-parent dir)."
-  (or buffer-file-name
-      (concat "/tmp/tip-unsaved/"
-              (replace-regexp-in-string "[^A-Za-z0-9._-]" "_"
-                                        (buffer-name))
-              ".typ")))
+The wire protocol's `uri' field is `String' on the Rust side; sending
+nil JSON-encodes to null and crashes the deserializer.  Returns
+`buffer-file-name' when the buffer has one, else the empty string —
+the server treats \"\" as \"no real URI\" (no project-root walk, no
+document persistence under a meaningful key).  Callers that need a
+distinct virtual URI (e.g. `tip-edit-indirect' splicing into source
+content) construct their own."
+  (or buffer-file-name ""))
 
 (defun tip--sync-buffer ()
   "Sync current buffer content to tip-server.
