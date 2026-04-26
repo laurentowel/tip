@@ -404,6 +404,14 @@ Compared in `tip--sync-buffer' to skip redundant whole-buffer sends
 when nothing has changed.  Reset to nil when the server restarts or
 the cache is cleared (see `tip-cache-clear-on-server-restart').")
 
+(defvar tip-pre-sync-functions nil
+  "Hook run before `tip--sync-buffer' sends.
+Backends register here to ship companion buffers (e.g. tip-latex
+syncs the project root buffer when the user is editing a child
+file, so a `\\newcommand' edit in the parent reaches the server
+before the child's compile fires).  Functions take no args; each
+runs with the EDITED buffer current.")
+
 (defun tip--sync-buffer ()
   "Sync current buffer content to tip-server.
 Skips when `buffer-chars-modified-tick' hasn't advanced since the
@@ -411,6 +419,7 @@ last sync.  Cursor toggles in/out of fragments don't change the tick,
 so tight C-n/C-p loops don't reship the buffer.  Forces a fresh send
 when the server process changed (e.g. after restart) — see
 `tip-ensure'."
+  (run-hooks 'tip-pre-sync-functions)
   (let ((tick (buffer-chars-modified-tick)))
     (unless (eq tip--last-sync-tick tick)
       (setq tip--last-sync-tick tick)

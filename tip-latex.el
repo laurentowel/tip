@@ -114,6 +114,45 @@ incremental); no separate rescan needed here."
 
 (add-hook 'after-change-functions #'tip-latex--on-change)
 
+(declare-function tip--sync-buffer "tip-server-proc")
+
+(defvar tip-latex--syncing-root nil
+  "Re-entry guard for `tip-latex--sync-project-root-buffer'.")
+
+(defun tip-latex--sync-project-root-buffer ()
+  "Push the project ROOT buffer's CURRENT state to the server.
+No-op when:
+- the active backend isn't latex,
+- there's no `tip-project-root-path' (single-file edit),
+- this buffer IS the root,
+- the root file isn't currently visited in any Emacs buffer.
+
+Otherwise we run `tip--sync-buffer' inside the root buffer, which
+itself bails when the root's `buffer-chars-modified-tick' hasn't
+advanced — so the cost is one buffer lookup per compile when the
+root is unchanged.
+
+Hooked from `tip-pre-sync-functions' so it fires before every
+compile request from a child file: a `\\newcommand' edit in the
+parent reaches the server before the child's `compile_fragments'
+fires.  Same handling covers `\\input', `\\include', `\\subimport'
+(all share the parent preamble per LaTeX semantics)."
+  (when-let* (((not tip-latex--syncing-root))
+              (b (and (fboundp 'tip-active-backend) (tip-active-backend)))
+              ((eq (tip-backend-name b) 'latex))
+              (root (and (boundp 'tip-project-root-path) tip-project-root-path))
+              (root-canon (expand-file-name root))
+              ;; Skip if this IS the root buffer.
+              ((not (and buffer-file-name
+                         (string= (expand-file-name buffer-file-name) root-canon))))
+              (root-buf (find-buffer-visiting root-canon)))
+    (let ((tip-latex--syncing-root t))
+      (with-current-buffer root-buf
+        (when (fboundp 'tip--sync-buffer)
+          (tip--sync-buffer))))))
+
+(add-hook 'tip-pre-sync-functions #'tip-latex--sync-project-root-buffer)
+
 ;;; * preamble extraction
 
 (defun tip-latex--preamble-end ()
