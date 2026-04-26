@@ -62,7 +62,8 @@ Strategy: get everything working and tested with JSON-RPC over stdio first, then
 
 **Key types**:
 - `TipWorld` (tip-core-typst/src/world.rs): implements `typst::World` with in-memory sources, embedded+system fonts, custom font dirs, package resolution
-- `FragmentCompiler` (tip-core-typst/src/compiler.rs): builds fragment source, compiles to SVG, measures baseline, crops SVG
+- `BottomUpCompiler` (tip-core-typst/src/bottom_up.rs): builds fragment source, compiles to SVG, measures baseline, crops SVG
+- `TopDownCompiler` (tip-core-typst/src/top_down.rs): compiles the real document once, walks the frame tree to extract per-fragment SVGs
 - `Handler` (tip-server/src/handler.rs): dispatches protocol messages by `BackendId` field to TypstBackend or LatexBackend; sets project root from URI
 - Protocol messages defined in tip-protocol/src/messages.rs
 

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::document::DocumentStore;
-use tip_core_typst::full_doc::FullDocCompiler;
+use tip_core_typst::top_down::TopDownCompiler;
 use tip_core_typst::world::TipWorld;
 use tip_core_typst::CompileStrategy;
 use tip_protocol::messages::*;
@@ -84,9 +84,9 @@ impl TypstBackend {
         // fragment doesn't poison the rest.  The user briefly loses
         // full-doc niceties (paragraph-context font size, external
         // baseline) until the document parses again.
-        if matches!(self.strategy, CompileStrategy::FullDoc) {
+        if matches!(self.strategy, CompileStrategy::TopDown) {
             if let Ok(results) =
-                FullDocCompiler::compile_all(&mut self.world, &content, &params.fragments)
+                TopDownCompiler::compile_all(&mut self.world, &content, &params.fragments)
             {
                 return ResponseResult::Fragments { fragments: results };
             }
@@ -109,7 +109,7 @@ impl TypstBackend {
                 continue;
             }
 
-            match FragmentCompiler::compile_fragment_scoped(
+            match BottomUpCompiler::compile_fragment_scoped(
                 &mut self.world,
                 &content,
                 frag_loc.start,
@@ -178,7 +178,7 @@ impl TypstBackend {
         // consistency between live and batch matters less than not
         // freezing the editor.
 
-        match FragmentCompiler::compile_fragment_scoped(
+        match BottomUpCompiler::compile_fragment_scoped(
             &mut self.world,
             &content,
             params.start,
@@ -232,7 +232,7 @@ impl TypstBackend {
                 error: format!("document not synced: {}", params.uri),
             },
         };
-        match FragmentCompiler::debug_scoped_source(&content, params.start, params.end) {
+        match BottomUpCompiler::debug_scoped_source(&content, params.start, params.end) {
             Ok(source) => ResponseResult::DebugSkeleton { source },
             Err(err) => ResponseResult::Error { error: err },
         }

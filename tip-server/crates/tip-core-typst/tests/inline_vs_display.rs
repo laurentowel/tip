@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -30,7 +30,7 @@ fn style_inline_sum() {
     let doc = "Text $sum_(i=0)^n i$ more text";
     let needle = "$sum_(i=0)^n i$";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_inline_sum", &out.svg);
@@ -43,7 +43,7 @@ fn style_display_sum() {
     let doc = "Text\n$ sum_(i=0)^n i $\nmore text";
     let needle = "$ sum_(i=0)^n i $";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_display_sum", &out.svg);
@@ -56,7 +56,7 @@ fn style_inline_frac() {
     let doc = "Text $frac(a,b)$ more";
     let needle = "$frac(a,b)$";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_inline_frac", &out.svg);
@@ -69,7 +69,7 @@ fn style_display_frac() {
     let doc = "Text\n$ frac(a,b) $\nmore";
     let needle = "$ frac(a,b) $";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_display_frac", &out.svg);
@@ -82,7 +82,7 @@ fn style_inline_integral() {
     let doc = "Text $integral_0^1 f(x) dif x$ more";
     let needle = "$integral_0^1 f(x) dif x$";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_inline_integral", &out.svg);
@@ -95,7 +95,7 @@ fn style_display_integral() {
     let doc = "Text\n$ integral_0^1 f(x) dif x $\nmore";
     let needle = "$ integral_0^1 f(x) dif x $";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_display_integral", &out.svg);
@@ -108,7 +108,7 @@ fn style_inline_product() {
     let doc = "Text $product_(k=1)^n k$ more";
     let needle = "$product_(k=1)^n k$";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_inline_product", &out.svg);
@@ -121,7 +121,7 @@ fn style_display_product() {
     let doc = "Text\n$ product_(k=1)^n k $\nmore";
     let needle = "$ product_(k=1)^n k $";
     let start = doc.find(needle).unwrap();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         &mut world, doc, start, start + needle.len(), "#000000", None, None,
     ).unwrap();
     write_svg("style_display_product", &out.svg);

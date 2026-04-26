@@ -40,9 +40,9 @@ pub struct FragmentOutput {
 }
 
 /// Compiles math fragments from a Typst document to SVG.
-pub struct FragmentCompiler;
+pub struct BottomUpCompiler;
 
-impl FragmentCompiler {
+impl BottomUpCompiler {
     /// Compile a single math fragment with explicit preamble (simple API).
     pub fn compile_fragment(
         world: &mut TipWorld,
@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn compile_simple_inline() {
         let mut world = TipWorld::new();
-        let output = FragmentCompiler::compile_fragment(
+        let output = BottomUpCompiler::compile_fragment(
             &mut world, "$a + b$", "#000000", "",
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn compile_block_math() {
         let mut world = TipWorld::new();
-        let output = FragmentCompiler::compile_fragment(
+        let output = BottomUpCompiler::compile_fragment(
             &mut world, "$ sum_(i=0)^n i^2 $", "#000000", "",
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -722,7 +722,7 @@ mod tests {
     #[test]
     fn compile_with_preamble() {
         let mut world = TipWorld::new();
-        let output = FragmentCompiler::compile_fragment(
+        let output = BottomUpCompiler::compile_fragment(
             &mut world, "$cl$", "#000000", "#let cl = math.cal(\"L\")\n",
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn compile_invalid_returns_error() {
         let mut world = TipWorld::new();
-        let result = FragmentCompiler::compile_fragment(
+        let result = BottomUpCompiler::compile_fragment(
             &mut world, "$#nonexistent_function()$", "#000000", "",
         );
         assert!(result.is_err());
@@ -794,7 +794,7 @@ mod tests {
         let doc = "#let foo = \"bar\"\nSome text $foo$";
         let frag_start = doc.find("$foo$").unwrap();
         let frag_end = frag_start + "$foo$".len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -806,7 +806,7 @@ mod tests {
         let doc = "#{\n  let x = 42\n  $x$\n}";
         let frag_start = doc.find("$x$").unwrap();
         let frag_end = frag_start + "$x$".len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -818,7 +818,7 @@ mod tests {
         let doc = "#show math.equation: set text(fill: red)\n$a + b$";
         let frag_start = doc.find("$a + b$").unwrap();
         let frag_end = frag_start + "$a + b$".len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
@@ -837,7 +837,7 @@ mod tests {
     #[test]
     fn scoped_compile_invalid_range() {
         let mut world = TipWorld::new();
-        assert!(FragmentCompiler::compile_fragment_scoped(
+        assert!(BottomUpCompiler::compile_fragment_scoped(
             &mut world, "$a$", 0, 999, "#000000", None, None,
         ).is_err());
     }
@@ -851,7 +851,7 @@ mod tests {
         let needle = "$a + b$";
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None,
         ).expect("math in #list should compile");
         assert!(output.svg.contains("<svg"));
@@ -864,7 +864,7 @@ mod tests {
         let needle = "$alpha + beta$";
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None,
         ).expect("math in nested funcall should compile");
         assert!(output.svg.contains("<svg"));
@@ -877,7 +877,7 @@ mod tests {
         let needle = "$cal(L)(mu,pi) = -log lambda(mu,pi)$";
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None,
         ).expect("math in multi-arg list should compile");
         assert!(output.svg.contains("<svg"));
@@ -890,7 +890,7 @@ mod tests {
         let needle = "$b$";
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
-        let output = FragmentCompiler::compile_fragment_scoped(
+        let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None,
         ).expect("math in #enum should compile");
         assert!(output.svg.contains("<svg"));

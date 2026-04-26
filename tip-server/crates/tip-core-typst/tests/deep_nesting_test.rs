@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn fixtures_dir() -> String {
@@ -54,7 +54,7 @@ fn deep_nesting_all_fragments_compile() {
             content.to_string()
         };
 
-        match FragmentCompiler::compile_fragment_scoped(
+        match BottomUpCompiler::compile_fragment_scoped(
             &mut world, &doc, *start, *end, "#000000", None, None,
         ) {
             Ok(output) => {

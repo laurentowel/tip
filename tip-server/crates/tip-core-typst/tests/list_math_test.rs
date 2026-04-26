@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn fixtures_dir() -> String {
@@ -50,7 +50,7 @@ fn list_math_fragments_compile_cleanly() {
     let mut bad = 0;
     for (idx, (start, end)) in frags.iter().enumerate() {
         let content = &doc[*start..*end];
-        match FragmentCompiler::compile_fragment_scoped(
+        match BottomUpCompiler::compile_fragment_scoped(
             &mut world, &doc, *start, *end, "#000000", None, None,
         ) {
             Ok(output) => {

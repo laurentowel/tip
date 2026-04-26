@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 #[test]
@@ -10,7 +10,7 @@ fn dump_frame_structures() {
         ("a_b", "$a_b$"),
         ("frac", "$frac(a,b)$"),
     ] {
-        let out = FragmentCompiler::compile_fragment(
+        let out = BottomUpCompiler::compile_fragment(
             &mut world, content, "#000000", "",
         ).unwrap();
         eprintln!("{label:5}: h={:.2}pt d={:.2}pt ascent={:.0}%",

@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -40,7 +40,7 @@ fn compile_all_fragments(doc: &str, world: &mut TipWorld) -> (usize, usize) {
     let total = frags.len();
     let mut ok = 0;
     for (idx, (start, end)) in frags.iter().enumerate() {
-        match FragmentCompiler::compile_fragment_scoped(
+        match BottomUpCompiler::compile_fragment_scoped(
             world, doc, *start, *end, "#000000", None, None,
         ) {
             Ok(output) => {

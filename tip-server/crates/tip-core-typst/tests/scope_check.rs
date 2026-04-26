@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -14,7 +14,7 @@ fn write_svg(name: &str, svg: &str) {
 fn compile_scoped(world: &mut TipWorld, doc: &str, needle: &str, name: &str) {
     let frag_start = doc.find(needle).expect("fragment not found in doc");
     let frag_end = frag_start + needle.len();
-    let out = FragmentCompiler::compile_fragment_scoped(
+    let out = BottomUpCompiler::compile_fragment_scoped(
         world, doc, frag_start, frag_end, "#000000", None, None,
     )
     .expect(&format!("{name} should compile"));

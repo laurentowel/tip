@@ -6,7 +6,7 @@
 //! the 0.12 blog post advertises) for free, because all fragments
 //! share the same `compile()` call and the same comemo cache.
 //!
-//! Contrast: today's `FragmentCompiler::compile_fragment_scoped` builds
+//! Contrast: today's `BottomUpCompiler::compile_fragment_scoped` builds
 //! `N` synthetic single-page documents (skeleton + fragment) and runs
 //! `compile()` `N` times — `N` cache misses, no shared layout work.
 //! See `doc/full-document-approach.md` and the post-mortem on the
@@ -35,9 +35,9 @@ use typst_svg::svg_frame;
 use crate::world::TipWorld;
 use tip_protocol::messages::{FragmentLocation, FragmentResult};
 
-pub struct FullDocCompiler;
+pub struct TopDownCompiler;
 
-impl FullDocCompiler {
+impl TopDownCompiler {
     /// Compile every fragment in `fragments` from a single full-document
     /// compile of `content`.  Returns `Err` on document-level compile
     /// failure (the synthetic path is the safety net — it produces
@@ -1465,7 +1465,7 @@ $x + y$ default size
     #[test]
     #[ignore = "perf bench, run with --ignored"]
     fn bench_synth() {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         use std::time::Instant;
         let (src, fragments) = build_5kloc_corpus();
         let n_lines = src.lines().count();
@@ -1480,7 +1480,7 @@ $x + y$ default size
         let t0 = Instant::now();
         let mut hits = 0;
         for r in &fragments {
-            if FragmentCompiler::compile_fragment_scoped(
+            if BottomUpCompiler::compile_fragment_scoped(
                 &mut world,
                 &src,
                 r.start,
@@ -1708,7 +1708,7 @@ $x + y$ default size
         );
         let mut world = TipWorld::new();
         let t0 = Instant::now();
-        let res = FullDocCompiler::compile_all(&mut world, &src, &frag_locs).unwrap();
+        let res = TopDownCompiler::compile_all(&mut world, &src, &frag_locs).unwrap();
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let hits = res.iter().filter(|r| r.error.is_none() && !r.svg.is_empty()).count();
         eprintln!(
@@ -1729,7 +1729,7 @@ $x + y$ default size
         prefix: &str,
         typed: &str,
     ) -> (Vec<f64>, Vec<f64>, usize, usize) {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         use std::time::Instant;
         let frag_start = prefix.len();
 
@@ -1761,7 +1761,7 @@ $x + y$ default size
                 buf.push(ch);
                 let frag_end = buf.len();
                 let t0 = Instant::now();
-                let r = FragmentCompiler::compile_fragment_scoped(
+                let r = BottomUpCompiler::compile_fragment_scoped(
                     &mut world, &buf, frag_start, frag_end,
                     tip_protocol::svg_color::STANDIN_HEX, None, None,
                 );
@@ -1818,7 +1818,7 @@ $x + y$ default size
         eprintln!("=== edit middle (pos {}/{} bytes) ===", mid, src.len());
         // measure_keystrokes appends typed to prefix, but here we want
         // typed inserted before suffix.  Build buf = prefix + typed_so_far + suffix.
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         use std::time::Instant;
 
         let mut full_lat = Vec::new();
@@ -1849,7 +1849,7 @@ $x + y$ default size
                 let frag_start = mid;
                 let frag_end = mid + typed_so_far.len();
                 let t0 = Instant::now();
-                let r = FragmentCompiler::compile_fragment_scoped(
+                let r = BottomUpCompiler::compile_fragment_scoped(
                     &mut world, &buf, frag_start, frag_end,
                     tip_protocol::svg_color::STANDIN_HEX, None, None,
                 );
@@ -1946,7 +1946,7 @@ $x + y$ default size
 
         eprintln!("=== SYNTH keystroke timing ===");
         {
-            use crate::compiler::FragmentCompiler;
+            use crate::bottom_up::BottomUpCompiler;
             let mut world = TipWorld::new();
             let mut buf = src.clone();
             let mut total_ms = 0.0;
@@ -1958,7 +1958,7 @@ $x + y$ default size
                 let s = src.len();
                 let frag_end = buf.len();
                 let t0 = Instant::now();
-                let r = FragmentCompiler::compile_fragment_scoped(
+                let r = BottomUpCompiler::compile_fragment_scoped(
                     &mut world,
                     &buf,
                     s,
@@ -1987,11 +1987,11 @@ $x + y$ default size
     #[test]
     #[ignore = "audit, run with --ignored"]
     fn audit_synth_sub_tower_baseline() {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         let mut world = TipWorld::new();
         let src = "Body $a_(a_(a_(a_(a_(a_(a_a))))))$ end\n";
         let r = locate(src, "$a_(a_(a_(a_(a_(a_(a_a))))))$");
-        let s = FragmentCompiler::compile_fragment_scoped(
+        let s = BottomUpCompiler::compile_fragment_scoped(
             &mut world,
             src,
             r.start,
@@ -2009,7 +2009,7 @@ $x + y$ default size
             (s.height_pt - s.depth_pt) / s.height_pt * 100.0,
         );
         // Walk synth's compiled doc to enumerate Groups + baselines.
-        let synth_src = crate::compiler::FragmentCompiler::debug_scoped_source(
+        let synth_src = crate::bottom_up::BottomUpCompiler::debug_scoped_source(
             src, r.start, r.end,
         )
         .unwrap();
@@ -2039,7 +2039,7 @@ $x + y$ default size
     #[test]
     #[ignore = "diagnostic only"]
     fn diag_phantom_baseline() {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         let mut world = TipWorld::new();
         let src = "\
 #let phantom(x) = hide($#x$)
@@ -2050,7 +2050,7 @@ text $phantom(a)^2$ and $a^2$ done
             let r = locate(src, anchor);
             // Synth metrics
             let mut wsynth = TipWorld::new();
-            let s = FragmentCompiler::compile_fragment_scoped(
+            let s = BottomUpCompiler::compile_fragment_scoped(
                 &mut wsynth, src, r.start, r.end,
                 tip_protocol::svg_color::STANDIN_HEX, None, None,
             ).unwrap();
@@ -2169,14 +2169,14 @@ text $phantom(a)^2$ and $a^2$ done
     #[test]
     #[ignore = "diagnostic only, run with --ignored"]
     fn diag_depth_for_inline() {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         let mut w_full = TipWorld::new();
         let mut w_syn = TipWorld::new();
         let src = "Default 11pt: $a + b = c$ and rest.\n";
         let doc = compile_real_document(&mut w_full, src).expect("compile");
         let r = locate(src, "$a + b = c$");
         let f = extract_fragment_svg(&w_full, &doc, r.start, r.end).unwrap();
-        let s = FragmentCompiler::compile_fragment_scoped(
+        let s = BottomUpCompiler::compile_fragment_scoped(
             &mut w_syn,
             src,
             r.start,
@@ -2211,7 +2211,7 @@ text $phantom(a)^2$ and $a^2$ done
 
     #[test]
     fn synthetic_and_full_doc_agree_on_default_size() {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
 
         let mut w_full = TipWorld::new();
         let mut w_syn = TipWorld::new();
@@ -2219,7 +2219,7 @@ text $phantom(a)^2$ and $a^2$ done
         let doc = compile_real_document(&mut w_full, src).expect("compile");
         let r = locate(src, "$x + y$");
         let full = extract_fragment_svg(&w_full, &doc, r.start, r.end).unwrap();
-        let syn = FragmentCompiler::compile_fragment_scoped(
+        let syn = BottomUpCompiler::compile_fragment_scoped(
             &mut w_syn,
             src,
             r.start,
@@ -2579,11 +2579,11 @@ text $frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, x)))))))$ done
         frag_end: usize,
         body_pt: f64,
     ) -> (f64, f64, f64) {
-        use crate::compiler::FragmentCompiler;
+        use crate::bottom_up::BottomUpCompiler;
         let page_setup = format!(
             "#show math.equation: set text(size: {body_pt}pt)\n#set page(width: auto, height: auto, margin: 20pt, header: none, footer: none)\n"
         );
-        let out = FragmentCompiler::compile_fragment_scoped(
+        let out = BottomUpCompiler::compile_fragment_scoped(
             world,
             src,
             frag_start,

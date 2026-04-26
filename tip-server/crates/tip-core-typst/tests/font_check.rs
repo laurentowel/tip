@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -14,7 +14,7 @@ fn write_svg(name: &str, svg: &str) {
 #[test]
 fn visual_default_math_font() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world,
         "$a + b = c$",
         "#000000",
@@ -38,7 +38,7 @@ fn visual_pennstander_math() {
         "#set text(font: \"Pennstander\")\n",
     );
 
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world,
         "$a + b = c$",
         "#000000",
@@ -62,7 +62,7 @@ fn visual_pennstander_block() {
         "#set text(font: \"Pennstander\")\n",
     );
 
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world,
         "$ sum_(i=0)^n i^2 = frac(n(n+1)(2n+1), 6) $",
         "#000000",
@@ -86,7 +86,7 @@ fn visual_pennstander_integral() {
         "#set text(font: \"Pennstander\")\n",
     );
 
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world,
         "$integral_0^infinity e^(-x^2) dif x = frac(sqrt(pi), 2)$",
         "#2244aa",

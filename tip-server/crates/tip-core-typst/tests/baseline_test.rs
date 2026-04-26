@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -25,7 +25,7 @@ fn write_svg(name: &str, svg: &str) {
 #[test]
 fn baseline_simple() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
     write_svg("bl_simple", &out.svg);
     eprintln!("simple: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -40,7 +40,7 @@ fn baseline_simple() {
 #[test]
 fn baseline_fraction() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
     write_svg("bl_fraction", &out.svg);
     eprintln!("fraction: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -51,7 +51,7 @@ fn baseline_fraction() {
 #[test]
 fn baseline_integral() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$integral_0^1 f(x) dif x$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$integral_0^1 f(x) dif x$", "#000000", "").unwrap();
     write_svg("bl_integral", &out.svg);
     eprintln!("integral: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -62,7 +62,7 @@ fn baseline_integral() {
 #[test]
 fn baseline_superscript() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$x^2$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$x^2$", "#000000", "").unwrap();
     write_svg("bl_superscript", &out.svg);
     eprintln!("superscript: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -74,7 +74,7 @@ fn baseline_superscript() {
 #[test]
 fn baseline_subscript() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$x_i$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$x_i$", "#000000", "").unwrap();
     write_svg("bl_subscript", &out.svg);
     eprintln!("subscript: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -88,9 +88,9 @@ fn baseline_accent() {
     // character at the math baseline and the accent glyph above it.
     // The heuristic must pick the base (larger y), not the accent.
     let mut world = TipWorld::new();
-    let simple = FragmentCompiler::compile_fragment(&mut world, "$G$", "#000000", "").unwrap();
-    let hat = FragmentCompiler::compile_fragment(&mut world, "$hat(G)$", "#000000", "").unwrap();
-    let tilde = FragmentCompiler::compile_fragment(&mut world, "$tilde(G)$", "#000000", "").unwrap();
+    let simple = BottomUpCompiler::compile_fragment(&mut world, "$G$", "#000000", "").unwrap();
+    let hat = BottomUpCompiler::compile_fragment(&mut world, "$hat(G)$", "#000000", "").unwrap();
+    let tilde = BottomUpCompiler::compile_fragment(&mut world, "$tilde(G)$", "#000000", "").unwrap();
     assert!(hat.depth_pt < simple.depth_pt + 2.0,
             "hat depth ({:.2}) should match G's descender ({:.2})",
             hat.depth_pt, simple.depth_pt);
@@ -102,7 +102,7 @@ fn baseline_accent() {
 #[test]
 fn baseline_matrix() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(&mut world, "$mat(1, 0; 0, 1)$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$mat(1, 0; 0, 1)$", "#000000", "").unwrap();
     write_svg("bl_matrix", &out.svg);
     eprintln!("matrix: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
@@ -117,7 +117,7 @@ fn baseline_matrix() {
 #[test]
 fn baseline_display_sum() {
     let mut world = TipWorld::new();
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world, "$ sum_(i=0)^n i^2 $", "#000000", ""
     ).unwrap();
     write_svg("bl_display_sum", &out.svg);
@@ -129,9 +129,9 @@ fn baseline_display_sum() {
 #[test]
 fn baseline_depth_ordering() {
     let mut world = TipWorld::new();
-    let simple = FragmentCompiler::compile_fragment(&mut world, "$a$", "#000000", "").unwrap();
-    let sub = FragmentCompiler::compile_fragment(&mut world, "$a_i$", "#000000", "").unwrap();
-    let frac = FragmentCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
+    let simple = BottomUpCompiler::compile_fragment(&mut world, "$a$", "#000000", "").unwrap();
+    let sub = BottomUpCompiler::compile_fragment(&mut world, "$a_i$", "#000000", "").unwrap();
+    let frac = BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
 
     eprintln!("depth ordering: simple={:.2} sub={:.2} frac={:.2}",
               simple.depth_pt, sub.depth_pt, frac.depth_pt);

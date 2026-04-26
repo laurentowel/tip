@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -30,7 +30,7 @@ fn compile_with_weight(weight_name: &str, math_weight: &str, text_weight: &str) 
 
     let content = "$integral_0^infinity e^(-x^2) dif x = frac(sqrt(pi), 2)$";
 
-    let out = FragmentCompiler::compile_fragment(
+    let out = BottomUpCompiler::compile_fragment(
         &mut world,
         content,
         "#000000",

@@ -1,4 +1,4 @@
-use tip_core_typst::compiler::FragmentCompiler;
+use tip_core_typst::bottom_up::BottomUpCompiler;
 use tip_core_typst::world::TipWorld;
 
 fn write_svg(name: &str, svg: &str) {
@@ -42,7 +42,7 @@ fn cetz_canvas_compiles() {
 
     // Use display page setup (no baseline crop)
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
-    let result = FragmentCompiler::compile_fragment_scoped(
+    let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
         Some(page_setup), None,
     );
@@ -88,7 +88,7 @@ fn fletcher_diagram_compiles() {
               &content[..content.len().min(60)]);
 
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
-    let result = FragmentCompiler::compile_fragment_scoped(
+    let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
         Some(page_setup), None,
     );
@@ -126,7 +126,7 @@ fn fletcher_commutative_square_compiles() {
     }
 
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
-    let result = FragmentCompiler::compile_fragment_scoped(
+    let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
         Some(page_setup), None,
     );
