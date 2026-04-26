@@ -1720,6 +1720,164 @@ $x + y$ default size
         );
     }
 
+    /// Helper: emulate typing a sequence of chars after `prefix`,
+    /// time each keystroke for both strategies.  Returns
+    /// (full_doc_latencies_ms, synth_latencies_ms, success counts).
+    /// Compile failures (mid-edit syntax errors) are timed but their
+    /// success doesn't count.
+    fn measure_keystrokes(
+        prefix: &str,
+        typed: &str,
+    ) -> (Vec<f64>, Vec<f64>, usize, usize) {
+        use crate::compiler::FragmentCompiler;
+        use std::time::Instant;
+        let frag_start = prefix.len();
+
+        let mut full_lat = Vec::new();
+        let mut full_ok = 0;
+        {
+            let mut world = TipWorld::new();
+            // Warm up.
+            let _ = compile_real_document(&mut world, &prefix.to_string());
+            let mut buf = prefix.to_string();
+            for ch in typed.chars() {
+                buf.push(ch);
+                let frag_end = buf.len();
+                let t0 = Instant::now();
+                if let Ok(doc) = compile_real_document(&mut world, &buf) {
+                    let _ = extract_fragment_svg(&world, &doc, frag_start, frag_end);
+                    full_ok += 1;
+                }
+                full_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+
+        let mut synth_lat = Vec::new();
+        let mut synth_ok = 0;
+        {
+            let mut world = TipWorld::new();
+            let mut buf = prefix.to_string();
+            for ch in typed.chars() {
+                buf.push(ch);
+                let frag_end = buf.len();
+                let t0 = Instant::now();
+                let r = FragmentCompiler::compile_fragment_scoped(
+                    &mut world, &buf, frag_start, frag_end,
+                    tip_protocol::svg_color::STANDIN_HEX, None, None,
+                );
+                if r.is_ok() { synth_ok += 1; }
+                synth_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        (full_lat, synth_lat, full_ok, synth_ok)
+    }
+
+    fn lat_stats(label: &str, lat: &[f64], ok: usize) {
+        let n = lat.len() as f64;
+        let avg = lat.iter().sum::<f64>() / n;
+        let mut sorted = lat.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p50 = sorted[sorted.len() / 2];
+        let p90 = sorted[(sorted.len() * 9) / 10];
+        let p99 = sorted[(sorted.len() * 99) / 100];
+        let max = sorted[sorted.len() - 1];
+        let min = sorted[0];
+        eprintln!(
+            "  {:>8}: ok={}/{}  avg={:>5.1}  p50={:>5.1}  p90={:>5.1}  p99={:>5.1}  min={:>5.1}  max={:>6.1}",
+            label, ok, lat.len(), avg, p50, p90, p99, min, max
+        );
+    }
+
+    /// Bench: append a NEW fragment after the doc.  Many keystrokes
+    /// for stable statistics.  Tests cold-cache + comemo warm-up.
+    #[test]
+    #[ignore = "perf bench"]
+    fn bench_edit_append_new() {
+        let (mut src, _) = build_5kloc_corpus();
+        src.push_str("New: ");
+        // 50+ char sequence: balanced math interleaved with edits.
+        let typed = "$a + b = c$ and $integral_0^1 x^2 dif x$ tail";
+        eprintln!("=== append new fragment after {} bytes ===", src.len());
+        let (full, synth, full_ok, synth_ok) = measure_keystrokes(&src, typed);
+        lat_stats("FULL-DOC", &full, full_ok);
+        lat_stats("SYNTH",    &synth, synth_ok);
+    }
+
+    /// Bench: type into the MIDDLE of the doc (replacing a single
+    /// char at line ~half-way).  Tests cache invalidation for
+    /// content far from the edit point.
+    #[test]
+    #[ignore = "perf bench"]
+    fn bench_edit_middle() {
+        let (src, frags) = build_5kloc_corpus();
+        // Insert at position right after the middle fragment.
+        let mid = frags[frags.len() / 2].end;
+        let prefix: String = src.chars().take(mid).collect();
+        let suffix: String = src.chars().skip(mid).collect();
+        let typed = "$alpha beta gamma$";
+        eprintln!("=== edit middle (pos {}/{} bytes) ===", mid, src.len());
+        // measure_keystrokes appends typed to prefix, but here we want
+        // typed inserted before suffix.  Build buf = prefix + typed_so_far + suffix.
+        use crate::compiler::FragmentCompiler;
+        use std::time::Instant;
+
+        let mut full_lat = Vec::new();
+        let mut full_ok = 0;
+        {
+            let mut world = TipWorld::new();
+            let _ = compile_real_document(&mut world, &src);
+            for k in 0..typed.len() {
+                let typed_so_far: String = typed.chars().take(k + 1).collect();
+                let buf = format!("{prefix}{typed_so_far}{suffix}");
+                let frag_start = mid;
+                let frag_end = mid + typed_so_far.len();
+                let t0 = Instant::now();
+                if let Ok(doc) = compile_real_document(&mut world, &buf) {
+                    let _ = extract_fragment_svg(&world, &doc, frag_start, frag_end);
+                    full_ok += 1;
+                }
+                full_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        let mut synth_lat = Vec::new();
+        let mut synth_ok = 0;
+        {
+            let mut world = TipWorld::new();
+            for k in 0..typed.len() {
+                let typed_so_far: String = typed.chars().take(k + 1).collect();
+                let buf = format!("{prefix}{typed_so_far}{suffix}");
+                let frag_start = mid;
+                let frag_end = mid + typed_so_far.len();
+                let t0 = Instant::now();
+                let r = FragmentCompiler::compile_fragment_scoped(
+                    &mut world, &buf, frag_start, frag_end,
+                    tip_protocol::svg_color::STANDIN_HEX, None, None,
+                );
+                if r.is_ok() { synth_ok += 1; }
+                synth_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        lat_stats("FULL-DOC", &full_lat, full_ok);
+        lat_stats("SYNTH",    &synth_lat, synth_ok);
+    }
+
+    /// Bench: type in a SHORT (100-line) doc.  Best-case for
+    /// full-doc; should be near-zero overhead.
+    #[test]
+    #[ignore = "perf bench"]
+    fn bench_edit_small_doc() {
+        // Force smaller corpus regardless of TIP_BENCH_LINES.
+        std::env::set_var("TIP_BENCH_LINES", "100");
+        let (mut src, _) = build_5kloc_corpus();
+        std::env::remove_var("TIP_BENCH_LINES");
+        src.push_str("New: ");
+        let typed = "$a + b$ and $sum_(i=1)^n i$ done";
+        eprintln!("=== small doc, {} bytes ===", src.len());
+        let (full, synth, fok, sok) = measure_keystrokes(&src, typed);
+        lat_stats("FULL-DOC", &full, fok);
+        lat_stats("SYNTH",    &synth, sok);
+    }
+
     /// Bench: editing latency.  Emulate the user appending a NEW
     /// 5001th line containing a math fragment, character by
     /// character, on top of an existing N-line document.  Each
