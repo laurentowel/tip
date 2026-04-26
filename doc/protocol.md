@@ -42,6 +42,49 @@ The server handles requests sequentially. This is fine because:
 
 ## The Messages
 
+This file is the human-readable spec.  The canonical, machine-checked
+source for field types and serde attributes is
+[`tip-server/crates/tip-protocol/src/messages.rs`](../tip-server/crates/tip-protocol/src/messages.rs)
+— if the two disagree, that file wins for types, this one wins for
+intent.  Keep them aligned: any wire-visible change in messages.rs
+needs a paragraph here.
+
+### URI Semantics
+
+The `uri` field on `sync` / `compile_fragments` / `compile_live` is
+typed `String` (not `Option<String>`) on the Rust side.  Sending
+`null` from elisp would JSON-encode to `null`, which the deserializer
+rejects with "invalid type: null, expected a string" — and the server
+exits.  The elisp side enforces three conventions to avoid that:
+
+1. **File-backed buffer** → send `buffer-file-name` verbatim.  This
+   is the common case.  Project-root walk starts from the URI's
+   parent directory looking for `typst.toml`, `Kodama.toml`, `.git`
+   markers.
+
+2. **Unsaved buffer** → send the empty string `""`.  The server
+   stores content under that key (so subsequent compiles match) but
+   the project-root walk gives nothing — appropriate for a buffer
+   with no on-disk anchor.  Imports against `@local/` packages still
+   work; relative imports against the source's tree don't (no tree to
+   anchor against).
+
+3. **`tip-edit-indirect` synthetic compile** → send
+   `tip-edit-virtual://<source-buffer-name-or-path>`.  The edit
+   buffer compiles a *spliced* version of the source's content
+   (edit-buffer text replacing the fragment region in-place); using
+   the source's real URI would clobber the source's cached content
+   on the server when `tip-mode` in source resyncs concurrently.
+   The virtual scheme keeps the two document caches separate.
+   Project root is sent explicitly via the `project_root` field so
+   imports keep resolving against the source's tree.
+
+These conventions are elisp-side only — the server treats every URI
+as an opaque string key into its document store.  A future protocol
+revision could change `uri` to `Option<String>` and let the server
+synthesize a placeholder; until then, the rules above are the
+contract.
+
 ### Request Envelope
 
 Every request has an `id` and a `method`:

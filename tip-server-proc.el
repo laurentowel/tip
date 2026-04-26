@@ -13,6 +13,10 @@
 ;;   `tip-ensure'        spawn if not running
 ;;   `tip--send-request' fire a method call, invoke callback on response
 ;;   `tip--sync-buffer'  send the current buffer content as `sync'
+;;
+;; Wire-protocol spec lives in `doc/protocol.md' (URI semantics,
+;; message shapes, backend dispatch).  Rust-side canonical types are
+;; in tip-server/crates/tip-protocol/src/messages.rs.
 
 ;;; Code:
 

@@ -1,3 +1,14 @@
+//! Wire-protocol types for tip-server.
+//!
+//! This file is the canonical type definition for every JSON message
+//! crossing the stdio pipe between Emacs and tip-server.  The
+//! human-readable spec — including URI semantics (empty-string for
+//! unsaved buffers, `tip-edit-virtual://` scheme for indirect-edit
+//! synthetic compiles), backend dispatch rules, and protocol
+//! versioning notes — lives at `doc/protocol.md` (relative to the
+//! repository root).  Keep them aligned: any wire-visible change
+//! here needs a paragraph there.
+
 use serde::{Deserialize, Serialize};
 
 /// Which backend handles a request.  The client picks this from its
