@@ -348,14 +348,37 @@ pub fn extract_fragment_svg(
             out.push(Point::new(pos.x - min_x, pos.y - min_y), item);
         }
 
-        // Default to 11 pt when the fragment has no Text items at all
-        // (e.g., Shape-only diagram); matches the synthetic path's
-        // default and keeps `tip--effective-scale` at 1.0.
-        let font_size = if max_text_size > Abs::zero() {
-            max_text_size.to_pt()
-        } else {
-            11.0
-        };
+        // `font_size_pt` represents the paragraph context size, used
+        // by `tip--effective-scale` to keep the displayed image at
+        // about Emacs's text size.  Take the LARGEST of:
+        //   - the fragment's own max TextItem size, AND
+        //   - the surrounding line's max external TextItem size.
+        //
+        // Fragment-only max fails for sub/super-only fragments
+        // (e.g. `phantom(a)^2` — single `^2` glyph at ~7 pt) where
+        // `tip-scale='auto'` would then scale the preview up
+        // ~1.6×.  Including external line size gives the true
+        // paragraph point size in those cases.
+        let line_anchors: Vec<Abs> = group_baselines
+            .iter()
+            .copied()
+            .chain(frag_baselines.iter().copied())
+            .collect();
+        let external_size = find_external_line_size(
+            &page.frame,
+            &line_anchors,
+            main,
+            &main_src,
+            start,
+            end,
+        );
+        let candidate_sizes = [Some(max_text_size), external_size];
+        let derived = candidate_sizes
+            .iter()
+            .filter_map(|x| *x)
+            .filter(|s| *s > Abs::zero())
+            .max();
+        let font_size = derived.map(|a| a.to_pt()).unwrap_or(11.0);
 
         return Some(FragmentRender {
             svg: svg_frame(&out),
@@ -545,6 +568,77 @@ fn walk_external(
                     .any(|gl| span_in_range(gl.span.0, main, src, exclude_start, exclude_end));
                 if !any_in {
                     out.push(abs.y);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Largest external `TextItem::size` on the same line as the fragment.
+/// Used to set `font_size_pt` to the paragraph context size, not the
+/// math glyph size — important when the fragment's only visible
+/// content is sub/super-shifted (e.g. `phantom(a)^2`), whose `^2` is
+/// rendered at ~7 pt.  Without this, `tip-scale='auto'` would scale
+/// the preview up by ~1.6× because Emacs computes
+/// `emacs_font_pt / rendered_pt`.
+fn find_external_line_size(
+    frame: &Frame,
+    line_anchors: &[Abs],
+    main: FileId,
+    src: &Source,
+    exclude_start: usize,
+    exclude_end: usize,
+) -> Option<Abs> {
+    if line_anchors.is_empty() {
+        return None;
+    }
+    let mut candidates: Vec<(Abs, Abs)> = Vec::new(); // (y, size)
+    walk_external_size(
+        frame,
+        Point::zero(),
+        main,
+        src,
+        exclude_start,
+        exclude_end,
+        &mut candidates,
+    );
+    let tol = Abs::pt(6.0);
+    candidates
+        .into_iter()
+        .filter(|(y, _)| line_anchors.iter().any(|a| (*y - *a).abs() <= tol))
+        .map(|(_, s)| s)
+        .max()
+}
+
+fn walk_external_size(
+    frame: &Frame,
+    offset: Point,
+    main: FileId,
+    src: &Source,
+    exclude_start: usize,
+    exclude_end: usize,
+    out: &mut Vec<(Abs, Abs)>,
+) {
+    for (pos, item) in frame.items() {
+        let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
+        match item {
+            FrameItem::Group(g) => walk_external_size(
+                &g.frame,
+                abs,
+                main,
+                src,
+                exclude_start,
+                exclude_end,
+                out,
+            ),
+            FrameItem::Text(t) => {
+                let any_in = t
+                    .glyphs
+                    .iter()
+                    .any(|gl| span_in_range(gl.span.0, main, src, exclude_start, exclude_end));
+                if !any_in {
+                    out.push((abs.y, t.size));
                 }
             }
             _ => {}
@@ -769,6 +863,40 @@ $phantom(a)^2$ vs $a^2$
         assert!(f1.svg.contains("<svg"));
         assert!(f2.svg.contains("<svg"));
         assert_ne!(f1.svg, f2.svg, "two distinct fragments produced identical SVG");
+    }
+
+    /// `font_size_pt` for `$phantom(a)^2$` must reflect the paragraph
+    /// context (~11 pt), not the `^2` glyph's own ~7 pt.  Otherwise
+    /// `tip-scale='auto'` (Emacs default) divides by 7 and scales the
+    /// preview ~1.6× — making the superscript huge.
+    #[test]
+    fn font_size_for_sup_only_fragment_uses_paragraph_context() {
+        let mut world = TipWorld::new();
+        let src = "\
+#let phantom(x) = hide($#x$)
+text $phantom(a)^2$ and $a^2$ done
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r_phantom = locate(src, "$phantom(a)^2$");
+        let r_plain = locate(src, "$a^2$");
+        let f_phantom =
+            extract_fragment_svg(&world, &doc, r_phantom.start, r_phantom.end).unwrap();
+        let f_plain = extract_fragment_svg(&world, &doc, r_plain.start, r_plain.end).unwrap();
+        // Both fragments live in an 11 pt paragraph; phantom should
+        // adopt the same paragraph size as plain even though its
+        // only visible glyph is sup-scaled.
+        assert!(
+            (f_phantom.font_size_pt - f_plain.font_size_pt).abs() < 0.5,
+            "phantom font_size {:.3} should match plain {:.3} (paragraph context)",
+            f_phantom.font_size_pt,
+            f_plain.font_size_pt
+        );
+        assert!(
+            f_phantom.font_size_pt > 9.0,
+            "phantom font_size {:.3} suspiciously low — likely picked up the \
+             sup-scaled `^2` glyph instead of paragraph text",
+            f_phantom.font_size_pt
+        );
     }
 
     /// Step-4 acceptance: with surrounding text on the same line,
