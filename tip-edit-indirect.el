@@ -114,12 +114,22 @@ For images, sizes the SVG to fit the preview window with a small margin."
 (defun tip-edit-indirect--live-preview ()
   "Compile the edit-buffer text and update the preview window.
 Splices the edit text into the source buffer's content so context
-(scope, surrounding paragraph) is preserved during compilation."
-  (let ((src-buf tip-edit-indirect--source-buffer)
-        (ov tip-edit-indirect--source-overlay)
-        (new-text (buffer-substring-no-properties (point-min) (point-max))))
-    (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
-               (not (equal new-text tip-edit-indirect--content-cache)))
+(scope, surrounding paragraph) is preserved during compilation.
+Skipped when the source buffer isn't visiting a file — the protocol
+requires a string `uri', and tying it to `buffer-name' would confuse
+project-root discovery."
+  (let* ((src-buf tip-edit-indirect--source-buffer)
+         (ov tip-edit-indirect--source-overlay)
+         (uri (and (buffer-live-p src-buf)
+                   (buffer-local-value 'buffer-file-name src-buf)))
+         (new-text (buffer-substring-no-properties (point-min) (point-max))))
+    (cond
+     ((null uri)
+      (tip-edit-indirect--show-preview
+       "Source buffer is not visiting a file — save it to enable live preview."
+       'error))
+     ((and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
+           (not (equal new-text tip-edit-indirect--content-cache)))
       (setq tip-edit-indirect--content-cache new-text)
       ;; Keep tip-live's cache aligned so a tip-live-mode session that
       ;; coexists with an edit doesn't fight us for the same fragment.
@@ -148,7 +158,7 @@ Splices the edit text into the source buffer's content so context
                                           ("end" . ,byte-end))))
                ("color" . ,fg)
                ("preamble" . ,(tip-build-preamble)))
-             #'tip-edit-indirect--handle-result)))))))
+             #'tip-edit-indirect--handle-result))))))))
 
 (defun tip-edit-indirect--handle-result (result)
   "Display RESULT — image or error — in the preview window."
@@ -200,12 +210,20 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
         (when (fboundp 'typst-ts-mode)
           (condition-case nil (typst-ts-mode) (error nil)))
         (tip-edit-indirect-mode 1)
+        ;; Header-line shows commit/abort bindings.  Use literal key
+        ;; descriptions because `substitute-command-keys' can produce
+        ;; surprising output when called during mode init before the
+        ;; new keymap is fully active.  Force a redraw so the header
+        ;; appears even if a containing setup overrides display.
         (setq-local header-line-format
-                    (substitute-command-keys
-                     (concat
-                      " Edit fragment — "
-                      "\\[tip-edit-indirect-commit] commit, "
-                      "\\[tip-edit-indirect-abort] abort")))
+                    (concat
+                     (propertize " tip-edit-indirect" 'face 'mode-line-emphasis)
+                     " — "
+                     (propertize "C-c C-c" 'face 'help-key-binding)
+                     " commit, "
+                     (propertize "C-c C-k" 'face 'help-key-binding)
+                     " abort"))
+        (force-mode-line-update)
         (setq-local tip-edit-indirect--source-buffer src-buf)
         (setq-local tip-edit-indirect--source-overlay ov)
         (setq-local tip-edit-indirect--content-cache "")
