@@ -294,6 +294,17 @@ pub fn extract_fragment_svg(
         }
 
         // Group baselines that belong to fragment-bearing groups.
+        // `flatten_leaves` pushes in post-order (children before
+        // parents), so the LAST `has_in_range` record is the
+        // outermost — the math-equation Group whose baseline aligns
+        // with the surrounding paragraph.  For a nested sub/sup
+        // tower, inner Groups' baselines are shifted down/up; only
+        // the outer baseline matches the line baseline.
+        let outermost_group_baseline = group_records
+            .iter()
+            .rev()
+            .find(|r| r.has_in_range)
+            .map(|r| r.baseline_y);
         let group_baselines: Vec<Abs> = group_records
             .iter()
             .filter(|r| r.has_in_range)
@@ -325,7 +336,7 @@ pub fn extract_fragment_svg(
         //   4. **bounds.max_y** as a last resort (Shape-only
         //      fragments).
         let frag_max = frag_baselines.iter().copied().max();
-        let group_baseline = group_baselines.iter().copied().max();
+        let group_baseline = outermost_group_baseline;
         let external_y =
             find_external_baseline(&page.frame, &frag_baselines, max_text_size, main, &main_src, start, end);
         const SHIFT_THRESHOLD: f64 = 2.0;
@@ -1053,6 +1064,66 @@ $x + y$ default size
     /// covered by the `font_size_tracks_*` test above — synthetic
     /// always reports 11 pt, full-doc reports the actual size, so
     /// equivalence on mixed-size is by design false.
+    /// Diagnostic for sub/cfrac tower baseline reporting in context.
+    /// Prints what Group baseline says vs what surrounding text says.
+    #[test]
+    #[ignore = "diagnostic only"]
+    fn diag_sub_tower_baseline() {
+        let mut world = TipWorld::new();
+        let src = "Body $a_(a_(a_(a_(a_(a_(a_a))))))$ end\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r = locate(src, "$a_(a_(a_(a_(a_(a_(a_a))))))$");
+        // Walk to dump all info.
+        let main = world.main();
+        let main_src = world.source(main).ok().unwrap();
+        let mut leaves = Vec::new();
+        let mut groups = Vec::new();
+        flatten_leaves(
+            &doc.pages[0].frame,
+            Point::zero(),
+            main,
+            &main_src,
+            r.start,
+            r.end,
+            &mut leaves,
+            &mut groups,
+        );
+        eprintln!("=== leaves in fragment ===");
+        for l in &leaves {
+            if matches!(l.category, LeafCategory::InRange) {
+                eprintln!(
+                    "  pos.y={:.3} size={:?} kind={:?}",
+                    l.pos.y.to_pt(),
+                    l.text_size.map(|s| s.to_pt()),
+                    match &l.item {
+                        FrameItem::Text(_) => "Text",
+                        FrameItem::Shape(_, _) => "Shape",
+                        _ => "?",
+                    }
+                );
+            }
+        }
+        eprintln!("=== group baselines ===");
+        for g in &groups {
+            eprintln!(
+                "  baseline_y={:.3} has_in_range={}",
+                g.baseline_y.to_pt(),
+                g.has_in_range
+            );
+        }
+        eprintln!("=== external (out-of-frag, page-wide) text baselines ===");
+        let mut ext = Vec::new();
+        walk_external(&doc.pages[0].frame, Point::zero(), main, &main_src, r.start, r.end, &mut ext);
+        for y in &ext {
+            eprintln!("  ext pos.y={:.3}", y.to_pt());
+        }
+        let f = extract_fragment_svg(&world, &doc, r.start, r.end).unwrap();
+        eprintln!(
+            "=== final: h={:.3} d={:.3} ext_used={}",
+            f.height_pt, f.depth_pt, f.baseline_external
+        );
+    }
+
     /// Live-bug probe: print height/depth/baseline for `$a+b=c$` in
     /// both strategies.  Eyeballed against GUI rendering — synthetic
     /// looks correct; full-doc reportedly puts math too high.
