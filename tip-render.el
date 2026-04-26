@@ -638,6 +638,40 @@ recompiling SVGs — no server round-trip."
                  (new-spec (tip--make-image-spec svg h d is-display fs)))
             (overlay-put ov 'display (car new-spec))))))))
 
+(defun tip--refresh-overlay-face (ov)
+  "Re-resolve `tip-image-face' for OV and rebuild its image spec.
+Use when surrounding text changed so the face under the fragment
+shifted (e.g. user removed a `\\fbox{...}' wrapper).  No recompile —
+just walks `tip-image-face' against the current buffer state and
+rebuilds the SVG image spec."
+  (when (and (eq (overlay-get ov 'tip) 'tip)
+             (overlay-get ov 'tip-svg)
+             (overlay-get ov 'display))
+    (let* ((frag-beg (overlay-start ov))
+           (frag-end (overlay-end ov))
+           (new-face (tip--resolve-image-face frag-beg frag-end))
+           (old-face (overlay-get ov 'face)))
+      (unless (equal new-face old-face)
+        (let* ((svg (overlay-get ov 'tip-svg))
+               (h   (overlay-get ov 'tip-height-pt))
+               (d   (overlay-get ov 'tip-depth-pt))
+               (fs  (overlay-get ov 'tip-font-size-pt))
+               (disp (overlay-get ov 'display))
+               (is-display (eq (plist-get (cdr disp) :ascent) 'center))
+               (spec (tip--make-image-spec svg h d is-display fs
+                                           frag-beg frag-end)))
+          (overlay-put ov 'face new-face)
+          (overlay-put ov 'display (car spec)))))))
+
+(defun tip--refresh-overlay-faces-in-region (beg end)
+  "jit-lock callback: refresh face on every tip overlay in BEG..END.
+Hooked from `tip-mode' so that when font-lock re-fontifies a
+region (after, say, removing a `\\fbox{...}' wrapper) the overlay's
+tint follows without a recompile."
+  (when tip-image-face
+    (dolist (ov (overlays-in beg end))
+      (tip--refresh-overlay-face ov))))
+
 (defun tip--on-font-change (&rest _)
   "Update all tip buffers after a font change.
 Rescales overlays using current font metrics — no recompilation."
