@@ -27,8 +27,8 @@
 (defvar tip-echo-errors)
 (defvar tip-mode)
 (declare-function tip--color-to-hex "tip" (color))
-(declare-function tip-edit--live-preview "tip" ())
-(defvar tip-edit-mode)
+(declare-function tip-edit-indirect--live-preview "tip-edit-indirect" ())
+(defvar tip-edit-indirect-mode)
 
 ;;; * echo-area error feedback
 
@@ -103,11 +103,11 @@ Errors are shown both in the childframe and echoed to the message area."
 
 (defun tip-live--compile-partial ()
   "Compile the math fragment at point for live preview.
-Works in both normal typst-ts-mode and tip-edit buffers."
+Works in both normal typst-ts-mode and tip-edit-indirect buffers."
   (cond
-   ;; In tip-edit buffer: delegate to the edit preview.
-   ((bound-and-true-p tip-edit-mode)
-    (tip-edit--live-preview))
+   ;; In tip-edit-indirect buffer: delegate to the edit preview.
+   ((bound-and-true-p tip-edit-indirect-mode)
+    (tip-edit-indirect--live-preview))
    ;; In typst-ts-mode: compile fragment at point.
    ((eq major-mode 'typst-ts-mode)
     (if-let* ((bound (tip-bounds-at-point (point)))
