@@ -169,25 +169,14 @@ impl TypstBackend {
             }
         };
 
-        // Same dispatch as `handle_compile_fragments`: try full-doc
-        // first when configured; on document-level failure (very
-        // common during mid-edit syntax breakage) fall back to
-        // synthetic per-fragment.  Sharing the dispatch keeps the
-        // childframe preview visually consistent with the inline
-        // overlay — same baseline, same paragraph-context font size.
-        if matches!(self.strategy, CompileStrategy::FullDoc) {
-            let one = vec![FragmentLocation {
-                start: params.start,
-                end: params.end,
-            }];
-            if let Ok(mut results) =
-                FullDocCompiler::compile_all(&mut self.world, &content, &one)
-            {
-                if let Some(fragment) = results.pop() {
-                    return ResponseResult::Live { fragment };
-                }
-            }
-        }
+        // ALWAYS synth for live preview, regardless of strategy.
+        // The benchmarks (bench_edit_append_new, bench_edit_middle in
+        // full_doc.rs) showed that on a 5000-line doc full-doc has
+        // p99 keystroke latency of ~5.7 SECONDS due to comemo cache
+        // misses on mid-edit syntax errors.  Synth's per-fragment
+        // compile is stable at ~30 ms even at 5k lines.  Visual
+        // consistency between live and batch matters less than not
+        // freezing the editor.
 
         match FragmentCompiler::compile_fragment_scoped(
             &mut self.world,
