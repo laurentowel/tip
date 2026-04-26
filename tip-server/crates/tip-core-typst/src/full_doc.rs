@@ -327,7 +327,7 @@ pub fn extract_fragment_svg(
         let frag_max = frag_baselines.iter().copied().max();
         let group_baseline = group_baselines.iter().copied().max();
         let external_y =
-            find_external_baseline(&page.frame, &frag_baselines, main, &main_src, start, end);
+            find_external_baseline(&page.frame, &frag_baselines, max_text_size, main, &main_src, start, end);
         const SHIFT_THRESHOLD: f64 = 2.0;
         let (baseline_y, external) = match (group_baseline, frag_max, external_y) {
             (Some(gb), _, _) => (gb, false),
@@ -387,6 +387,7 @@ pub fn extract_fragment_svg(
         let external_size = find_external_line_size(
             &page.frame,
             &line_anchors,
+            max_text_size,
             main,
             &main_src,
             start,
@@ -615,16 +616,34 @@ fn push_leaf(
     keep.push((leaf.pos, leaf.item.clone()));
 }
 
+/// Tolerance for "same line as fragment", scaled with the fragment's
+/// own text size.  Default leading in typst is ~1.2 em, so anything
+/// within 0.5 em is on the same line; anything beyond is a different
+/// paragraph (or a different line in a tight paragraph).
+///
+/// Replaces a fixed 6 pt tol that worked at 11 pt body but bled into
+/// adjacent paragraphs at 1–3 pt body.  Lower bound 0.5 pt keeps the
+/// math sane for sub-pt extremes.
+fn line_tol(max_text_size: Abs) -> Abs {
+    let scaled = max_text_size * 0.5;
+    if scaled.to_pt() < 0.5 {
+        Abs::pt(0.5)
+    } else {
+        scaled
+    }
+}
+
 /// Find a surrounding-text baseline on `frame` (a page) for an
 /// inline-math fragment whose own text-item baselines are
 /// `frag_baselines`.  Walks all text items NOT inside the fragment's
 /// source range; returns the one whose baseline-y is closest to any
-/// `frag_baselines` entry, within ~one line-height.  Returns `None`
-/// when nothing surrounding is on the same line (display math, or
-/// the math is the only content).
+/// `frag_baselines` entry, within ~half an em of `max_text_size`.
+/// Returns `None` when nothing surrounding is on the same line
+/// (display math, or the math is the only content).
 fn find_external_baseline(
     frame: &Frame,
     frag_baselines: &[Abs],
+    max_text_size: Abs,
     main: FileId,
     src: &Source,
     exclude_start: usize,
@@ -649,17 +668,8 @@ fn find_external_baseline(
     // fragment has only a `^2` glyph (e.g. `phantom(a)^2`), nearby
     // candidates include other fragments' superscripts (~same y) AND
     // the prose text on the same line (~5 pt larger y).  The line
-    // baseline is what we want — and it's always the maximum.  Using
-    // "closest y" mistakenly picks another super-baseline; using
-    // "max within tol" lands on the prose line every time.
-    //
-    // `tol` MUST be smaller than line spacing — typst's default at
-    // 11 pt is ~13 pt — otherwise we'd pick the NEXT line's baseline
-    // and the image renders too far below.  6 pt is enough to reach
-    // sub/super shifts (~3–5 pt at 11 pt) and stay well clear of the
-    // next line.  Scale modestly with the largest text size on the
-    // line (heuristic: tol = 0.6 × baseline candidate).
-    let tol = Abs::pt(6.0);
+    // baseline is what we want — and it's always the maximum.
+    let tol = line_tol(max_text_size);
     let mut best: Option<Abs> = None;
     for ey in external_ys {
         let in_tol = frag_baselines.iter().any(|fy| (ey - *fy).abs() <= tol);
@@ -706,9 +716,14 @@ fn walk_external(
 /// rendered at ~7 pt.  Without this, `tip-scale='auto'` would scale
 /// the preview up by ~1.6× because Emacs computes
 /// `emacs_font_pt / rendered_pt`.
+///
+/// `max_text_size` is the fragment's own largest text size, used to
+/// scale the same-line tolerance (`line_tol`).  At small body sizes
+/// a fixed tol bleeds across paragraph boundaries.
 fn find_external_line_size(
     frame: &Frame,
     line_anchors: &[Abs],
+    max_text_size: Abs,
     main: FileId,
     src: &Source,
     exclude_start: usize,
@@ -727,7 +742,7 @@ fn find_external_line_size(
         exclude_end,
         &mut candidates,
     );
-    let tol = Abs::pt(6.0);
+    let tol = line_tol(max_text_size);
     candidates
         .into_iter()
         .filter(|(y, _)| line_anchors.iter().any(|a| (*y - *a).abs() <= tol))
@@ -1163,6 +1178,228 @@ $x + y$ default size
     /// algorithm should treat the prose word "and" between them as
     /// an OutAttached barrier, partitioning detached items by which
     /// fragment they belong to.
+    /// Stress: very small body size (1 pt).  At this scale the
+    /// default 13 pt line spacing collapses to ~1.2 pt, well inside
+    /// the 6 pt baseline tol [H2].  If `find_external_baseline` picks
+    /// up the next line's baseline, depth + height go absurd.
+    ///
+    /// We're not asserting that 1 pt looks GOOD — just that the
+    /// metrics stay sane: positive height, font_size near 1, and
+    /// no cross-line baseline contamination.
+    #[test]
+    fn extreme_small_text_size_1pt() {
+        let mut world = TipWorld::new();
+        let src = "\
+#set text(size: 1pt)
+line one with $a + b$ math.
+line two with $c - d$ math.
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r1 = locate(src, "$a + b$");
+        let r2 = locate(src, "$c - d$");
+        let f1 = extract_fragment_svg(&world, &doc, r1.start, r1.end).unwrap();
+        let f2 = extract_fragment_svg(&world, &doc, r2.start, r2.end).unwrap();
+
+        eprintln!(
+            "f1 (1pt): h={:.3} d={:.3} w={:.3} fs={:.3} ext={}",
+            f1.height_pt, f1.depth_pt, f1.width_pt, f1.font_size_pt, f1.baseline_external
+        );
+        eprintln!(
+            "f2 (1pt): h={:.3} d={:.3} w={:.3} fs={:.3} ext={}",
+            f2.height_pt, f2.depth_pt, f2.width_pt, f2.font_size_pt, f2.baseline_external
+        );
+
+        // Sanity: font size matches paragraph context.
+        assert!(
+            f1.font_size_pt < 2.0,
+            "f1 font_size {:.3} should be ~1pt",
+            f1.font_size_pt
+        );
+        assert!(
+            f2.font_size_pt < 2.0,
+            "f2 font_size {:.3} should be ~1pt",
+            f2.font_size_pt
+        );
+        // Cross-line contamination check: at 1 pt, line spacing ~1.2 pt,
+        // tol=6pt could pick the OTHER line's baseline.  If it does, the
+        // height blows up to ~one line spacing.  An honest 1 pt math
+        // height should be < 2 pt.
+        assert!(
+            f1.height_pt < 2.0,
+            "f1 height {:.3} much larger than 1pt — likely cross-line baseline",
+            f1.height_pt
+        );
+        assert!(
+            f2.height_pt < 2.0,
+            "f2 height {:.3} much larger than 1pt — likely cross-line baseline",
+            f2.height_pt
+        );
+    }
+
+    /// Stress: phantom-base superscript at 1 pt — super-shift is
+    /// ~0.4 pt, below the 2 pt SHIFT_THRESHOLD [H3].  The picker
+    /// won't escape to external; depth/height come from frag own.
+    /// At this scale, both behaviors should produce similar results
+    /// since the shift is so small.  Verify it doesn't crash and
+    /// produces positive numbers.
+    #[test]
+    fn extreme_small_phantom_superscript_1pt() {
+        let mut world = TipWorld::new();
+        let src = "\
+#set text(size: 1pt)
+#let phantom(x) = hide($#x$)
+text $phantom(a)^2$ and $a^2$ done
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r_phantom = locate(src, "$phantom(a)^2$");
+        let r_plain = locate(src, "$a^2$");
+        let f_phantom =
+            extract_fragment_svg(&world, &doc, r_phantom.start, r_phantom.end).unwrap();
+        let f_plain = extract_fragment_svg(&world, &doc, r_plain.start, r_plain.end).unwrap();
+
+        eprintln!(
+            "1pt phantom: h={:.3} d={:.3} w={:.3} fs={:.3}",
+            f_phantom.height_pt, f_phantom.depth_pt, f_phantom.width_pt, f_phantom.font_size_pt
+        );
+        eprintln!(
+            "1pt plain:   h={:.3} d={:.3} w={:.3} fs={:.3}",
+            f_plain.height_pt, f_plain.depth_pt, f_plain.width_pt, f_plain.font_size_pt
+        );
+
+        assert!(f_phantom.height_pt > 0.0);
+        assert!(f_plain.height_pt > 0.0);
+        // Both should report ~1 pt paragraph context.
+        assert!(f_phantom.font_size_pt < 2.0);
+        assert!(f_plain.font_size_pt < 2.0);
+    }
+
+    /// Stress: very tight `#set par(leading: 0pt)` — adjacent lines
+    /// can be < 1 pt apart.  Even at 11 pt body, our 6 pt tol could
+    /// span lines.  Verify metrics stay sane.
+    /// Stress: pseudo-random mix of 1pt..10pt in the same buffer.
+    /// Each math fragment must report `font_size_pt` matching ITS
+    /// section, not bleed from neighbors.  Heights scale with the
+    /// section size.  Catches: external-baseline picker grabbing a
+    /// neighbor of a different size, font-size lookup returning an
+    /// unrelated section's value.
+    #[test]
+    fn extreme_mixed_sizes_1_to_10pt() {
+        let mut world = TipWorld::new();
+        let src = "\
+#text(size: 1pt)[$a + b$ at one]
+
+#text(size: 3pt)[$a + b$ at three]
+
+#text(size: 7pt)[$a + b$ at seven]
+
+#text(size: 10pt)[$a + b$ at ten]
+
+#text(size: 2pt)[$a + b$ at two]
+
+#text(size: 9pt)[$a + b$ at nine]
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        // Locate each fragment by section.
+        let cases = [
+            ("at one", 1.0),
+            ("at three", 3.0),
+            ("at seven", 7.0),
+            ("at ten", 10.0),
+            ("at two", 2.0),
+            ("at nine", 9.0),
+        ];
+        let mut results = Vec::new();
+        for (anchor, expected_size) in cases {
+            // Find the `$a + b$` whose follow-up text is `anchor`.
+            let after_idx = src.find(anchor).unwrap();
+            // Walk back to the nearest `$a + b$` before `anchor`.
+            let math_start = src[..after_idx].rfind("$a + b$").unwrap();
+            let f = extract_fragment_svg(
+                &world,
+                &doc,
+                math_start,
+                math_start + "$a + b$".len(),
+            )
+            .unwrap();
+            eprintln!(
+                "{anchor:>10} (~{expected_size}pt): h={:.3} d={:.3} w={:.3} fs={:.3}",
+                f.height_pt, f.depth_pt, f.width_pt, f.font_size_pt
+            );
+            results.push((expected_size, f));
+        }
+
+        // Each fragment's reported font_size_pt must be within 0.5pt
+        // of the section size — proves no leak from neighbors.
+        for (expected, f) in &results {
+            assert!(
+                (f.font_size_pt - expected).abs() < 0.5,
+                "fragment at {expected}pt got font_size {:.3} — neighbor bleed?",
+                f.font_size_pt
+            );
+        }
+
+        // Heights must scale roughly with size — but not linearly,
+        // because the pad+depth contribute a near-constant ~0.5 pt
+        // floor.  At 10 pt vs 1 pt, the ratio is ~5× rather than 10×.
+        let h_1pt = results[0].1.height_pt;
+        let h_10pt = results[3].1.height_pt;
+        assert!(
+            h_10pt > h_1pt * 3.0,
+            "10pt height {:.3} should be visibly larger than 1pt {:.3}",
+            h_10pt,
+            h_1pt
+        );
+
+        // No fragment should have an absurd height (cross-paragraph
+        // baseline pickup).  Cap: 3× the section size.
+        for (expected, f) in &results {
+            assert!(
+                f.height_pt < expected * 3.0,
+                "fragment at {expected}pt has height {:.3} — sane upper bound is ~{}",
+                f.height_pt,
+                expected * 3.0
+            );
+        }
+    }
+
+    #[test]
+    fn extreme_zero_leading() {
+        let mut world = TipWorld::new();
+        let src = "\
+#set par(leading: 0pt)
+line one with $a + b$ math.
+line two with $c - d$ math.
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r1 = locate(src, "$a + b$");
+        let r2 = locate(src, "$c - d$");
+        let f1 = extract_fragment_svg(&world, &doc, r1.start, r1.end).unwrap();
+        let f2 = extract_fragment_svg(&world, &doc, r2.start, r2.end).unwrap();
+
+        eprintln!(
+            "0-leading f1: h={:.3} d={:.3} ext={}",
+            f1.height_pt, f1.depth_pt, f1.baseline_external
+        );
+        eprintln!(
+            "0-leading f2: h={:.3} d={:.3} ext={}",
+            f2.height_pt, f2.depth_pt, f2.baseline_external
+        );
+
+        // Reasonable inline-math height for 11 pt body is ~10 pt.
+        // If we're picking the WRONG line's baseline, height balloons
+        // way beyond that.
+        assert!(
+            f1.height_pt < 20.0,
+            "f1 height {:.3} suggests cross-line contamination",
+            f1.height_pt
+        );
+        assert!(
+            f2.height_pt < 20.0,
+            "f2 height {:.3} suggests cross-line contamination",
+            f2.height_pt
+        );
+    }
+
     #[test]
     fn run_pass_partitions_detached_between_fragments() {
         let mut world = TipWorld::new();
