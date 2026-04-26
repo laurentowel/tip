@@ -1,18 +1,38 @@
 # The Full-Document Approach: Compiling Once, Extracting Everything
 
-## Status: Not Yet Implemented — Architecture Study
+## Status: Implemented (Opt-In)
 
-This document describes a future approach that would replace TIP's current per-fragment synthetic compilation with a single full-document compilation. It is based on studying the typst and tinymist source code.
+`TIP_COMPILE_STRATEGY=full-doc` switches the Typst backend to a single
+full-document compile + per-fragment frame extraction.  Default is still
+`Synthetic` (one compile per fragment).  See `tip-server/crates/tip-core-typst/src/full_doc.rs`.
+
+This essay started as an architecture study (June 2026, while the
+synthetic strategy was the only path).  It is now a post-implementation
+record: what survived contact with Typst, where we landed, and the
+heuristics still on the page that we want to eliminate.
 
 ## The Core Insight
 
-When Typst compiles a document, every element in the output frame tree carries a `Span` — a reference back to the source position that produced it. Math equations are laid out as `Group` frames with exact `baseline` values set by the math layout engine. And `typst_svg::svg_frame()` can render any single frame to SVG.
+When Typst compiles a document, every element in the output frame tree
+carries a `Span` — a reference back to the source position that produced
+it.  Math equations are laid out as `Group` frames with explicit
+`baseline` values set by the math layout engine.  And `typst_svg::svg_frame()`
+can render any frame to SVG.
 
-These three facts together mean: compile the document once, walk the frame tree, find math equation frames by their source spans, extract exact baselines, render per-frame SVGs. No synthetic documents, no scope skeletons, no baseline heuristics.
+Three facts together: compile the document **once**, walk the frame
+tree, find math frames by source span, render per-fragment SVGs.  No
+synthetic documents, no scope skeletons, no skeleton-extraction bugs.
 
-## How Spans Flow Through Typst
+The synthetic approach builds N synthetic single-page documents and
+calls `compile()` N times.  comemo caches per-input — N different
+inputs means N cache misses.  The full-doc approach gets Typst's
+internal layout parallelism for free, because it's one `compile()`
+call.
 
-The span chain from source to rendered output:
+## How Spans Flow Through Typst (verified)
+
+The span chain from source to rendered output, with Typst 0.14.2
+file references:
 
 ### 1. Parsing: Source → AST
 
@@ -22,7 +42,8 @@ $a + b$
 ast::Equation { span: Span(file_id, byte_range) }
 ```
 
-Every AST node carries a `Span` recording which file and byte range produced it.
+Every AST node carries a `Span` recording which file and byte range
+produced it.
 
 ### 2. Evaluation: AST → Content
 
@@ -34,265 +55,360 @@ EquationElem::pack().with_span(equation_span)
 Packed<EquationElem> { span: Span(...) }
 ```
 
-The evaluated content element retains the span. `Packed<T>` is Typst's wrapper that carries type + span + fields.
-
 ### 3. Layout: Content → Frame
 
-This is where it gets interesting. Math layout (`typst-layout/src/math/`) does several things:
+Math layout (`typst-layout/src/math/`) does several things:
 
-**Glyph-level span tracking** (in `fragment.rs`):
+**Glyph-level span tracking** (`fragment.rs`):
 ```rust
 glyph.span = (span, 0);  // each math glyph remembers its source span
 ```
 
-**Span mapping during shaping** (in `collect.rs`):
+**Span mapping during shaping** (`collect.rs`):
 ```rust
-// SpanMapper: maps byte ranges in shaped text to source Spans
 collector.spans.push(len, child.span());
-// Later, during shaping:
 let span = spans.span_at(shaped.range.start);
 ```
 
-**Baseline setting** (in `fraction.rs`, `scripts.rs`, `run.rs`, etc.):
+**Baseline setting** (`fraction.rs`, `scripts.rs`, `run.rs`):
 ```rust
 let baseline = line_pos.y + axis;
 let mut frame = Frame::soft(size);
-frame.set_baseline(baseline);  // exact math baseline
+frame.set_baseline(baseline);
 ```
 
 ### 4. The Frame Tree
 
-After layout, the compiled `PagedDocument` contains pages, each with a frame tree:
-
 ```rust
 pub struct Frame {
     size: Size,
-    baseline: Option<Abs>,  // ← set by math layout
+    baseline: Option<Abs>,
     items: Vec<(Point, FrameItem)>,
-    kind: FrameKind,        // Hard (clip) or Soft (overflow ok)
+    kind: FrameKind,
 }
 
 pub enum FrameItem {
-    Group(GroupItem),          // nested frame — recurse
-    Text(TextItem),            // glyphs, each with (Span, u16)
-    Shape(Shape, Span),        // fraction bars, etc.
-    Image(Image, Size, Span),  // embedded images
+    Group(GroupItem),
+    Text(TextItem),
+    Shape(Shape, Span),
+    Image(Image, Size, Span),
     Link(Destination, Size),
     Tag(Tag),
 }
 ```
 
-Key: `FrameItem::Text` contains `TextItem` whose `Glyph` structs each have `pub span: (Span, u16)`. The `Span` identifies the source position; the `u16` is the character offset within that span.
-
-`FrameItem::Group` contains a sub-`Frame` which may have its own `baseline`. Math equations produce `Group` items whose inner frames have baselines set.
+`FrameItem::Text` contains a `TextItem` whose `Glyph` structs each have
+`pub span: (Span, u16)`.
 
 ### 5. SVG Rendering
 
 ```rust
-// typst-svg public API (0.14.2)
 pub fn svg(page: &Page) -> String;          // full page
-pub fn svg_frame(frame: &Frame) -> String;  // single frame ← this is what we need
+pub fn svg_frame(frame: &Frame) -> String;  // single frame ← the API we rely on
 ```
 
-`svg_frame` renders any frame to a standalone SVG. No need to wrap it in a page.
+`svg_frame` renders any frame to a standalone SVG.  No need to wrap it
+in a synthetic page.
 
-## The Algorithm
+## What Surprised Us in Practice
 
-### Step 1: Compile the Full Document
+The architecture study was correct on every point — Typst really does
+preserve spans through layout, frames really do carry baselines, and
+`svg_frame` really does render a frame to SVG.  But several
+implementation details turned out to need extra care:
+
+### Detached spans (`span.id() == None`)
+
+The study assumed every glyph traces back to a source byte range.
+Wrong.  Typst synthesizes glyphs for math-scope identifiers (`dif`,
+`pi`, accents, operators, auto-spacing, super/sub markers) through
+scope resolution; the resulting `TextItem`s carry spans whose
+`id() == None`.  No file, no byte range, nothing to look up.
+
+The first naive filter ("glyph span overlaps fragment range") dropped
+all of these.  `$dif x$` rendered as `$x$`, `$sqrt(pi)$` as `$sqrt$`.
+
+The fix shipped as a "neighborhood pass" (current code): a second walk
+that picks up detached `TextItem`s whose absolute position is within
+~1 em of the fragment's bbox.  This works empirically but is exactly
+the kind of magic-distance heuristic the study claimed to eliminate.
+**[H1]** below.
+
+### Simple math expressions are *inlined* into the page frame
+
+The study assumed every `$...$` becomes a `FrameItem::Group` with
+`has_baseline()=true`.  In Typst 0.14, simple expressions (single
+identifiers, plain `a+b`, subscripts, accents) are inlined directly
+into the page frame — their TextItems sit alongside surrounding
+prose.  No Group, no explicit baseline.
+
+Complex expressions (matrices, fractions, big operators with limits,
+sized delimiters, cases) DO produce Groups with baselines.  The
+distinction is empirical and not part of the public API, so future
+Typst versions could change it.
+
+This forced the baseline picker to fall back to TextItem `pos.y` for
+inlined cases — and that's where another wrinkle showed up.
+
+### Math TextItem `pos.y` ≠ paragraph line baseline
+
+In a paragraph, math content is positioned with its math-axis aligned
+to the line's math axis.  The math baseline is shifted ~0.5 pt above
+the surrounding-text baseline (at 11 pt).  Using the math TextItem's
+`pos.y` directly underreports depth by 0.5 pt and the displayed image
+floats above the line.
+
+Synthetic doesn't hit this because its synthetic page contains only
+math — no surrounding text — so the math baseline IS the page's only
+baseline.
+
+### Sub/super-only fragments (e.g. `$phantom(a)^2$`)
+
+When the user uses `hide()` or otherwise produces a fragment whose
+visible content is entirely sub or super-shifted, the fragment's only
+glyphs sit far above the line baseline.  Without the surrounding
+paragraph's baseline as a reference, the cropped image looks
+baseline-aligned on the superscript itself — losing the "high up"
+appearance.  This was the original architectural motivation for
+full-doc.  It works, but the picker has to KNOW it's in this case to
+escape to external text — adding another threshold.
+
+### Font size scales with paragraph context
+
+Typst respects `#set text(size: 14pt)` for math — equation glyphs
+inherit the surrounding text size.  Full-doc captures this correctly
+via `TextItem::size`.  But for sub/super-only fragments, the only
+visible glyph is sup-scaled (~7 pt at 11 pt body), and Emacs's
+`tip-scale='auto'` would scale the preview ~1.6×.  We have to reach
+out to surrounding text to recover the paragraph's text size.
+
+### The bottom-pad off-by-half-pt
+
+Pure crop math is simple — bbox top to bbox bottom.  But the cropped
+frame extends 0.5 pt below ink to give SVG renderers some
+anti-aliasing slack.  That extra 0.5 pt has to be included in the
+reported `depth_pt`, otherwise `:ascent` underestimates the
+below-baseline region by 0.5 pt and the displayed image floats up.
+Synthetic accounts for this in `cropped_height - baseline_in_crop`;
+full-doc has to match the arithmetic.
+
+## Algorithm (as implemented)
 
 ```rust
-let document = compile::<PagedDocument>(world).output?;
-```
+fn extract_fragment_svg(world, doc, byte_start, byte_end) -> Option<FragmentRender> {
+    for each page:
+        // Pass 1: collect items whose source span overlaps [start, end).
+        let (items, bounds, max_size, group_baselines) = walk(page, in_range);
 
-One compilation. comemo caches everything — subsequent compilations after small edits reuse most intermediate results.
+        if items.empty: continue;
 
-### Step 2: Build a Span-to-Fragment Map
+        // Pass 2: pick up detached-span items in the spatial neighborhood
+        // of the in-range cluster.  HEURISTIC [H1].
+        absorb_detached_neighbors(page, items, bounds, max_size);
 
-On the Emacs side, we already know the byte ranges of all math fragments (from tree-sitter). Send these to the server alongside the document content.
+        // Baseline picker (priority order):
+        //   1. Group baseline if any in-range Group has set one
+        //   2. Fragment's own bottommost TextItem baseline (frag_max)
+        //   3. External (surrounding-text) baseline within tol when the
+        //      fragment is sub/super-shifted relative to the line.
+        //      HEURISTICS [H2], [H3].
+        //   4. ink bottom (Shape-only fragments)
+        let baseline_y = pick_baseline(group_baselines, frag_baselines, external);
 
-On the Rust side, convert byte ranges to `Span` values:
+        // Crop bounds: extend to include baseline so the image's
+        // bottom edge IS the baseline.  +0.5 pt pad for AA slack
+        // (and reported in depth_pt to match).
+        let crop = bounds.expand_to_y(baseline_y).pad(0.5pt);
 
-```rust
-// Simplified — actual Span construction requires the FileId
-fn byte_range_to_span(source: &Source, start: usize, end: usize) -> Span {
-    source.span_at(start)  // or similar API
-}
-```
+        // Rebuild a Frame at cropped origin and render.
+        let mut out = Frame::soft(crop.size);
+        for (pos, item) in items: out.push(pos - crop.origin, item);
+        let svg = svg_frame(&out);
 
-Build a map: `HashMap<Span, FragmentInfo>` where `FragmentInfo` contains the byte range and any metadata.
+        let depth = (crop.max_y - baseline_y) + 0.5pt;
+        let height = crop.max_y - crop.min_y + 1.0pt;
 
-### Step 3: Walk the Frame Tree
+        // Font size: paragraph-context (max of fragment's own + surrounding line).
+        // HEURISTIC [H4].
+        let font_size = max(max_text_size, external_max_size_on_line);
 
-```rust
-fn find_math_frames(
-    frame: &Frame,
-    position: Point,
-    span_map: &HashMap<Span, FragmentInfo>,
-    results: &mut Vec<FoundFragment>,
-) {
-    for (pos, item) in frame.items() {
-        let abs_pos = position + pos;
-        match item {
-            FrameItem::Group(group) => {
-                // Check if any glyph in this group matches a known fragment span
-                if let Some(frag_span) = find_matching_span(&group.frame, span_map) {
-                    // Found a math equation frame!
-                    results.push(FoundFragment {
-                        span: frag_span,
-                        frame: group.frame.clone(),
-                        position: abs_pos,
-                        baseline: group.frame.baseline(),  // EXACT
-                        has_baseline: group.frame.has_baseline(),
-                    });
-                }
-                // Also recurse — math can be nested
-                find_math_frames(&group.frame, abs_pos, span_map, results);
-            }
-            FrameItem::Text(text) => {
-                // Text glyphs carry spans — check against our fragment map
-                for glyph in &text.glyphs {
-                    if span_map.contains_key(&glyph.span.0) {
-                        // This glyph belongs to a known fragment
-                        // (handled at Group level above for full equations)
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn find_matching_span(
-    frame: &Frame,
-    span_map: &HashMap<Span, FragmentInfo>,
-) -> Option<Span> {
-    // Walk frame items, check if any text glyph's span matches
-    for (_, item) in frame.items() {
-        if let FrameItem::Text(text) = item {
-            for glyph in &text.glyphs {
-                if span_map.contains_key(&glyph.span.0) {
-                    return Some(glyph.span.0);
-                }
-            }
-        }
-        if let FrameItem::Group(group) = item {
-            if let Some(span) = find_matching_span(&group.frame, span_map) {
-                return Some(span);
-            }
-        }
-    }
+        return Some(FragmentRender { svg, height, depth, width, font_size });
     None
 }
 ```
 
-### Step 4: Extract Per-Fragment SVG and Baseline
+## The Heuristics We Want to Eliminate
 
-```rust
-for found in &results {
-    let svg = typst_svg::svg_frame(&found.frame);
-    let height = found.frame.height().to_pt();
-    let baseline = found.frame.baseline().to_pt();
-    let depth = height - baseline;  // exact, no heuristics
-    
-    // Return to Emacs
-    fragment_results.push(FragmentResult {
-        start: span_map[&found.span].start,
-        end: span_map[&found.span].end,
-        svg,
-        height_pt: height,
-        depth_pt: depth,
-        error: None,
-    });
-}
-```
+The study's claim ("no baseline heuristics") didn't survive contact
+with reality.  But each of the tunables below has a principled
+replacement waiting — listed in priority order.
 
-## What This Eliminates
+### [H1] Spatial neighborhood for detached glyphs
 
-| Current machinery | Status with full-doc approach |
-|-------------------|-------------------------------|
-| `extract_scope_skeleton` | **Eliminated** — no synthetic docs |
-| `collect_scope_nodes` | **Eliminated** |
-| `compute_closing_delimiters` | **Already eliminated** (was buggy) |
-| `find_baseline_depth` heuristic | **Replaced** by exact `frame.baseline()` |
-| `find_ink_extent` approximation | **Replaced** by exact `frame.size()` |
-| `crop_svg_viewbox` | **Eliminated** — `svg_frame` renders at exact size |
-| `build_scoped_source` | **Eliminated** |
-| Scope skeleton bugs (html, delimiters) | **Eliminated** |
-| `DEFAULT_RENDERING_PREAMBLE` | Possibly eliminated (bounded() may not be needed) |
+**What it is:** detached-span TextItems (math-scope synthesized glyphs)
+are pulled in if their absolute position lies within (`max_text_size`,
+`2 pt`) of the in-range cluster's bbox.
 
-## The Hybrid: Full-Doc Baselines + Per-Fragment Rendering
+**Why it's heuristic:** the (`one em`, `2 pt`) window is empirical.
+Adjacent fragments on the same line within `one em` of each other
+would be incorrectly co-opted (the same line normally has > 1 em of
+prose between math fragments, but it's not guaranteed).
 
-The font-size tension (full-doc renders at document size, but Emacs wants uniform sizing) has a clean resolution: **ascent is a ratio, not an absolute quantity.**
+**Principled replacement: Group containment.**  If any descendant of a
+`FrameItem::Group` has an in-range span, the Group represents a math
+equation belonging to the fragment, and ALL of its descendants belong
+to the fragment.  No distance threshold needed.
 
-`ascent = (height - depth) / height` is scale-invariant. A fraction compiled at 14pt and at 11pt has different absolute dimensions but the same ascent percentage — the baseline sits at the same relative position.
+**Catch:** simple math is inlined directly into the page frame — no
+Group wrapping it.  For inlined math, we'd need to identify the math
+*run* — a contiguous sequence of TextItems on the same y, mixing
+in-range and detached spans, separated from other content by
+non-math TextItems with valid spans.
 
-The hybrid approach:
+**Implementation sketch:**
+1. Walk frame items in iteration order, recording each leaf's
+   `(pos, span, span_status)`.
+2. Form *runs*: maximal sequences of consecutive leaves on the same y
+   (within ~0.1 pt — floating-point tol, not a layout heuristic).
+3. A run "belongs to" a fragment if any leaf has an in-range span and
+   no leaf has a non-detached out-of-range span.
+4. Include the whole run.
 
-1. **Full-doc compile** → walk frame tree → for each math frame, compute `ascent_ratio = baseline / height` from `frame.baseline()` and `frame.height()`. These are exact.
-2. **Per-fragment compile** at fixed 11pt → get SVGs at uniform size (current approach, with scope skeletons).
-3. **Apply** the exact ascent ratio from step 1 to the image spec from step 2.
+This eliminates `neighborhood_x` and `neighborhood_y` and replaces
+them with a frame-traversal property.
 
-Step 1 runs once per buffer sync. Step 2 runs per fragment as today. The per-fragment approach handles font size control and page setup. The full-doc approach provides exact baselines. Each does what it's good at.
+### [H2] External-baseline tolerance for sub/super-only fragments
 
-This is an incremental improvement over the current approach — no architecture rewrite, just an additional compilation pass for baseline data.
+**What it is:** when no Group baseline is available and the fragment's
+own TextItems are all super-shifted (no item near line baseline), we
+look at OUT-OF-FRAGMENT TextItems within 6 pt vertical of any fragment
+baseline and take the maximum y as the line baseline.
 
-## What Remains Unchanged
+**Why it's heuristic:** 6 pt was chosen empirically — narrower than the
+default 13 pt line spacing, wider than the ~5 pt super-shift.  At
+unusual line spacings (e.g. `#set par(leading: 0.4em)` at 11 pt body
+gives ~4.4 pt spacing) the tolerance could span lines.  At very large
+font sizes the super-shift may exceed 6 pt.
 
-- The protocol: still JSON over stdio with `sync` + `compile_fragments`
-- The Emacs side: `tip--make-image-spec` still computes `:ascent` from height/depth
-- Fragment detection: tree-sitter still finds `$...$` positions
-- Overlay management: preview-toggle.el unchanged
-- Theme color substitution: still works on cached SVGs
+**Principled replacement: derive from layout.**
 
-## Open Questions
+Option A — **walk for the math line break**.  Math is laid out within
+a paragraph, and the paragraph has a known leading.  Read it from the
+World's resolved style at the math's source position and use
+`leading × 0.5` as the same-line tolerance.  Concrete, scales with
+the doc.
 
-### 1. Span Construction from Byte Ranges
+Option B — **prefer Group baseline always**.  Force-wrap math frames
+in Groups during a custom layout pass so we always get
+`frame.has_baseline()`.  Requires reaching into Typst's math layout —
+larger change, may conflict with future Typst.
 
-How do we create a `Span` from a byte range to look up in the frame tree? The typst `Source` struct has methods like `range(span)` (span → byte range) but we need the reverse. Options:
-- Iterate all spans in the source and build a reverse map
-- Use `Source::find` or similar if it exists
-- Match by comparing byte ranges rather than span equality
+Option A is incremental and fits today's architecture.
 
-### 2. Equation Frame Identification
+### [H3] `SHIFT_THRESHOLD = 2 pt` for "fragment is sub/super-shifted"
 
-How do we distinguish a math equation's Group frame from other Group frames (e.g., emphasis, text styling)? Options:
-- Check if the group's frame has `has_baseline()` — math frames do, text frames usually don't
-- Check if the group's source span corresponds to a `$...$` range
-- Check the frame kind or other metadata
+**What it is:** when both `frag_max` (fragment's bottommost baseline)
+and `external` (surrounding-text baseline) are available, prefer
+external when `external - frag_max > 2 pt`.
 
-### 3. Inline vs Display
+**Why it's heuristic:** 2 pt distinguishes "0.5 pt math-axis offset"
+(prefer fragment) from "5 pt super-shift" (prefer external).  Works
+at 11 pt body but the scale is hardcoded.
 
-The current approach detects inline vs display math from the source text (`$ ...$` vs `$ ... $`). With full-doc compilation, we could also detect this from the layout context — inline equations are part of paragraph flow, display equations are separate blocks.
+**Principled replacement: scale with font size.**  The math-axis
+offset is a fraction of font size (~0.05 em).  The super-shift is a
+larger fraction (~0.4 em).  `SHIFT_THRESHOLD = 0.2 × font_size` would
+scale correctly across body sizes.
 
-### 4. Diagram Fragments
+Better yet, **make the picker monotonic in evidence quality**:
 
-CeTZ/Fletcher diagrams aren't math equations — they're function call results. Their frames won't have math baselines. We'd still need the span-matching approach to find them, and they'd use `:ascent center` as they do now.
+1. Group baseline (canonical math layout baseline)
+2. External line baseline (surrounding prose's `pos.y`)
+3. Fragment-own max baseline
 
-### 5. Performance on Large Documents
+If we ever have an external baseline, it's always at least as
+authoritative as fragment-own — line baselines are paragraph
+properties, not math properties.  Drop the threshold and just prefer
+in priority order.  This is closer to the synthetic compiler's
+behavior already.
 
-A 1000-fragment document currently takes ~10s for initial compilation (10ms/fragment × 1000). Full-doc compilation would be faster (one compile, comemo caching) but the frame tree walk adds overhead. Benchmarking needed.
+### [H4] Font-size lookup tolerance
 
-### 6. Error Resilience
+**What it is:** `find_external_line_size` uses the same 6 pt vertical
+tolerance as the baseline picker to find the surrounding paragraph's
+text size.
 
-This is a fundamental weakness of the full-document approach. Typst's `compile()` is all-or-nothing: if ANY part of the document has an error, the entire compilation fails — no `PagedDocument`, no frame tree, no SVGs for any fragment.
+**Why it's heuristic:** same reason as [H2].
 
-The current per-fragment approach is resilient: fragment A fails, fragments B and C still render because they're independent synthetic documents.
+**Principled replacement:** unify with [H2].  When we know the line
+baseline, the line's text size is the size of any TextItem at that y.
+Same code path, no separate tolerance.
 
-Strategy: **graceful degradation**.
+## What Was Eliminated as Promised
 
-1. **Hybrid baseline** (recommended): use full-doc ONLY for baseline ratios (the hybrid from earlier in this essay). If full-doc fails, fall back to heuristic baselines (current `find_baseline_depth`). Per-fragment SVG rendering is unaffected — it still uses synthetic documents. No loss on error, just less precise baselines.
+| Synthetic machinery | Status |
+|---|---|
+| `extract_scope_skeleton` | Eliminated (full-doc has no synthetic source) |
+| `collect_scope_nodes` | Eliminated |
+| `compute_closing_delimiters` | Eliminated (was buggy in synthetic too) |
+| `build_scoped_source` | Eliminated |
+| `crop_svg_viewbox` | Eliminated (`svg_frame` renders at exact size) |
+| Scope-skeleton bugs (html, delimiters, kodama wrappers) | Eliminated |
 
-2. **Fallback on error**: try full-doc first. On error, switch to per-fragment for everything. Doubles the work but only on broken documents.
+## What We Use Falls Through to Synthetic
 
-3. **Partial output**: Typst may produce warnings (which still yield a document) vs fatal errors (which don't). Check `warned.output` — some "errors" might be warnings that still produce usable output.
+Full-doc is **all-or-nothing**.  Typst's `compile()` returns
+`SourceResult<PagedDocument>` — on any error, no document is produced.
+A typo anywhere in the user's source poisons the entire response.
 
-4. **Error isolation**: Typst's error is usually localized (one undefined variable, one syntax error). If we could identify which fragment caused the error and exclude it, we could retry. But Typst doesn't support partial compilation.
+The dispatch in `TypstBackend::handle_compile_fragments` (and
+`handle_compile_live`) tries full-doc first when configured; on
+`Err`, falls through to the existing per-fragment synthetic loop.
+Synthetic isolates each fragment in its own synthetic page, so a
+single bad fragment doesn't poison the rest.
 
-The hybrid baseline approach (option 1) is safest: full-doc is an enhancement, not a requirement. Documents with errors degrade gracefully to current behavior.
+The user briefly loses paragraph-context font size and external
+baseline while the source has an error.  Once the source parses
+again, full-doc kicks back in.
 
-## Tinymist's Approach (for Reference)
+## Performance
 
-Tinymist's jump-from-click (`tinymist-query/src/jump.rs`) walks the frame tree similarly:
+**Theoretical**: one compile vs N.  Per-fragment extraction is cheap
+(frame walk + svg_frame on a small frame).  Typst's internal layout
+parallelism kicks in for the single full-document compile.
+
+**Measured**: not yet.  This is the largest unmeasured claim in the
+feature.  Need:
+
+- Cold-cache compile cost on a 50-page paper
+- Warm-cache (one-character-edit) cost on the same doc
+- Comparison against synthetic per-fragment cost on the same fragments
+
+## Readiness Checklist Before Default
+
+Not ready as default yet.  Outstanding:
+
+1. **Comparison sweep over the existing visual-test corpus.**  The one
+   diag test compares synthetic and full-doc on `$a+b=c$`.  We need
+   the same comparison across matrices, fractions, big operators,
+   accents, sized delimiters, kodama trees, html-targeting docs, and
+   the arxiv corpus.
+2. **Multi-page fragment handling.**  `extract_fragment_svg` returns
+   on the first page that matches.  A fragment split across a page
+   break gets truncated.
+3. **Diagram (CeTZ/Fletcher) Shape geometry.**  Shape items currently
+   contribute a 1-point bbox.  Diagram-only fragments report bogus
+   widths.
+4. **Performance bench** (above).
+5. **Heuristic elimination [H1]–[H4]** — at least [H1] (Group/run
+   containment) and the priority simplification in [H3].
+
+A week of polish, not a structural rewrite.
+
+## Appendix: Tinymist's Approach (for Reference)
+
+Tinymist's jump-from-click (`tinymist-query/src/jump.rs`) walks the
+frame tree similarly:
 
 ```rust
 fn jump_from_click(frames: &[Frame], point: Point) -> Option<SourceSpan> {
@@ -302,21 +418,16 @@ fn jump_from_click(frames: &[Frame], point: Point) -> Option<SourceSpan> {
 }
 ```
 
-Key difference: tinymist searches by spatial position (click coordinates), while we'd search by source span (byte range). But the frame walking logic is the same.
+Different direction (point → span) but same traversal.  Tinymist's
+`SourceSpanOffset` and span-walking helpers in
+`tinymist-world/src/debug_loc.rs` are a useful reference for the
+reverse map (span → frame item).
 
-Relevant files in tinymist:
-- `tinymist-query/src/jump.rs` — frame traversal with span matching
-- `tinymist-world/src/debug_loc.rs` — `SourceSpanOffset` wrapper
-- `tinymist-query/src/analysis/` — higher-level analysis using spans
+## Files
 
-## Files (Current Implementation, for Comparison)
-
-| File | Current Role | Full-doc replacement |
-|------|-------------|---------------------|
-| `compiler.rs:build_scoped_source` | Builds synthetic doc | Eliminated |
-| `compiler.rs:extract_scope_skeleton` | AST walk for scope | Eliminated |
-| `compiler.rs:find_baseline_depth` | Heuristic baseline | `frame.baseline()` |
-| `compiler.rs:find_ink_extent` | Approximate ink bounds | `frame.size()` |
-| `compiler.rs:crop_svg_viewbox` | SVG string rewriting | `svg_frame()` |
-| `compiler.rs:compile_source` | Compile synthetic doc | Compile full doc once |
-| `handler.rs:handle_compile_fragments` | Per-fragment dispatch | Frame tree walk |
+| File | Role |
+|---|---|
+| `tip-server/crates/tip-core-typst/src/full_doc.rs` | Full-doc strategy: compile, walk, extract |
+| `tip-server/crates/tip-core-typst/src/lib.rs` | `CompileStrategy` enum + `from_env` |
+| `tip-server/crates/tip-server/src/typst_backend.rs` | Dispatch (compile_fragments + compile_live) |
+| `tip-server/crates/tip-core-typst/src/compiler.rs` | Synthetic strategy (fallback path) |
