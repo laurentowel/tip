@@ -353,6 +353,19 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
 
 ;;; * commit / abort
 
+(defun tip-edit-indirect--stash-failed-merge (edit-text)
+  "Save EDIT-TEXT (the in-progress edit) into a uniquely named buffer.
+Returns the new buffer.  Used when commit is aborted by a hash
+mismatch — the user shouldn't lose typed changes when the source
+region has shifted under them."
+  (let ((stash (generate-new-buffer "*tip-edit-failed-merge*")))
+    (with-current-buffer stash
+      (insert edit-text)
+      (goto-char (point-min))
+      (when (fboundp 'typst-ts-mode)
+        (condition-case nil (typst-ts-mode) (error nil))))
+    stash))
+
 (defun tip-edit-indirect-commit ()
   "Write edit buffer contents back to source and close the edit UI.
 Reapplies the leading-whitespace prefix recorded at entry to every
@@ -363,9 +376,14 @@ Aborts the commit if the source-region content has changed since
 entry (SHA-256 mismatch).  This guards against changes that bypass
 the overlay's `modification-hooks' — e.g., `revert-buffer',
 out-of-band buffer updates, or a global replace-string that altered
-our fragment along with everything else.  When a mismatch is
-detected, the edit buffer is left intact so the user can copy their
-changes out manually before deciding what to do."
+our fragment along with everything else.  On mismatch:
+
+  - the edit buffer's current content is stashed into a fresh
+    `*tip-edit-failed-merge*' buffer (uniquified by
+    `generate-new-buffer' if multiple mismatches accumulate),
+  - the edit UI is torn down and window configuration restored,
+  - the user is told where the stash went so they can compare it
+    against the changed source by hand."
   (interactive)
   (unless (and tip-edit-indirect--source-buffer tip-edit-indirect--source-overlay)
     (user-error "Not in a tip edit buffer"))
@@ -379,22 +397,33 @@ changes out manually before deciding what to do."
          (end (overlay-end ov)))
     (unless (and beg end (buffer-live-p src-buf))
       (user-error "Source region or buffer no longer exists"))
-    (with-current-buffer src-buf
-      (let ((current-hash (secure-hash 'sha256
-                                       (buffer-substring-no-properties beg end))))
-        (unless (equal current-hash expected-hash)
-          (user-error
-           "Source region changed since edit started; commit aborted")))
-      ;; `save-excursion' is enough: `delete-region' + `insert' at
-      ;; BEG leaves point at BEG + (length new-text), but the marker
-      ;; semantics restore the original source-buffer point on exit.
-      (save-excursion
-        (delete-overlay ov)
-        (goto-char beg)
-        (delete-region beg end)
-        (insert new-text)))
-    (tip-edit-indirect--cleanup)
-    (message "Fragment updated.")))
+    (let ((current-hash (with-current-buffer src-buf
+                          (secure-hash 'sha256
+                                       (buffer-substring-no-properties beg end)))))
+      (cond
+       ((not (equal current-hash expected-hash))
+        ;; Hash mismatch — rescue the edit text into a stash buffer,
+        ;; then tear down so the user gets their window back.
+        (let ((stash (tip-edit-indirect--stash-failed-merge edit-text)))
+          (with-current-buffer src-buf
+            (delete-overlay ov))
+          (tip-edit-indirect--cleanup)
+          (message
+           "Original buffer content in the edit region changed, giving up commit.
+*tip-edit* buffer saved to %s"
+           (buffer-name stash))))
+       (t
+        (with-current-buffer src-buf
+          ;; `save-excursion' is enough: `delete-region' + `insert' at
+          ;; BEG leaves point at BEG + (length new-text), but the marker
+          ;; semantics restore the original source-buffer point on exit.
+          (save-excursion
+            (delete-overlay ov)
+            (goto-char beg)
+            (delete-region beg end)
+            (insert new-text)))
+        (tip-edit-indirect--cleanup)
+        (message "Fragment updated."))))))
 
 (defun tip-edit-indirect-abort ()
   "Cancel editing and discard changes."
