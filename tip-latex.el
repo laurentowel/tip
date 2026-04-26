@@ -277,6 +277,24 @@ cap like digestif."
           (expand-file-name raw (file-name-directory
                                  (or buffer-file-name default-directory))))))))
 
+(defun tip-latex--tex-master-root ()
+  "Return root from AUCTeX's `TeX-master' buffer-local, or nil.
+`TeX-master' is set via the file-local variables block (the
+file-local-variables trailer that AUCTeX writes, with `TeX-master'
+set to the master's path) or via `.dir-locals.el'.  By the time `tip-mode'
+runs, Emacs has already processed those, so the variable is
+buffer-local on entry.  String → resolved path (`.tex' added if
+no extension).  `t' / `shared' / `dwim' / nil → ignored (this
+file is its own root, or AUCTeX wants to prompt — neither is
+information for us)."
+  (when (and (boundp 'TeX-master)
+             (stringp (symbol-value 'TeX-master)))
+    (let* ((raw (symbol-value 'TeX-master))
+           (path (expand-file-name
+                  raw (file-name-directory
+                       (or buffer-file-name default-directory)))))
+      (if (file-name-extension path) path (concat path ".tex")))))
+
 (defun tip-latex--candidate-roots ()
   "Return a list of plausible root `.tex' paths in ancestor dirs.
 A plausible root is a `.tex' file whose first 4k contains
@@ -331,21 +349,25 @@ Precedence:
   1. `tip-project-root-path' already set (by user or .dir-locals.el) — keep.
   2. `% !TEX root' magic comment (child files usually have this and
      no \\input of their own).
-  3. Saved session answer for this file.
-  4. If the buffer has \\input/\\include/\\subimport and is file-backed
+  3. AUCTeX's `TeX-master' file-local (the file-local-variables
+     trailer); same intent as the magic comment, different syntax.
+  4. Saved session answer for this file.
+  5. If the buffer has \\input/\\include/\\subimport and is file-backed
      — prompt the user; remember the answer.
-  5. If the buffer has \\input but is NOT file-backed — error loudly.
-  6. Otherwise skip (single-file, no multi-file signals).
+  6. If the buffer has \\input but is NOT file-backed — error loudly.
+  7. Otherwise skip (single-file, no multi-file signals).
 
 Called from `tip-mode' activation via the LaTeX backend."
   (when (and (derived-mode-p 'latex-mode 'LaTeX-mode)
              (not tip-project-root-path))
     (let ((magic (tip-latex--magic-comment-root))
+          (master (tip-latex--tex-master-root))
           (saved (and buffer-file-name
                       (tip-latex--session-lookup buffer-file-name)))
           (has-inc (tip-latex--buffer-has-includes-p)))
       (cond
        (magic (setq-local tip-project-root-path magic))
+       (master (setq-local tip-project-root-path master))
        (saved (setq-local tip-project-root-path saved))
        ((and has-inc (null buffer-file-name))
         (user-error
