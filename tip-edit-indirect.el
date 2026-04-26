@@ -43,6 +43,21 @@
 (defvar-local tip-edit-indirect--content-cache ""
   "Last edit-buffer text we sent to the server, to debounce no-op compiles.")
 
+(defvar-local tip-edit-indirect--strip-amount 0
+  "Number of leading whitespace columns stripped from the fragment on entry.
+Re-prepended to every non-first non-blank line on commit so the source
+buffer's original indentation is restored exactly.  See
+`tip-edit-indirect--compute-strip' for the dedent rule.")
+
+(defvar-local tip-edit-indirect--source-hash nil
+  "SHA-256 of the source-region text at entry.
+Compared against the current source-region content on commit; a
+mismatch aborts the commit.  Belt-and-suspenders against the source
+fragment being modified out from under us — the overlay's
+modification-hooks already block direct edits to the region, but
+indirect changes (revert-buffer, font-lock injection bugs, batch
+replace-string in the source) can still slip through.")
+
 (defvar tip-edit-indirect--saved-window-config nil
   "Window configuration captured on entry, restored on commit/abort.
 Single global slot — entering a second `tip-edit-indirect' while the
@@ -175,6 +190,82 @@ project-root discovery."
       (tip-edit-indirect--show-preview svg 'image))
      (t (tip-edit-indirect--show-preview "(empty result)" 'error)))))
 
+;;; * indentation handling
+
+;; The fragment text returned by `tip-bounds-at-point' starts at the
+;; opening delimiter (e.g. the leading `$').  In the source buffer
+;; that delimiter sits at column N, but the substring captured by
+;; `buffer-substring' starts the line at column 0 — so the first line
+;; of the fragment text always has zero leading whitespace, while
+;; interior body lines and the closing delimiter line keep their full
+;; source indent.  Editing in that raw form is awkward when the body
+;; is heavily indented (the user has to mentally subtract a constant
+;; from every column).
+;;
+;; The dedent rule below strips a uniform prefix of length
+;;   N = min(leading-WS) over all non-first non-blank lines
+;; from the same set on entry, and re-prepends it on commit.  Because
+;; the prefix is uniform and applied to the same lines both ways:
+;;
+;;  - body alignment is preserved relative to itself (e.g. `&='
+;;    columns in alignat-style equations stay aligned);
+;;  - asymmetric original indents are preserved exactly — if the
+;;    closing `$' was at a different column than the body, that
+;;    asymmetry round-trips because we never normalize it, only
+;;    subtract and re-add the same amount;
+;;  - blank lines are left verbatim and never re-prefixed (avoids
+;;    introducing trailing whitespace);
+;;  - single-line fragments (no `\n' in TEXT) bypass the rule.
+
+(defun tip-edit-indirect--compute-strip (text)
+  "Return the column count to strip from TEXT under the dedent rule.
+Computes the minimum leading whitespace count across all non-first,
+non-blank lines.  The first line is excluded because it begins at
+column 0 (the fragment starts at the opening delimiter).  Returns 0
+for single-line input or when no non-blank interior line exists."
+  (if (not (string-match-p "\n" text))
+      0
+    (let ((lines (cdr (split-string text "\n")))  ; drop first
+          (min-indent nil))
+      (dolist (line lines)
+        (unless (string-match-p "\\`[ \t]*\\'" line)
+          (when (string-match "[^ \t]" line)
+            (let ((n (match-beginning 0)))
+              (setq min-indent (if min-indent (min min-indent n) n))))))
+      (or min-indent 0))))
+
+(defun tip-edit-indirect--dedent (text n)
+  "Strip N leading whitespace chars from each non-first non-blank line of TEXT.
+A no-op when N is 0 or TEXT has no newline.  Lines shorter than N
+chars are reduced to empty (defensive — should not happen given the
+strip amount comes from `tip-edit-indirect--compute-strip')."
+  (if (or (zerop n) (not (string-match-p "\n" text)))
+      text
+    (let* ((lines (split-string text "\n"))
+           (head (car lines))
+           (rest (mapcar (lambda (line)
+                           (if (string-match-p "\\`[ \t]*\\'" line)
+                               line
+                             (substring line (min n (length line)))))
+                         (cdr lines))))
+      (mapconcat #'identity (cons head rest) "\n"))))
+
+(defun tip-edit-indirect--reindent (text n)
+  "Prepend N spaces to each non-first non-blank line of TEXT.
+A no-op when N is 0 or TEXT has no newline.  Blank lines are left
+unchanged so commit doesn't introduce trailing-whitespace lines."
+  (if (or (zerop n) (not (string-match-p "\n" text)))
+      text
+    (let* ((prefix (make-string n ?\s))
+           (lines (split-string text "\n"))
+           (head (car lines))
+           (rest (mapcar (lambda (line)
+                           (if (string-match-p "\\`[ \t]*\\'" line)
+                               line
+                             (concat prefix line)))
+                         (cdr lines))))
+      (mapconcat #'identity (cons head rest) "\n"))))
+
 ;;; * entry point
 
 ;;;###autoload
@@ -183,14 +274,23 @@ project-root discovery."
 Like `org-edit-special' (C-c ').  Splits the current window into a
 preview pane (top) and an edit pane (bottom); typing in the edit pane
 updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
-\\[tip-edit-indirect-abort] cancels."
+\\[tip-edit-indirect-abort] cancels.
+
+The fragment text is dedented before insertion: the minimum leading
+whitespace across all non-first non-blank lines is stripped, producing
+a clean editing surface even for heavily indented body lines.  The
+exact prefix is restored on commit, so asymmetric original
+indentation (e.g. closing `$' at a different column from the body) is
+preserved verbatim — see `tip-edit-indirect--compute-strip'."
   (interactive)
   (let ((bounds (tip-bounds-at-point (point))))
     (unless bounds
       (user-error "No math or figure at point"))
     (let* ((beg (car bounds))
            (end (cdr bounds))
-           (text (buffer-substring-no-properties beg end))
+           (raw-text (buffer-substring-no-properties beg end))
+           (strip (tip-edit-indirect--compute-strip raw-text))
+           (text (tip-edit-indirect--dedent raw-text strip))
            (src-buf (current-buffer))
            (ov (make-overlay beg end))
            ;; `generate-new-buffer' uniquifies with `<2>', `<3>' etc.
@@ -227,6 +327,9 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
         (setq-local tip-edit-indirect--source-buffer src-buf)
         (setq-local tip-edit-indirect--source-overlay ov)
         (setq-local tip-edit-indirect--content-cache "")
+        (setq-local tip-edit-indirect--strip-amount strip)
+        (setq-local tip-edit-indirect--source-hash
+                    (secure-hash 'sha256 raw-text))
         (setq-local tip-edit-indirect--preview-timer
                     (run-with-idle-timer
                      0.3 t
@@ -251,16 +354,40 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
 ;;; * commit / abort
 
 (defun tip-edit-indirect-commit ()
-  "Write edit buffer contents back to source and close the edit UI."
+  "Write edit buffer contents back to source and close the edit UI.
+Reapplies the leading-whitespace prefix recorded at entry to every
+non-first non-blank line, so the source buffer's original indentation
+is restored — see `tip-edit-indirect--reindent'.
+
+Aborts the commit if the source-region content has changed since
+entry (SHA-256 mismatch).  This guards against changes that bypass
+the overlay's `modification-hooks' — e.g., `revert-buffer',
+out-of-band buffer updates, or a global replace-string that altered
+our fragment along with everything else.  When a mismatch is
+detected, the edit buffer is left intact so the user can copy their
+changes out manually before deciding what to do."
   (interactive)
   (unless (and tip-edit-indirect--source-buffer tip-edit-indirect--source-overlay)
     (user-error "Not in a tip edit buffer"))
-  (let* ((new-text (buffer-substring-no-properties (point-min) (point-max)))
+  (let* ((edit-text (buffer-substring-no-properties (point-min) (point-max)))
+         (n tip-edit-indirect--strip-amount)
+         (new-text (tip-edit-indirect--reindent edit-text n))
          (src-buf tip-edit-indirect--source-buffer)
          (ov tip-edit-indirect--source-overlay)
+         (expected-hash tip-edit-indirect--source-hash)
          (beg (overlay-start ov))
          (end (overlay-end ov)))
+    (unless (and beg end (buffer-live-p src-buf))
+      (user-error "Source region or buffer no longer exists"))
     (with-current-buffer src-buf
+      (let ((current-hash (secure-hash 'sha256
+                                       (buffer-substring-no-properties beg end))))
+        (unless (equal current-hash expected-hash)
+          (user-error
+           "Source region changed since edit started; commit aborted")))
+      ;; `save-excursion' is enough: `delete-region' + `insert' at
+      ;; BEG leaves point at BEG + (length new-text), but the marker
+      ;; semantics restore the original source-buffer point on exit.
       (save-excursion
         (delete-overlay ov)
         (goto-char beg)
