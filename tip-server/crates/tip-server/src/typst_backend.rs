@@ -76,9 +76,14 @@ impl TypstBackend {
             }
         };
 
-        // Strategy dispatch: try `FullDoc` when configured; on any
-        // failure (currently always — it's a stub) fall through to the
-        // synthetic per-fragment path so the user never sees a regression.
+        // Strategy dispatch: try `FullDoc` when configured; on
+        // document-level compile failure (any error in the user's
+        // source — not necessarily in a math fragment), fall through
+        // to the synthetic per-fragment path.  Synthetic isolates
+        // each fragment in its own synthetic page, so a single bad
+        // fragment doesn't poison the rest.  The user briefly loses
+        // full-doc niceties (paragraph-context font size, external
+        // baseline) until the document parses again.
         if matches!(self.strategy, CompileStrategy::FullDoc) {
             if let Ok(results) =
                 FullDocCompiler::compile_all(&mut self.world, &content, &params.fragments)
