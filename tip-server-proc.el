@@ -412,6 +412,22 @@ file, so a `\\newcommand' edit in the parent reaches the server
 before the child's compile fires).  Functions take no args; each
 runs with the EDITED buffer current.")
 
+(defun tip--current-uri ()
+  "Return a non-nil URI string for the current buffer.
+The wire protocol's `uri' field is a required `String' on the Rust
+side; sending nil for an unsaved buffer JSON-encodes to null and
+causes the server to exit on a deserialization error.  Fall back to
+a synthetic path under /tmp/tip-unsaved/ so the request still
+deserializes and the server can do something reasonable.  The synth
+URI won't match any real project root, but project-root discovery
+already tolerates that (no markers found, fallback to the URI's
+parent dir)."
+  (or buffer-file-name
+      (concat "/tmp/tip-unsaved/"
+              (replace-regexp-in-string "[^A-Za-z0-9._-]" "_"
+                                        (buffer-name))
+              ".typ")))
+
 (defun tip--sync-buffer ()
   "Sync current buffer content to tip-server.
 Skips when `buffer-chars-modified-tick' hasn't advanced since the
@@ -424,7 +440,7 @@ when the server process changed (e.g. after restart) — see
     (unless (eq tip--last-sync-tick tick)
       (setq tip--last-sync-tick tick)
       (let ((params
-             `(("uri" . ,(buffer-file-name))
+             `(("uri" . ,(tip--current-uri))
                ("content" . ,(save-restriction
                                (widen)
                                (buffer-substring-no-properties (point-min)

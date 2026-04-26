@@ -144,21 +144,15 @@ For images, sizes the SVG to fit the preview window with a small margin."
   "Compile the edit-buffer text and update the preview window.
 Splices the edit text into the source buffer's content so context
 (scope, surrounding paragraph) is preserved during compilation.
-Skipped when the source buffer isn't visiting a file — the protocol
-requires a string `uri', and tying it to `buffer-name' would confuse
-project-root discovery."
+URIs flow through `tip--current-uri', which falls back to a synthetic
+`/tmp/tip-unsaved/...' path when the source buffer isn't visiting a
+file — so unsaved buffers still get live preview, just without a
+real project root."
   (let* ((src-buf tip-edit-indirect--source-buffer)
          (ov tip-edit-indirect--source-overlay)
-         (uri (and (buffer-live-p src-buf)
-                   (buffer-local-value 'buffer-file-name src-buf)))
          (new-text (buffer-substring-no-properties (point-min) (point-max))))
-    (cond
-     ((null uri)
-      (tip-edit-indirect--show-preview
-       "Source buffer is not visiting a file — save it to enable live preview."
-       'error))
-     ((and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
-           (not (equal new-text tip-edit-indirect--content-cache)))
+    (when (and src-buf (buffer-live-p src-buf) ov (overlay-buffer ov)
+               (not (equal new-text tip-edit-indirect--content-cache)))
       (setq tip-edit-indirect--content-cache new-text)
       ;; Keep tip-live's cache aligned so a tip-live-mode session that
       ;; coexists with an edit doesn't fight us for the same fragment.
@@ -175,19 +169,19 @@ project-root discovery."
                  (fg (tip--color-to-hex (face-attribute 'default :foreground)))
                  (byte-start (string-bytes before))
                  (byte-end (+ byte-start (string-bytes new-text))))
-            (let ((sync-params `(("uri" . ,(buffer-file-name))
+            (let ((sync-params `(("uri" . ,(tip--current-uri))
                                  ("content" . ,spliced))))
               (when-let ((root (tip--resolve-project-root)))
                 (push (cons "project_root" root) sync-params))
               (tip--send-request "sync" sync-params))
             (tip--send-request
              "compile_fragments"
-             `(("uri" . ,(buffer-file-name))
+             `(("uri" . ,(tip--current-uri))
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                           ("end" . ,byte-end))))
                ("color" . ,fg)
                ("preamble" . ,(tip-build-preamble)))
-             #'tip-edit-indirect--handle-result))))))))
+             #'tip-edit-indirect--handle-result)))))))
 
 (defun tip-edit-indirect--handle-result (result)
   "Display RESULT — image or error — in the preview window."

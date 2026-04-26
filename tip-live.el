@@ -65,7 +65,7 @@
             (tip--sync-buffer)
             (tip--send-request
              "compile_fragments"
-             `(("uri" . ,(buffer-file-name))
+             `(("uri" . ,(tip--current-uri))
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                          ("end" . ,byte-end))))
                ("color" . ,fg)
@@ -120,7 +120,7 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
             (tip--sync-buffer)
             (tip--send-request
              "compile_fragments"
-             `(("uri" . ,(buffer-file-name))
+             `(("uri" . ,(tip--current-uri))
                ("fragments" . ,(vector `(("start" . ,byte-start)
                                          ("end" . ,byte-end))))
                ("color" . ,fg)

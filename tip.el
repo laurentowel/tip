@@ -296,7 +296,7 @@ Buffer-local."
         (message "tip: %d/%d rendered (all from cache)" n n)))
      ;; Send misses to the server, report on response.
      (t
-      (let ((params `(("uri" . ,(buffer-file-name))
+      (let ((params `(("uri" . ,(tip--current-uri))
                       ("fragments" . ,(vconcat misses))
                       ("color" . ,fg)
                       ("preamble" . ,preamble))))
@@ -426,7 +426,7 @@ Prints the dump directory when done so you can copy-paste it."
       ;; One debug_skeleton call for the preamble (doc-wide).
       (tip--send-request
        "debug_skeleton"
-       `(("uri" . ,(buffer-file-name))
+       `(("uri" . ,(tip--current-uri))
          ("start" . 0) ("end" . 0))
        (lambda (result)
          (let ((src (or (alist-get 'source result) "")))
@@ -455,7 +455,7 @@ Prints the dump directory when done so you can copy-paste it."
                 (be (cdr (assoc "end" f))))
             (tip--send-request
              "debug_skeleton"
-             `(("uri" . ,(buffer-file-name))
+             `(("uri" . ,(tip--current-uri))
                ("start" . ,bs) ("end" . ,be))
              (lambda (result)
                (let ((src (or (alist-get 'source result) "")))
@@ -477,7 +477,7 @@ is a generic helper backends call from their `show-skeleton-fn'."
   (tip--sync-buffer)
   (tip--send-request
    "debug_skeleton"
-   `(("uri" . ,(buffer-file-name))
+   `(("uri" . ,(tip--current-uri))
      ("start" . ,byte-start)
      ("end" . ,byte-end))
    (lambda (result)
