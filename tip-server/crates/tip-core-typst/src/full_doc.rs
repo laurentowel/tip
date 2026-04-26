@@ -231,55 +231,75 @@ pub fn extract_fragment_svg(
     // fragments are not a typical case for inline math; we'd need a
     // different strategy (e.g., merge frames) if it ever comes up.
     for (page_idx, page) in doc.pages.iter().enumerate() {
-        let mut keep: Vec<(Point, FrameItem)> = Vec::new();
-        let mut bounds = ItemBounds::empty();
-        let mut max_text_size = Abs::zero();
-        let mut group_baselines: Vec<Abs> = Vec::new();
-        collect_for_fragment(
+        // Step 1: flatten the page's frame tree into a linear leaf
+        // list in iteration order.  Groups become transparent for
+        // leaf-level decisions; their baselines (if set) are
+        // captured separately.
+        let mut leaves: Vec<FlatLeaf> = Vec::new();
+        let mut group_records: Vec<GroupRecord> = Vec::new();
+        flatten_leaves(
             &page.frame,
             Point::zero(),
             main,
             &main_src,
             start,
             end,
-            &mut keep,
-            &mut bounds,
-            &mut max_text_size,
-            &mut group_baselines,
+            &mut leaves,
+            &mut group_records,
         );
+
+        // Step 2: linear "run" pass.  In iteration order, leaves
+        // categorize as InRange (attached span overlaps fragment),
+        // Detached (`span.id() == None` — typst-synthesized math
+        // symbol, accent, auto-space, etc.), or OutAttached (attached
+        // span belonging to a different file or a different fragment).
+        //
+        // OutAttached leaves act as barriers — they end the current
+        // fragment-run and clear any pending detached items.  Detached
+        // leaves either join an active fragment (back-fill if they
+        // preceded the first InRange in the run) or wait for one.
+        //
+        // No spatial tolerance, no magic distance.  This is the
+        // heuristic-elimination pass [H1] in `doc/full-document-approach.md`.
+        let mut keep: Vec<(Point, FrameItem)> = Vec::new();
+        let mut bounds = ItemBounds::empty();
+        let mut max_text_size = Abs::zero();
+        let mut detached_buffer: Vec<usize> = Vec::new();
+        let mut in_fragment = false;
+        for (i, leaf) in leaves.iter().enumerate() {
+            match leaf.category {
+                LeafCategory::InRange => {
+                    for j in detached_buffer.drain(..) {
+                        push_leaf(&leaves[j], &mut keep, &mut bounds, &mut max_text_size);
+                    }
+                    push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
+                    in_fragment = true;
+                }
+                LeafCategory::Detached => {
+                    if in_fragment {
+                        push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
+                    } else {
+                        detached_buffer.push(i);
+                    }
+                }
+                LeafCategory::OutAttached => {
+                    in_fragment = false;
+                    detached_buffer.clear();
+                }
+            }
+        }
+
         if keep.is_empty() || bounds.is_empty() {
             continue;
         }
-        // Pass 2: detached-span glyphs.  Typst synthesizes glyphs
-        // for math symbols (`dif`, `pi`, accents, operators, auto-
-        // spacing) through math-scope resolution; the resulting
-        // TextItems carry spans whose `id() == None` — neither in
-        // the main source nor in any importable file.  These get
-        // dropped by pass 1 even though they're visually part of
-        // the user's fragment.  Pull them back in by spatial
-        // proximity: same line as an in-range item, x within one
-        // em of the cluster's horizontal range.
-        let neighborhood_x = if max_text_size > Abs::zero() {
-            max_text_size
-        } else {
-            Abs::pt(11.0)
-        };
-        let neighborhood_y = Abs::pt(2.0);
-        let bx_min = bounds.min_x - neighborhood_x;
-        let bx_max = bounds.max_x + neighborhood_x;
-        let by_min = bounds.min_y - neighborhood_y;
-        let by_max = bounds.max_y + neighborhood_y;
-        collect_detached_neighbors(
-            &page.frame,
-            Point::zero(),
-            (bx_min, by_min, bx_max, by_max),
-            &mut keep,
-            &mut bounds,
-        );
-        // Baseline reference: prefer surrounding-text baseline on this
-        // page (that's the user's actual line baseline).  Fall back to
-        // the bottom-most fragment text baseline.  Falling further to
-        // the bottom of ink covers Shape-only fragments.
+
+        // Group baselines that belong to fragment-bearing groups.
+        let group_baselines: Vec<Abs> = group_records
+            .iter()
+            .filter(|r| r.has_in_range)
+            .map(|r| r.baseline_y)
+            .collect();
+
         let frag_baselines: Vec<Abs> = keep
             .iter()
             .filter_map(|(p, item)| match item {
@@ -442,53 +462,157 @@ fn span_in_range(
     }
 }
 
-/// Pull in detached-span items (`span.id() == None`) whose position
-/// lies inside `(min_x, min_y, max_x, max_y)`.  These are math-scope
-/// synthesized glyphs (`dif`, `pi`, accents, operators, auto-spacing)
-/// that pass-1 drops because their spans don't resolve to any source
-/// file.  Including by spatial neighborhood is the only signal we have.
-fn collect_detached_neighbors(
+/// One leaf (Text or Shape) flattened from the frame tree, with its
+/// fragment-membership category pre-computed.  Group offsets are
+/// already accumulated into `pos`.
+struct FlatLeaf {
+    pos: Point,
+    item: FrameItem,
+    category: LeafCategory,
+    text_size: Option<Abs>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeafCategory {
+    /// At least one glyph/span overlaps the user's fragment range.
+    InRange,
+    /// All spans have `span.id() == None` (typst-synthesized: math
+    /// symbol, accent, auto-spacing, fallback glyph).  Joins an
+    /// active fragment-run; otherwise waits.
+    Detached,
+    /// At least one attached span is OUT-of-fragment (different file
+    /// or different range).  Acts as a run barrier.
+    OutAttached,
+}
+
+/// A `Group` we walked through and its (possibly set) baseline.
+struct GroupRecord {
+    baseline_y: Abs,
+    has_in_range: bool,
+}
+
+fn classify_text(t: &typst::text::TextItem, main: FileId, src: &Source, start: usize, end: usize) -> LeafCategory {
+    let mut has_in_range = false;
+    let mut has_out_attached = false;
+    for g in &t.glyphs {
+        let span = g.span.0;
+        match span.id() {
+            None => {} // detached
+            Some(id) if id == main => match src.range(span) {
+                Some(r) if r.start < end && r.end > start => has_in_range = true,
+                Some(_) => has_out_attached = true,
+                None => {} // attached-but-unresolvable; treat like detached
+            },
+            Some(_) => has_out_attached = true, // attached to another file
+        }
+    }
+    if has_in_range {
+        LeafCategory::InRange
+    } else if has_out_attached {
+        LeafCategory::OutAttached
+    } else {
+        LeafCategory::Detached
+    }
+}
+
+fn classify_span(span: typst::syntax::Span, main: FileId, src: &Source, start: usize, end: usize) -> LeafCategory {
+    match span.id() {
+        None => LeafCategory::Detached,
+        Some(id) if id == main => match src.range(span) {
+            Some(r) if r.start < end && r.end > start => LeafCategory::InRange,
+            Some(_) => LeafCategory::OutAttached,
+            None => LeafCategory::Detached,
+        },
+        Some(_) => LeafCategory::OutAttached,
+    }
+}
+
+/// Walk the frame tree depth-first, accumulating Group offsets.  Each
+/// leaf becomes a `FlatLeaf`; each Group with `has_baseline()` becomes
+/// a `GroupRecord` flagged with whether any of its descendants are
+/// in-range.  Groups themselves don't appear as leaves — they're
+/// transparent for the run-based pass.
+fn flatten_leaves(
     frame: &Frame,
     offset: Point,
-    bounds: (Abs, Abs, Abs, Abs),
-    keep: &mut Vec<(Point, FrameItem)>,
-    out_bounds: &mut ItemBounds,
+    main: FileId,
+    src: &Source,
+    start: usize,
+    end: usize,
+    out_leaves: &mut Vec<FlatLeaf>,
+    out_groups: &mut Vec<GroupRecord>,
 ) {
-    let (min_x, min_y, max_x, max_y) = bounds;
     for (pos, item) in frame.items() {
         let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
         match item {
             FrameItem::Group(g) => {
-                collect_detached_neighbors(&g.frame, abs, bounds, keep, out_bounds);
+                let before = out_leaves.len();
+                flatten_leaves(&g.frame, abs, main, src, start, end, out_leaves, out_groups);
+                if g.frame.has_baseline() {
+                    let has_in_range = out_leaves[before..]
+                        .iter()
+                        .any(|l| matches!(l.category, LeafCategory::InRange));
+                    out_groups.push(GroupRecord {
+                        baseline_y: abs.y + g.frame.baseline(),
+                        has_in_range,
+                    });
+                }
             }
             FrameItem::Text(t) => {
-                // Only consider TextItems whose glyphs ALL have detached
-                // spans.  Items with at least one resolvable-but-not-in-
-                // fragment span belong elsewhere (different fragment,
-                // imported module) and must not be co-opted.
-                let any_attached = t.glyphs.iter().any(|g| g.span.0.id().is_some());
-                if any_attached {
-                    continue;
-                }
-                if abs.x < min_x || abs.x > max_x || abs.y < min_y || abs.y > max_y {
-                    continue;
-                }
-                // Avoid duplicate insertion if pass 1 somehow pushed it.
-                if keep.iter().any(|(p, _)| p.x == abs.x && p.y == abs.y) {
-                    continue;
-                }
-                let bbox = t.bbox();
-                out_bounds.extend(
-                    abs.x + bbox.min.x,
-                    abs.y + bbox.max.y,
-                    abs.x + bbox.max.x,
-                    abs.y + bbox.min.y,
-                );
-                keep.push((abs, FrameItem::Text(t.clone())));
+                out_leaves.push(FlatLeaf {
+                    pos: abs,
+                    item: FrameItem::Text(t.clone()),
+                    category: classify_text(t, main, src, start, end),
+                    text_size: Some(t.size),
+                });
+            }
+            FrameItem::Shape(shape, span) => {
+                out_leaves.push(FlatLeaf {
+                    pos: abs,
+                    item: FrameItem::Shape(shape.clone(), *span),
+                    category: classify_span(*span, main, src, start, end),
+                    text_size: None,
+                });
             }
             _ => {}
         }
     }
+}
+
+/// Append a leaf to the kept items, extending bounds and the
+/// running max_text_size.  The bbox y-flip mirrors what the synthetic
+/// compiler does in `find_ink_extent` (TextItem::bbox returns
+/// glyph-coord y, so frame-top is `bbox.max.y` and frame-bottom is
+/// `bbox.min.y`).
+fn push_leaf(
+    leaf: &FlatLeaf,
+    keep: &mut Vec<(Point, FrameItem)>,
+    bounds: &mut ItemBounds,
+    max_text_size: &mut Abs,
+) {
+    match &leaf.item {
+        FrameItem::Text(t) => {
+            let bbox = t.bbox();
+            bounds.extend(
+                leaf.pos.x + bbox.min.x,
+                leaf.pos.y + bbox.max.y,
+                leaf.pos.x + bbox.max.x,
+                leaf.pos.y + bbox.min.y,
+            );
+            if let Some(s) = leaf.text_size {
+                if s > *max_text_size {
+                    *max_text_size = s;
+                }
+            }
+        }
+        FrameItem::Shape(_, _) => {
+            // Shape geometry: contribute a 1-pt bbox at position.
+            // Proper Geometry walking is on the readiness checklist.
+            bounds.extend(leaf.pos.x, leaf.pos.y, leaf.pos.x, leaf.pos.y);
+        }
+        _ => {}
+    }
+    keep.push((leaf.pos, leaf.item.clone()));
 }
 
 /// Find a surrounding-text baseline on `frame` (a page) for an
@@ -639,88 +763,6 @@ fn walk_external_size(
                     .any(|gl| span_in_range(gl.span.0, main, src, exclude_start, exclude_end));
                 if !any_in {
                     out.push((abs.y, t.size));
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn collect_for_fragment(
-    frame: &Frame,
-    offset: Point,
-    main: FileId,
-    src: &Source,
-    start: usize,
-    end: usize,
-    keep: &mut Vec<(Point, FrameItem)>,
-    bounds: &mut ItemBounds,
-    max_text_size: &mut Abs,
-    group_baselines: &mut Vec<Abs>,
-) {
-    for (pos, item) in frame.items() {
-        let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
-        match item {
-            FrameItem::Group(g) => {
-                let prev_keep_len = keep.len();
-                collect_for_fragment(
-                    &g.frame,
-                    abs,
-                    main,
-                    src,
-                    start,
-                    end,
-                    keep,
-                    bounds,
-                    max_text_size,
-                    group_baselines,
-                );
-                // If this Group contributed in-range items AND has an
-                // explicit baseline (Typst sets this on math equations
-                // and similar layout containers), capture its baseline
-                // — that's the canonical baseline the synthetic strategy
-                // already uses via `find_group_baseline`, and it sits
-                // ~0.5 pt above raw TextItem `pos.y` due to the math-
-                // axis alignment.  Without this our depth shrinks and
-                // the displayed image floats above the line.
-                if keep.len() > prev_keep_len && g.frame.has_baseline() {
-                    group_baselines.push(abs.y + g.frame.baseline());
-                }
-            }
-            FrameItem::Text(t) => {
-                let any = t
-                    .glyphs
-                    .iter()
-                    .any(|g| span_in_range(g.span.0, main, src, start, end));
-                if any {
-                    // `text.bbox()` returns glyph-coord y (y-up).  In
-                    // frame coords (y-down) the FRAME-TOP is `bbox.max.y`
-                    // (a negative number above the baseline) and the
-                    // FRAME-BOTTOM is `bbox.min.y` (positive, descender).
-                    // Same flip the synthetic compiler uses in
-                    // `find_ink_extent`.
-                    let bbox = t.bbox();
-                    bounds.extend(
-                        abs.x + bbox.min.x,
-                        abs.y + bbox.max.y,
-                        abs.x + bbox.max.x,
-                        abs.y + bbox.min.y,
-                    );
-                    if t.size > *max_text_size {
-                        *max_text_size = t.size;
-                    }
-                    keep.push((abs, FrameItem::Text(t.clone())));
-                }
-            }
-            FrameItem::Shape(shape, span) => {
-                if span_in_range(*span, main, src, start, end) {
-                    // Shape geometry: use a coarse bbox from the
-                    // shape's own size info.  `Geometry` exposes this
-                    // via `bbox_size` on Line/Rect/Path; for simplicity
-                    // we extend by a small region around the position.
-                    // SVG-level cropping picks up the rest.
-                    bounds.extend(abs.x, abs.y, abs.x, abs.y);
-                    keep.push((abs, FrameItem::Shape(shape.clone(), *span)));
                 }
             }
             _ => {}
@@ -1113,6 +1155,42 @@ $x + y$ default size
              detached `dif` glyph likely dropped",
             f_dif.width_pt,
             f_x.width_pt
+        );
+    }
+
+    /// Back-to-back math fragments separated only by `dif`-style
+    /// detached glyphs MUST NOT cross-contaminate.  The run-based
+    /// algorithm should treat the prose word "and" between them as
+    /// an OutAttached barrier, partitioning detached items by which
+    /// fragment they belong to.
+    #[test]
+    fn run_pass_partitions_detached_between_fragments() {
+        let mut world = TipWorld::new();
+        let src = "$dif x$ and $dif y$\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r1 = locate(src, "$dif x$");
+        let r2 = locate(src, "$dif y$");
+        let f1 = extract_fragment_svg(&world, &doc, r1.start, r1.end).unwrap();
+        let f2 = extract_fragment_svg(&world, &doc, r2.start, r2.end).unwrap();
+        // Each fragment should be wider than just `x` or `y` — so its
+        // own `dif` glyph is included.  Their widths should be similar
+        // (same glyphs, same context).
+        assert!(
+            f1.width_pt > 8.0,
+            "fragment 1 missing dif: w={:.2}",
+            f1.width_pt
+        );
+        assert!(
+            f2.width_pt > 8.0,
+            "fragment 2 missing dif: w={:.2}",
+            f2.width_pt
+        );
+        assert!(
+            (f1.width_pt - f2.width_pt).abs() < 4.0,
+            "fragment widths drifted, suggesting cross-contamination: \
+             f1={:.2} f2={:.2}",
+            f1.width_pt,
+            f2.width_pt
         );
     }
 
