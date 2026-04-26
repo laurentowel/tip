@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 
 use tip_core_typst::compiler::FragmentCompiler;
 use tip_core_typst::document::DocumentStore;
+use tip_core_typst::full_doc::FullDocCompiler;
 use tip_core_typst::world::TipWorld;
+use tip_core_typst::CompileStrategy;
 use tip_protocol::messages::*;
 
 pub struct TypstBackend {
     documents: DocumentStore,
     world: TipWorld,
+    strategy: CompileStrategy,
 }
 
 impl TypstBackend {
@@ -15,6 +18,7 @@ impl TypstBackend {
         Self {
             documents: DocumentStore::new(),
             world: TipWorld::new(),
+            strategy: CompileStrategy::from_env(),
         }
     }
 
@@ -71,6 +75,17 @@ impl TypstBackend {
                 }
             }
         };
+
+        // Strategy dispatch: try `FullDoc` when configured; on any
+        // failure (currently always — it's a stub) fall through to the
+        // synthetic per-fragment path so the user never sees a regression.
+        if matches!(self.strategy, CompileStrategy::FullDoc) {
+            if let Ok(results) =
+                FullDocCompiler::compile_all(&mut self.world, &content, &params.fragments)
+            {
+                return ResponseResult::Fragments { fragments: results };
+            }
+        }
 
         let mut results = Vec::new();
         for frag_loc in &params.fragments {
