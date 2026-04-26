@@ -55,8 +55,25 @@ Fields:
   "Alist mapping backend name → `tip-backend' struct.")
 
 (defun tip-register-backend (backend)
-  "Register BACKEND in `tip-backends', replacing any entry with the same name."
-  (setf (alist-get (tip-backend-name backend) tip-backends) backend))
+  "Register BACKEND in `tip-backends', replacing any entry with the same name.
+Refuses stale structs left over from an older `cl-defstruct' layout —
+re-`load' the backend's .el file when this fires."
+  (condition-case _
+      ;; Touch every accessor so a struct missing newly-added slots
+      ;; fails here with a clear message rather than later from a
+      ;; cryptic `args-out-of-range' deep in dispatch.
+      (let ((name (tip-backend-name backend)))
+        (ignore (tip-backend-major-modes backend)
+                (tip-backend-collect-fragments-fn backend)
+                (tip-backend-bounds-at-point-fn backend)
+                (tip-backend-build-preamble-fn backend)
+                (tip-backend-classify-fragment-fn backend)
+                (tip-backend-server-executable backend)
+                (tip-backend-show-skeleton-fn backend))
+        (setf (alist-get name tip-backends) backend))
+    (args-out-of-range
+     (error "tip-register-backend: stale `tip-backend' struct (older slot \
+layout); re-load the backend's source file"))))
 
 (defvar-local tip--active-backend nil
   "Cached active backend for this buffer.  Reset when major mode changes.")
