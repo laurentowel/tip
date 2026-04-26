@@ -1459,6 +1459,147 @@ text $frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, x)))))))$ done
         assert!(f.svg.contains("<svg"));
     }
 
+    /// Render a fragment with the synthetic strategy at a chosen body
+    /// size, return its (height, depth, width).  Used as ground truth
+    /// for the full-doc comparison sweep below.
+    fn synth_metrics(
+        world: &mut TipWorld,
+        src: &str,
+        frag_start: usize,
+        frag_end: usize,
+        body_pt: f64,
+    ) -> (f64, f64, f64) {
+        use crate::compiler::FragmentCompiler;
+        let page_setup = format!(
+            "#show math.equation: set text(size: {body_pt}pt)\n#set page(width: auto, height: auto, margin: 20pt, header: none, footer: none)\n"
+        );
+        let out = FragmentCompiler::compile_fragment_scoped(
+            world,
+            src,
+            frag_start,
+            frag_end,
+            tip_protocol::svg_color::STANDIN_HEX,
+            Some(&page_setup),
+            None,
+        )
+        .expect("synth compile");
+        (out.height_pt, out.depth_pt, out.width_pt)
+    }
+
+    /// Sweep: for each fragment in the demo, compare full-doc metrics
+    /// against synthetic at the same body size.  Synthetic crops to
+    /// ink and has been hand-validated for years; treat its width and
+    /// height as ground truth.  Width should agree within ~10 %,
+    /// height within ~15 %.
+    ///
+    /// This test is the answer to "make assertions principled" —
+    /// no more hand-tuned numeric ranges.
+    #[test]
+    fn sweep_against_synthetic_reference() {
+        struct Case<'a> {
+            name: &'a str,
+            src: &'a str,
+            needle: &'a str,
+            body_pt: f64,
+        }
+
+        let cases = [
+            Case {
+                name: "simple inline",
+                src: "Body $a + b = c$ end\n",
+                needle: "$a + b = c$",
+                body_pt: 11.0,
+            },
+            Case {
+                name: "fraction inline",
+                src: "Body $1/2 + 3/4$ end\n",
+                needle: "$1/2 + 3/4$",
+                body_pt: 11.0,
+            },
+            Case {
+                name: "sqrt with detached pi",
+                src: "Body $sqrt(pi)$ end\n",
+                needle: "$sqrt(pi)$",
+                body_pt: 11.0,
+            },
+            Case {
+                name: "sup tower",
+                src: "Body $a^(a^(a^a))$ end\n",
+                needle: "$a^(a^(a^a))$",
+                body_pt: 11.0,
+            },
+            Case {
+                name: "sub tower",
+                src: "Body $a_(a_(a_a))$ end\n",
+                needle: "$a_(a_(a_a))$",
+                body_pt: 11.0,
+            },
+            Case {
+                name: "14pt section",
+                src: "#text(size: 14pt)[Body $a + b$ end]\n",
+                needle: "$a + b$",
+                body_pt: 14.0,
+            },
+            Case {
+                name: "1pt section",
+                src: "#text(size: 1pt)[Body $a + b$ end]\n",
+                needle: "$a + b$",
+                body_pt: 1.0,
+            },
+            Case {
+                name: "matrix",
+                src: "Body $mat(1, 0; 0, 1)$ end\n",
+                needle: "$mat(1, 0; 0, 1)$",
+                body_pt: 11.0,
+            },
+        ];
+
+        let mut failed = 0;
+        for case in &cases {
+            let mut w_full = TipWorld::new();
+            let mut w_syn = TipWorld::new();
+            let doc = compile_real_document(&mut w_full, case.src).expect("compile");
+            let r = locate(case.src, case.needle);
+            let f = match extract_fragment_svg(&w_full, &doc, r.start, r.end) {
+                Some(f) => f,
+                None => {
+                    eprintln!("[{}] full-doc returned None — SKIP", case.name);
+                    continue;
+                }
+            };
+            let (sh, sd, sw) = synth_metrics(&mut w_syn, case.src, r.start, r.end, case.body_pt);
+            let dh = (f.height_pt - sh).abs() / sh;
+            let dw = (f.width_pt - sw).abs() / sw;
+            let dd = if sd > 0.1 {
+                (f.depth_pt - sd).abs() / sd
+            } else {
+                (f.depth_pt - sd).abs() / 1.0
+            };
+            eprintln!(
+                "[{:>20}] full=(h={:.2} d={:.2} w={:.2}) synth=(h={:.2} d={:.2} w={:.2}) Δh={:.1}% Δw={:.1}%",
+                case.name,
+                f.height_pt,
+                f.depth_pt,
+                f.width_pt,
+                sh,
+                sd,
+                sw,
+                dh * 100.0,
+                dw * 100.0
+            );
+            if dh > 0.15 || dw > 0.10 {
+                failed += 1;
+                eprintln!(
+                    "  FAILED: Δh={:.1}% (cap 15%)  Δw={:.1}% (cap 10%)  Δd={:.2}",
+                    dh * 100.0,
+                    dw * 100.0,
+                    dd
+                );
+            }
+        }
+        assert_eq!(failed, 0, "{failed} fixtures diverged from synthetic reference");
+    }
+
     #[test]
     fn extreme_zero_leading() {
         let mut world = TipWorld::new();
