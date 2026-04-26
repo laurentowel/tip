@@ -1,3 +1,4 @@
+pub mod baseline;
 pub mod bottom_up;
 pub mod document;
 pub mod top_down;

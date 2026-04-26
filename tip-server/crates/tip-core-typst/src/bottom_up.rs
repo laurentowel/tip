@@ -3,6 +3,10 @@ use typst::layout::PagedDocument;
 use typst::syntax::SyntaxKind;
 use typst_svg::svg;
 
+use crate::baseline::{
+    collect_text_items, find_font_ascent, find_ink_extent,
+    find_outermost_group_baseline, pick_baseline_y,
+};
 use crate::world::TipWorld;
 
 /// Detect display math. In Typst, display math has whitespace after opening `$`.
@@ -190,91 +194,6 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
     }
 }
 
-/// Ink bounds of all rendered content.
-struct InkBounds {
-    min_x: f64,
-    max_x: f64,
-    min_y: f64,
-    max_y: f64,
-}
-
-impl InkBounds {
-    fn empty() -> Self {
-        InkBounds { min_x: f64::MAX, max_x: f64::MIN, min_y: f64::MAX, max_y: f64::MIN }
-    }
-    fn is_empty(&self) -> bool { self.min_y > self.max_y }
-    fn width(&self) -> f64 { (self.max_x - self.min_x).max(0.0) }
-}
-
-/// Find the ink extent of all rendered content in page coordinates.
-fn find_ink_extent(frame: &typst::layout::Frame, x_offset: f64, y_offset: f64) -> InkBounds {
-    use typst::layout::FrameItem;
-    use typst::visualize::Geometry;
-
-    let mut bounds = InkBounds::empty();
-
-    for (pos, item) in frame.items() {
-        let item_x = x_offset + pos.x.to_pt();
-        let item_y = y_offset + pos.y.to_pt();
-        match item {
-            FrameItem::Text(text) => {
-                // Use actual glyph bounding boxes from the font.
-                // bbox() flips y to frame coords: max.y is top (negative),
-                // min.y is bottom (positive).
-                let bbox = text.bbox();
-                bounds.min_x = bounds.min_x.min(item_x + bbox.min.x.to_pt());
-                bounds.max_x = bounds.max_x.max(item_x + bbox.max.x.to_pt());
-                bounds.min_y = bounds.min_y.min(item_y + bbox.max.y.to_pt());
-                bounds.max_y = bounds.max_y.max(item_y + bbox.min.y.to_pt());
-            }
-            FrameItem::Group(group) => {
-                let child = find_ink_extent(&group.frame, item_x, item_y);
-                bounds.min_x = bounds.min_x.min(child.min_x);
-                bounds.max_x = bounds.max_x.max(child.max_x);
-                bounds.min_y = bounds.min_y.min(child.min_y);
-                bounds.max_y = bounds.max_y.max(child.max_y);
-            }
-            FrameItem::Shape(shape, _) => {
-                // Use actual geometry dimensions instead of ±0.5pt guess.
-                match &shape.geometry {
-                    Geometry::Line(target) => {
-                        let tx = item_x + target.x.to_pt();
-                        let ty = item_y + target.y.to_pt();
-                        bounds.min_x = bounds.min_x.min(item_x.min(tx));
-                        bounds.max_x = bounds.max_x.max(item_x.max(tx));
-                        bounds.min_y = bounds.min_y.min(item_y.min(ty));
-                        bounds.max_y = bounds.max_y.max(item_y.max(ty));
-                    }
-                    Geometry::Rect(size) => {
-                        bounds.min_x = bounds.min_x.min(item_x);
-                        bounds.max_x = bounds.max_x.max(item_x + size.x.to_pt());
-                        bounds.min_y = bounds.min_y.min(item_y);
-                        bounds.max_y = bounds.max_y.max(item_y + size.y.to_pt());
-                    }
-                    Geometry::Curve(_) => {
-                        // Curves (radical signs etc.) — use position as approximation.
-                        // Full curve bbox would require walking all segments.
-                        bounds.min_x = bounds.min_x.min(item_x);
-                        bounds.max_x = bounds.max_x.max(item_x);
-                        bounds.min_y = bounds.min_y.min(item_y);
-                        bounds.max_y = bounds.max_y.max(item_y);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if bounds.is_empty() {
-        InkBounds {
-            min_x: 0.0, max_x: 0.0,
-            min_y: 0.0, max_y: 0.0,
-        }
-    } else {
-        bounds
-    }
-}
-
 /// Crop the SVG by rewriting its viewBox and height attributes.
 fn crop_svg_viewbox(
     svg: &str,
@@ -324,7 +243,7 @@ fn find_baseline_depth(
     }
 
     // Strategy 1: walk Groups for explicit baselines.
-    if let Some(bl) = find_group_baseline(frame, y_offset) {
+    if let Some(bl) = find_outermost_group_baseline(frame, y_offset) {
         return Some(bl);
     }
 
@@ -369,85 +288,6 @@ fn find_baseline_depth(
         }
     }
     None
-}
-
-/// Walk the frame tree looking for a Group with an explicit baseline.
-/// Returns the baseline y-position in page coordinates.
-fn find_group_baseline(frame: &typst::layout::Frame, y_offset: f64) -> Option<f64> {
-    use typst::layout::FrameItem;
-    for (pos, item) in frame.items() {
-        if let FrameItem::Group(g) = item {
-            let gy = y_offset + pos.y.to_pt();
-            if g.frame.has_baseline() {
-                return Some(gy + g.frame.baseline().to_pt());
-            }
-            if let Some(bl) = find_group_baseline(&g.frame, gy) {
-                return Some(bl);
-            }
-        }
-    }
-    None
-}
-
-/// Extract the font's ascent as a ratio of em from the first text item.
-fn find_font_ascent(frame: &typst::layout::Frame) -> Option<f64> {
-    use typst::layout::FrameItem;
-    for (_pos, item) in frame.items() {
-        match item {
-            FrameItem::Text(t) => {
-                let ttf = t.font.ttf();
-                let em = ttf.units_per_em() as f64;
-                return Some(ttf.ascender() as f64 / em);
-            }
-            FrameItem::Group(g) => {
-                if let Some(r) = find_font_ascent(&g.frame) {
-                    return Some(r);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Recursively collect text items as (font_size_pt, y_from_page_top).
-fn collect_text_items(
-    frame: &typst::layout::Frame,
-    y_offset: f64,
-    out: &mut Vec<(f64, f64)>,
-) {
-    use typst::layout::FrameItem;
-
-    for (pos, item) in frame.items() {
-        match item {
-            FrameItem::Text(text) => {
-                out.push((text.size.to_pt(), y_offset + pos.y.to_pt()));
-            }
-            FrameItem::Group(group) => {
-                let child_y = y_offset + pos.y.to_pt();
-                collect_text_items(&group.frame, child_y, out);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Pick the math baseline y from same-size candidates.
-/// - 1 item: that y
-/// - 2 items far apart (>2pt): largest y (base char of accent pair like hat(G))
-/// - Otherwise: closest to page midpoint (matrix row at math axis)
-fn pick_baseline_y(ys: &[f64], page_mid: f64) -> f64 {
-    if ys.len() == 2 && (ys[0] - ys[1]).abs() > 2.0 {
-        return ys[0].max(ys[1]);
-    }
-    *ys.iter()
-        .min_by(|a, b| {
-            (*a - page_mid)
-                .abs()
-                .partial_cmp(&(*b - page_mid).abs())
-                .unwrap()
-        })
-        .unwrap_or(&page_mid)
 }
 
 /// Build a scope-aware source by extracting only scope-defining statements
