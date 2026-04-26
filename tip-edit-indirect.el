@@ -183,16 +183,9 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
            (text (buffer-substring-no-properties beg end))
            (src-buf (current-buffer))
            (ov (make-overlay beg end))
-           ;; Sanitize the fragment text for the buffer name: collapse
-           ;; any internal whitespace run (newlines, tabs) into a single
-           ;; space, then trim and truncate.  Without this, display
-           ;; math like `$\n  x^2\n$` produces a buffer name with a
-           ;; literal `^J` in it.
-           (label (truncate-string-to-width
-                   (string-trim
-                    (replace-regexp-in-string "[ \t\n\r]+" " " text))
-                   30))
-           (edit-buf (generate-new-buffer (format "*tip-edit:%s*" label)))
+           ;; `generate-new-buffer' uniquifies with `<2>', `<3>' etc.
+           ;; if a previous edit buffer is still around.
+           (edit-buf (generate-new-buffer "*tip-edit*"))
            (preview-buf (tip-edit-indirect--ensure-preview-buffer)))
       ;; Mark source region so the user can't edit it from elsewhere.
       (overlay-put ov 'face 'highlight)
