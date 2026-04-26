@@ -2,14 +2,20 @@
 
 ## Status: Implemented (Opt-In)
 
-`TIP_COMPILE_STRATEGY=full-doc` switches the Typst backend to a single
-full-document compile + per-fragment frame extraction.  Default is still
-`Synthetic` (one compile per fragment).  See `tip-server/crates/tip-core-typst/src/full_doc.rs`.
+`TIP_COMPILE_STRATEGY=full-doc` switches the Typst backend's batch
+path (`compile_fragments`) to a single full-document compile +
+per-fragment frame extraction.  Live preview (`compile_live`)
+always uses the synthetic path regardless of strategy — see the
+*Strategy Precedence Convention* below for why.  Default is still
+`Synthetic` (one compile per fragment).  See `full_doc.rs` and
+`typst_backend.rs::handle_compile_fragments` /
+`handle_compile_live`.
 
-This essay started as an architecture study (June 2026, while the
-synthetic strategy was the only path).  It is now a post-implementation
-record: what survived contact with Typst, where we landed, and the
-heuristics still on the page that we want to eliminate.
+This essay started as an architecture study (April 2026, while the
+synthetic strategy was the only path).  It is now a post-
+implementation record: what survived contact with Typst, where we
+landed, the heuristics that needed eliminating (all eliminated as
+of this revision), measured performance, and the dispatch policy.
 
 ## The Core Insight
 
@@ -237,112 +243,70 @@ fn extract_fragment_svg(world, doc, byte_start, byte_end) -> Option<FragmentRend
 }
 ```
 
-## The Heuristics We Want to Eliminate
+## Heuristics — All Eliminated
 
-The study's claim ("no baseline heuristics") didn't survive contact
-with reality.  But each of the tunables below has a principled
-replacement waiting — listed in priority order.
+The study's claim ("no baseline heuristics") survived contact with
+reality after a few iterations.  All four numbered heuristics are
+gone.  The remaining "magic numbers" are render slack and floating-
+point tolerance, not layout decisions.
 
-### [H1] Spatial neighborhood for detached glyphs
+### [H1] Spatial neighborhood for detached glyphs — **eliminated**
 
-**What it is:** detached-span TextItems (math-scope synthesized glyphs)
-are pulled in if their absolute position lies within (`max_text_size`,
-`2 pt`) of the in-range cluster's bbox.
+Was: `(neighborhood_x = max_text_size, neighborhood_y = 2 pt)` —
+detached `TextItem`s (`span.id() == None`, math-scope synthesized
+glyphs like `dif`, `pi`, accents) were pulled in if their absolute
+position lay within that window.  Empirical, fragile.
 
-**Why it's heuristic:** the (`one em`, `2 pt`) window is empirical.
-Adjacent fragments on the same line within `one em` of each other
-would be incorrectly co-opted (the same line normally has > 1 em of
-prose between math fragments, but it's not guaranteed).
+Now: **run-based detection**.  Walk leaves in iteration order with
+a state machine — InRange leaves anchor the run, Detached leaves
+join an active run (back-fill if before the first InRange),
+OutAttached leaves end the run and clear pending Detached.  No
+distance, no angle, no spatial guess.
 
-**Principled replacement: Group containment.**  If any descendant of a
-`FrameItem::Group` has an in-range span, the Group represents a math
-equation belonging to the fragment, and ALL of its descendants belong
-to the fragment.  No distance threshold needed.
+Implemented in `flatten_leaves` + the linear pass in
+`extract_from_index`.
 
-**Catch:** simple math is inlined directly into the page frame — no
-Group wrapping it.  For inlined math, we'd need to identify the math
-*run* — a contiguous sequence of TextItems on the same y, mixing
-in-range and detached spans, separated from other content by
-non-math TextItems with valid spans.
+### [H2] External-baseline tolerance — **scaled**
 
-**Implementation sketch:**
-1. Walk frame items in iteration order, recording each leaf's
-   `(pos, span, span_status)`.
-2. Form *runs*: maximal sequences of consecutive leaves on the same y
-   (within ~0.1 pt — floating-point tol, not a layout heuristic).
-3. A run "belongs to" a fragment if any leaf has an in-range span and
-   no leaf has a non-detached out-of-range span.
-4. Include the whole run.
+Was: fixed 6 pt window for "same line as fragment".  Catastrophic at
+1 pt body where the next paragraph's text falls within 6 pt.
 
-This eliminates `neighborhood_x` and `neighborhood_y` and replaces
-them with a frame-traversal property.
+Now: `line_tol = max(0.5 pt, max_text_size × 0.5)` — half an em,
+which is half a default line height.  Scales with the fragment's
+own font size, never spans lines at any sane body size.
 
-### [H2] External-baseline tolerance for sub/super-only fragments
+### [H3] `SHIFT_THRESHOLD` — **deleted (dead code)**
 
-**What it is:** when no Group baseline is available and the fragment's
-own TextItems are all super-shifted (no item near line baseline), we
-look at OUT-OF-FRAGMENT TextItems within 6 pt vertical of any fragment
-baseline and take the maximum y as the line baseline.
+Was: 2 pt threshold to distinguish "fragment-own baseline ~= line
+baseline" from "fragment is sub/super-shifted".
 
-**Why it's heuristic:** 6 pt was chosen empirically — narrower than the
-default 13 pt line spacing, wider than the ~5 pt super-shift.  At
-unusual line spacings (e.g. `#set par(leading: 0.4em)` at 11 pt body
-gives ~4.4 pt spacing) the tolerance could span lines.  At very large
-font sizes the super-shift may exceed 6 pt.
+Now: redundant.  The picker priority is:
 
-**Principled replacement: derive from layout.**
+  1. Outermost Group baseline (canonical math equation baseline,
+     present for every wrapped math equation including sub/super
+     towers and continued fractions);
+  2. External (surrounding-text line baseline) — fires for inlined
+     math without a Group, and for sub/super-shifted fragments
+     whose own baselines are far from the line;
+  3. Fragment-own max baseline — for display math without
+     surrounding text.
 
-Option A — **walk for the math line break**.  Math is laid out within
-a paragraph, and the paragraph has a known leading.  Read it from the
-World's resolved style at the math's source position and use
-`leading × 0.5` as the same-line tolerance.  Concrete, scales with
-the doc.
+Once we always pick the OUTERMOST Group (post-order, last entry),
+inner sub/sup-shifted Groups never compete.  Threshold not needed.
 
-Option B — **prefer Group baseline always**.  Force-wrap math frames
-in Groups during a custom layout pass so we always get
-`frame.has_baseline()`.  Requires reaching into Typst's math layout —
-larger change, may conflict with future Typst.
+### [H4] Font-size lookup tolerance — **unified with [H2]**
 
-Option A is incremental and fits today's architecture.
+Now uses the same `line_tol` as the baseline picker.  No separate
+tunable.
 
-### [H3] `SHIFT_THRESHOLD = 2 pt` for "fragment is sub/super-shifted"
+### Remaining "magic numbers" (not heuristics)
 
-**What it is:** when both `frag_max` (fragment's bottommost baseline)
-and `external` (surrounding-text baseline) are available, prefer
-external when `external - frag_max > 2 pt`.
-
-**Why it's heuristic:** 2 pt distinguishes "0.5 pt math-axis offset"
-(prefer fragment) from "5 pt super-shift" (prefer external).  Works
-at 11 pt body but the scale is hardcoded.
-
-**Principled replacement: scale with font size.**  The math-axis
-offset is a fraction of font size (~0.05 em).  The super-shift is a
-larger fraction (~0.4 em).  `SHIFT_THRESHOLD = 0.2 × font_size` would
-scale correctly across body sizes.
-
-Better yet, **make the picker monotonic in evidence quality**:
-
-1. Group baseline (canonical math layout baseline)
-2. External line baseline (surrounding prose's `pos.y`)
-3. Fragment-own max baseline
-
-If we ever have an external baseline, it's always at least as
-authoritative as fragment-own — line baselines are paragraph
-properties, not math properties.  Drop the threshold and just prefer
-in priority order.  This is closer to the synthetic compiler's
-behavior already.
-
-### [H4] Font-size lookup tolerance
-
-**What it is:** `find_external_line_size` uses the same 6 pt vertical
-tolerance as the baseline picker to find the surrounding paragraph's
-text size.
-
-**Why it's heuristic:** same reason as [H2].
-
-**Principled replacement:** unify with [H2].  When we know the line
-baseline, the line's text size is the size of any TextItem at that y.
-Same code path, no separate tolerance.
+- **`pad = 0.5 pt`** — anti-aliasing slack around the cropped frame.
+  Not a layout decision; both synth and full-doc use it.
+- **`line_tol = 0.5 × max_text_size`** factor — half an em is half a
+  default line height (Typst's default `leading: 0.6em`).  Could be
+  refined by reading actual `leading` from the resolved paragraph
+  style, but the approximation is sound.
 
 ## What Was Eliminated as Promised
 
@@ -374,36 +338,128 @@ again, full-doc kicks back in.
 ## Performance
 
 **Theoretical**: one compile vs N.  Per-fragment extraction is cheap
-(frame walk + svg_frame on a small frame).  Typst's internal layout
-parallelism kicks in for the single full-document compile.
+(linear scan over a pre-flattened leaf vec + `svg_frame` on a small
+frame).  Typst's internal layout parallelism kicks in for the
+single full-document compile.
 
-**Measured**: not yet.  This is the largest unmeasured claim in the
-feature.  Need:
+### Measured (release, math-heavy random corpus)
 
-- Cold-cache compile cost on a 50-page paper
-- Warm-cache (one-character-edit) cost on the same doc
-- Comparison against synthetic per-fragment cost on the same fragments
+#### Batch render (`compile_fragments`)
+
+| Lines | Fragments | Synth        | Full-doc | Speedup |
+|-------|-----------|--------------|----------|---------|
+| 50    | 110       | 70 ms        | 21 ms    | 3×      |
+| 500   | 1018      | 1.3 s        | 660 ms   | 2×      |
+| 1000  | 1973      | 4.8 s        | ~1 s     | 5×      |
+| 2000  | 3931      | 19 s         | 8.9 s    | 2×      |
+| 5000  | 9969      | ~120 s (extp)| 1.67 s   | 75×     |
+
+Synth's per-fragment cost grows linearly with content size (its
+synthetic skeleton extraction re-parses the whole document each
+time), so it's quadratic in N×L.  Full-doc has the same linear scan
+per fragment but the page is flattened ONCE — bottleneck went from
+51 s/page (calling `Source::range` 100k times) to 5 ms after
+indexing spans up front.
+
+The 75× gap at 5000 lines is the headline: at this scale synth
+becomes unusable for batch render.
+
+#### Live-edit latency (`compile_live`-equivalent path)
+
+Per-keystroke cost (ms) typing a fresh fragment after an N-line doc:
+
+| N lines | Strategy | avg  | p50  | p90    | p99    | max     |
+|---------|----------|------|------|--------|--------|---------|
+| 100     | full-doc | 11.5 | 0.5  | 33.7   | 35.7   | 35.7    |
+|         | synth    | 0.4  | 0.3  | 0.5    | 0.8    | 0.8     |
+| 1000    | full-doc | 67   | 4.8  | 273    | 286    | 286     |
+|         | synth    | 3.0  | 2.9  | 3.4    | 5.4    | 5.4     |
+| 2000    | full-doc | 175  | 13   | 699    | 720    | 720     |
+|         | synth    | 8.1  | 8.1  | 9.7    | 10.4   | 10.4    |
+| 5000    | full-doc | 1485 | 39   | **5549** | 5795 | 5795    |
+|         | synth    | 28.9 | 28.7 | 30.6   | 32.1   | 32.1    |
+
+Synth: linear in doc size, no outliers, sub-30 ms even at 5000
+lines.
+
+Full-doc median is competitive (sub-40 ms even at 5000), but the
+**tail** is catastrophic — p99 climbs from 36 ms to 5.7 s as the
+doc grows.  comemo cache misses on mid-edit syntax errors trigger
+full re-layout.  Unsuitable for keystroke-rate workloads on large
+docs.
+
+## Strategy Precedence Convention
+
+The two strategies are not mutually exclusive — they shine in
+different regimes.  The dispatch should match the call site's
+latency budget:
+
+| Call site                  | Budget                | Strategy |
+|----------------------------|-----------------------|----------|
+| `compile_fragments` (batch / cursor-transition / explicit re-render) | 200 ms tolerable, occasional 1–5 s on tail acceptable | **full-doc** (synth fallback on doc-level Err) |
+| `compile_live` (per-keystroke childframe preview) | 30 ms hard ceiling | **synth** always |
+| (any) document doesn't compile | — | **synth fallback** for per-fragment error reporting |
+
+Encoded in `tip-server/crates/tip-server/src/typst_backend.rs`:
+
+- `handle_compile_fragments`: tries full-doc, falls back to synth
+  on document-level error.
+- `handle_compile_live`: always synth (regardless of
+  `TIP_COMPILE_STRATEGY`).  See commit `9f09287` and the bench
+  data above for the data-driven decision.
+
+### Why these choices
+
+- **Correctness > tail latency for batch.**  The phantom-base
+  superscript, mixed-size sections, and external-baseline cases
+  all need full-doc; they only get rendered correctly when the
+  user leaves the fragment and the batch path runs.
+- **Latency > correctness for live.**  Synth's worst case is
+  consistent (linear in doc size); full-doc's worst case is
+  multi-second.  Live preview tolerates approximation; it does
+  NOT tolerate freezing the editor.
+- **Synth fallback IS the error-handling path.**  `typst::compile`
+  is all-or-nothing — no partial output.  When the doc has any
+  syntax error, full-doc returns Err.  The fallback compiles each
+  fragment in its own synthetic page where individual errors
+  produce per-fragment `error_detail` overlays (line, hint,
+  severity).  The user sees the broken fragment marked, the rest
+  rendered.  No per-fragment error info from full-doc itself.
+
+Future enhancement (not yet implemented): map typst's
+`SourceDiagnostic` byte ranges to fragments and decorate
+`FragmentResult.error_detail` with them — useful for flymake /
+eldoc on systems without an LSP.  Lower priority because LSP-using
+setups already see the diagnostics directly.
 
 ## Readiness Checklist Before Default
 
-Not ready as default yet.  Outstanding:
+| Item | Status |
+|---|---|
+| **[H1]–[H4] heuristic elimination** | ✅ All four eliminated or scaled |
+| **Performance bench** | ✅ Done (see Performance section above) |
+| **Synth-vs-full-doc comparison sweep** | ✅ 8-fixture sweep agrees to 0% height / ≤2% width |
+| **Live-edit dispatch decided** | ✅ synth for live, full-doc for batch |
+| **Span-index optimization** | ✅ 32× speedup; flatten under 100ms even at 5000 lines |
+| **Multi-page fragment split** | ❌ `extract_fragment_svg` returns on first matching page; mid-page-break fragment gets truncated |
+| **Diagram (CeTZ/Fletcher) Shape geometry** | ❌ Shape items contribute 1-pt bbox; figure-wrapped diagrams report bogus widths |
+| **Real-corpus sweep (arxiv, kodama)** | ❌ Synthetic random corpus only; no real-doc fixtures yet |
+| **Synth math-axis baseline audit** | ❌ Synth's `find_group_baseline` likely picks math-axis instead of line-baseline; benign for shallow math, visible for towers (we corrected full-doc but not synth) |
+| **Diagnostic mapping for non-LSP users** | ❌ Optional — typst `SourceDiagnostic` → fragment `error_detail` |
 
-1. **Comparison sweep over the existing visual-test corpus.**  The one
-   diag test compares synthetic and full-doc on `$a+b=c$`.  We need
-   the same comparison across matrices, fractions, big operators,
-   accents, sized delimiters, kodama trees, html-targeting docs, and
-   the arxiv corpus.
-2. **Multi-page fragment handling.**  `extract_fragment_svg` returns
-   on the first page that matches.  A fragment split across a page
-   break gets truncated.
-3. **Diagram (CeTZ/Fletcher) Shape geometry.**  Shape items currently
-   contribute a 1-point bbox.  Diagram-only fragments report bogus
-   widths.
-4. **Performance bench** (above).
-5. **Heuristic elimination [H1]–[H4]** — at least [H1] (Group/run
-   containment) and the priority simplification in [H3].
+The first two ❌ items are the substantive blockers for flipping
+the default.  Multi-page is rare in inline math but real for
+display equations on a page boundary.  Diagram support is a
+fragment-class gap (Shape geometry).
 
-A week of polish, not a structural rewrite.
+The last three ❌ items are nice-to-haves: real-corpus testing
+catches edge cases earlier; synth audit cleans up a latent bug;
+diagnostic mapping helps users without an LSP.
+
+**Switching the default**: when the first two ship, set
+`CompileStrategy::default = FullDoc` in `tip-core-typst/src/lib.rs`
+and update CLAUDE.md.  Synth stays as the fallback path for
+document-level compile errors.
 
 ## Appendix: Tinymist's Approach (for Reference)
 
