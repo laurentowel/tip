@@ -178,6 +178,63 @@ cascade-suspect overlays unless INCLUDE-CASCADE is non-nil."
    (overlays-in (max (point-min) (1- pos))
                 (min (point-max) (1+ pos)))))
 
+(defun tip--overlay-distance (ov pos)
+  "Char distance from POS to the nearest edge of OV.  0 if inside."
+  (cond
+   ((and (<= (overlay-start ov) pos) (<= pos (overlay-end ov))) 0)
+   ((< pos (overlay-start ov)) (- (overlay-start ov) pos))
+   (t (- pos (overlay-end ov)))))
+
+(defcustom tip-error-eldoc-proximity 'same-line
+  "How far from an error overlay point may sit and still get the
+error reported in eldoc / similar surfaces.
+
+  `at-point'   only when point is inside the overlay (legacy behavior).
+  `same-line'  any error overlay overlapping the cursor's line.
+  INTEGER      any error overlay within INTEGER chars of point.
+
+The default `same-line' fixes the awkward case where pressing
+\\[move-end-of-line] off a fragment ending at column 30 hides the
+error you were inspecting; with `same-line' it stays visible
+anywhere on that line."
+  :type '(choice (const :tag "Strictly at point" at-point)
+                 (const :tag "Same line as point" same-line)
+                 (integer :tag "Within N characters of point"))
+  :group 'tip)
+
+(defun tip--error-overlay-near (pos)
+  "Return the most relevant error overlay for POS.
+First tries `tip--error-overlay-at' (exact); if that misses, falls
+back to a proximity search bounded by `tip-error-eldoc-proximity'.
+Returns the closest overlay (column distance) when several are
+candidates on the same line.  Returns nil when nothing qualifies."
+  (or (tip--error-overlay-at pos)
+      (when (not (eq tip-error-eldoc-proximity 'at-point))
+        (let* ((bounds
+                (pcase tip-error-eldoc-proximity
+                  ('same-line
+                   (cons (line-beginning-position) (line-end-position)))
+                  ((pred integerp)
+                   (cons (max (point-min) (- pos tip-error-eldoc-proximity))
+                         (min (point-max) (+ pos tip-error-eldoc-proximity))))
+                  (_ nil)))
+               (search-beg (car bounds))
+               (search-end (cdr bounds))
+               (cands
+                (and bounds
+                     (seq-filter
+                      (lambda (o)
+                        (and (eq (overlay-get o 'tip) 'tip)
+                             (overlay-get o 'tip-error-severity)
+                             (< (overlay-start o) search-end)
+                             (> (overlay-end o) search-beg)))
+                      (overlays-in search-beg search-end)))))
+          (when cands
+            (car (sort cands
+                       (lambda (a b)
+                         (< (tip--overlay-distance a pos)
+                            (tip--overlay-distance b pos))))))))))
+
 (defun tip--error-echo (ov &optional wrapped)
   "Echo OV's error in the minibuffer.  WRAPPED tags a wrap-around jump."
   (message "TIP [%s]: %s%s"
@@ -226,18 +283,28 @@ Cascade-suspect errors are skipped unless
 ;;; * eldoc
 
 (defun tip--eldoc-error (callback &rest _ignored)
-  "Eldoc documentation function: report a tip error at point if present.
+  "Eldoc documentation function: report a tip error at or near point.
 Added to `eldoc-documentation-functions' locally when `tip-mode'
-is on.  Returns nil when point isn't on an error overlay so
-other eldoc providers (flymake, etc.) can still contribute."
-  (when-let* ((ov (tip--error-overlay-at (point)))
+is on.  Falls back to proximity search per
+`tip-error-eldoc-proximity' so `\\[move-end-of-line]'-ing off a
+fragment doesn't drop the error display.  Tags proximal hits
+with `(near)' so the user can tell at-point from near-by.
+
+Returns nil when no candidate qualifies, leaving room for other
+eldoc providers (flymake, etc.) to contribute."
+  (when-let* ((ov (tip--error-overlay-near (point)))
               (msg (overlay-get ov 'tip-error-message))
               (sev (overlay-get ov 'tip-error-severity)))
-    (funcall callback
-             (propertize (format "TIP [%s]: %s" sev msg)
-                         'face (overlay-get ov 'face))
-             :thing 'tip-error
-             :face (overlay-get ov 'face))))
+    (let ((at-point (and (<= (overlay-start ov) (point))
+                         (<= (point) (overlay-end ov)))))
+      (funcall callback
+               (propertize (format "TIP [%s]%s: %s"
+                                   sev
+                                   (if at-point "" " (near)")
+                                   msg)
+                           'face (overlay-get ov 'face))
+               :thing 'tip-error
+               :face (overlay-get ov 'face)))))
 
 ;;; * Flymake backend
 

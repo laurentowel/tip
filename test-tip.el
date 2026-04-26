@@ -592,18 +592,47 @@ user has narrowed to a section below \\begin{document}."
   (with-temp-buffer
     (insert "aaaaa bbbbb ccccc")
     (tip-test--mk-error-overlay 7 12 'error "Undefined control sequence" "$\\foo")
-    ;; Outside overlay → no message.
-    (goto-char 2)
-    (let (captured)
-      (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
-      (should (null captured)))
-    ;; Inside overlay → callback receives the message.
+    ;; Inside overlay → callback receives the message, no `(near)' tag.
     (goto-char 9)
     (let (captured)
       (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
       (should captured)
       (should (string-match-p "Undefined control sequence" captured))
-      (should (string-match-p "\\[error\\]" captured)))))
+      (should (string-match-p "\\[error\\]" captured))
+      (should-not (string-match-p "(near)" captured)))))
+
+(ert-deftest tip-test-eldoc-proximity-same-line ()
+  "With default `tip-error-eldoc-proximity' = `same-line', cursor
+on the same line as an error fragment surfaces the error tagged
+with `(near)'."
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc\nsecond line\n")
+    (tip-test--mk-error-overlay 7 12 'error "boom" nil)
+    (let ((tip-error-eldoc-proximity 'same-line))
+      ;; Same line, off the overlay.
+      (goto-char 2)
+      (let (captured)
+        (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+        (should captured)
+        (should (string-match-p "boom" captured))
+        (should (string-match-p "(near)" captured)))
+      ;; Different line: nothing.
+      (goto-char 20)
+      (let (captured)
+        (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+        (should-not captured)))))
+
+(ert-deftest tip-test-eldoc-proximity-at-point-disables-fallback ()
+  "Setting `tip-error-eldoc-proximity' to `at-point' restores the
+legacy strict-overlap behavior."
+  (with-temp-buffer
+    (insert "aaaaa bbbbb ccccc")
+    (tip-test--mk-error-overlay 7 12 'error "boom" nil)
+    (let ((tip-error-eldoc-proximity 'at-point))
+      (goto-char 2)
+      (let (captured)
+        (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+        (should-not captured)))))
 
 (ert-deftest tip-test-flymake-backend-reports-all-errors ()
   "The Flymake backend emits one flymake-diagnostic per error overlay."
