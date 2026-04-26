@@ -42,12 +42,22 @@
 ;;; * custom settings
 
 (defcustom tip-enable-debug nil
-  "Enable debug messages."
+  "Obsolete.  Set `tip-log-min-level' to `debug' instead.
+Kept as a defvar so old user configs don't break; reading or setting
+it has no effect."
   :type 'boolean
   :group 'tip)
+(make-obsolete-variable
+ 'tip-enable-debug
+ "set `tip-log-min-level' to `debug' to see protocol traces in *tip-log*."
+ "0.2")
 
 (defcustom tip-echo-errors nil
-  "When non-nil, show compilation errors in the echo area."
+  "When non-nil, run an idle-timer that compiles the fragment at point
+and surfaces compilation errors via `tip-log'.  Behavioural toggle
+(controls whether the timer fires at all), not a logging knob — for
+echo-area mirroring of already-logged errors, see
+`tip-log-echo-level'."
   :type 'boolean
   :group 'tip)
 
@@ -189,15 +199,14 @@ leaves any tip overlay.  Set to nil to disable this swap."
   :group 'tip)
 
 (defcustom tip-verbose nil
-  "When non-nil, log per-operation progress messages.
-Specifically `tip-render-all' / `tip-send-nbd' emit a \"tip: N/N
-rendered (K cached)\" message once all fragments land.  Cache-hit
-and cache-miss totals are shown in debug mode regardless.
-
-Useful for tracking progress on large documents or verifying the
-cache is working.  Disabled by default to keep the echo area quiet."
+  "Obsolete.  Render progress is always logged; control echo
+visibility via `tip-log-echo-level' (default `info')."
   :type 'boolean
   :group 'tip)
+(make-obsolete-variable
+ 'tip-verbose
+ "render progress always logs; tune `tip-log-echo-level' for echo-area mirroring."
+ "0.2")
 
 (defcustom tip-cache-max-entries 500
   "Maximum fragments kept in the buffer-local compile cache.
@@ -287,13 +296,14 @@ Buffer-local."
               (cl-incf cache-hits))
           (push frag misses))))
     (setq misses (nreverse misses))
-    (when (and tip-enable-debug (> cache-hits 0))
-      (message "tip: cache hits=%d misses=%d" cache-hits (length misses)))
+    (when (> cache-hits 0)
+      (tip-log 'debug 'render "cache hits=%d misses=%d"
+               cache-hits (length misses)))
     (cond
      ;; All cached — report and done.
      ((null misses)
-      (when (and tip-verbose (> n 0))
-        (message "tip: %d/%d rendered (all from cache)" n n)))
+      (when (> n 0)
+        (tip-log 'info 'render "%d/%d rendered (all from cache)" n n)))
      ;; Send misses to the server, report on response.
      (t
       (let ((params `(("uri" . ,(tip--current-uri))
@@ -323,11 +333,11 @@ Buffer-local."
                                     (append frags nil)))))
                  (tip--apply-fragment-results frags)
                  (tip--flymake-refresh)
-                 (when tip-verbose
-                   (message "tip: %d/%d rendered (%d cached, %d error%s)"
-                            (+ cache-hits got) n cache-hits
-                            (or errors 0)
-                            (if (= (or errors 0) 1) "" "s")))))))))))
+                 (tip-log 'info 'render
+                          "%d/%d rendered (%d cached, %d error%s)"
+                          (+ cache-hits got) n cache-hits
+                          (or errors 0)
+                          (if (= (or errors 0) 1) "" "s"))))))))))
     n))
 
 ;;; * public commands

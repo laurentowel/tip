@@ -17,6 +17,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'tip-backend)
+(require 'tip-log)
 
 ;; Customs and helpers that live in tip.el / tip-live.el — forward-declared.
 (defvar tip-transparent-bg)
@@ -26,7 +27,6 @@
 (defvar tip-display-math-padding)
 (defvar tip-image-face)
 (defvar tip-image-face-blocklist)
-(defvar tip-echo-errors)
 (defvar tip-mode)
 (defvar tip-live--content-cache)
 (defvar tip-echo--content-cache)
@@ -497,9 +497,9 @@ diagnostic is echoed and later errors get minimal visual weight."
         ;; via a secondary overlay below.
         (when (and frag-beg frag-end (or err err-detail)
                    (not (eq err-severity 'warning)))
-          (when tip-echo-errors
-            (message "TIP [%s]: %s" (or err-severity "error")
-                     (or err-message err "compile failed")))
+          (tip-log 'warning 'compile "[%s] %s"
+                   (or err-severity "error")
+                   (or err-message err "compile failed"))
           (dolist (ov (overlays-in frag-beg frag-end))
             (when (eq (overlay-get ov 'tip) 'tip)
               (delete-overlay ov)))

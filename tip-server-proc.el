@@ -23,6 +23,7 @@
 (require 'json)
 (require 'cl-lib)
 (require 'tip-backend)
+(require 'tip-log)
 
 (defconst tip-protocol-version "0.1"
   "Wire-protocol version, mirrored on the Rust side as
@@ -62,17 +63,10 @@ the user know they may see schema-shape errors until they upgrade."
 
 ;; Customs that live in tip.el — forward-declared so the byte-compiler
 ;; knows they'll exist at runtime.
-(defvar tip-enable-debug)
 (defvar tip-font-dirs)
 (defvar tip-server-executable)
 (defvar tip-use-docker)
 (defvar tip-docker-image)
-
-;;; * debug
-
-(defmacro tip-debug-msg (&rest args)
-  `(when tip-enable-debug
-     (message ,@args)))
 
 ;;; * font directory resolution
 
@@ -194,7 +188,7 @@ field (defaulting to tip-server-typst)."
            (list (lambda (_buf status)
                    (when (string-match-p "finished" status)
                      (setq tip-server-executable target)
-                     (message "tip-server compiled: %s" target))))))
+                     (tip-log 'info 'server "tip-server compiled: %s" target))))))
       (compile "cargo build --release"))))
 
 (defun tip--build-docker-image ()
@@ -207,7 +201,7 @@ field (defaulting to tip-server-typst)."
     (unless (file-exists-p dockerfile)
       (user-error "Dockerfile not found at %s" dockerfile))
     (if (= 0 (call-process "docker" nil nil nil "image" "inspect" tip-docker-image))
-        (message "Docker image %s already exists" tip-docker-image)
+        (tip-log 'info 'server "Docker image %s already exists" tip-docker-image)
       (let ((buf (get-buffer-create "*tip-server-docker-build*")))
         (pop-to-buffer buf)
         (let ((inhibit-read-only t)) (erase-buffer))
@@ -219,9 +213,9 @@ field (defaulting to tip-server-typst)."
            proc
            (lambda (_proc event)
              (if (string-match-p "finished" event)
-                 (message "Docker image %s built successfully" tip-docker-image)
-               (error "Docker build failed. See *tip-server-docker-build*"))))
-          (message "Building Docker image... (see *tip-server-docker-build*)"))))))
+                 (tip-log 'info 'server "Docker image %s built successfully" tip-docker-image)
+               (tip-log 'error 'server "Docker build failed. See *tip-server-docker-build*"))))
+          (tip-log 'info 'server "Building Docker image... (see *tip-server-docker-build*)"))))))
 
 ;;; * process spawn
 
@@ -287,7 +281,7 @@ RUST_BACKTRACE is only consulted when the process actually panics."
   "Ensure tip-server is running.  With FORCE, restart it."
   (interactive "P")
   (when (and tip--server-process force)
-    (tip-debug-msg "Killing existing tip-server")
+    (tip-log 'info 'server "killing existing tip-server")
     (delete-process tip--server-process)
     (setq tip--server-process nil))
   (unless (and tip--server-process
@@ -299,12 +293,12 @@ RUST_BACKTRACE is only consulted when the process actually panics."
                   (tip--start-docker-process)
                 (tip--start-server-process))
             (error
-             (message "tip-server: %s" (error-message-string err))
+             (tip-log 'error 'server "tip-server: %s" (error-message-string err))
              nil)))
     (if tip--server-process
         (progn
-          (tip-debug-msg "tip-server started (pid %d)"
-                         (process-id tip--server-process))
+          (tip-log 'info 'server "tip-server started (pid %d)"
+                   (process-id tip--server-process))
           ;; Cross-backend / cross-binary cache collisions are real
           ;; (see tip-cache-clear-on-server-restart doc).  Drop every
           ;; buffer's cache when a new server process starts.
@@ -327,7 +321,7 @@ RUST_BACKTRACE is only consulted when the process actually panics."
              `(("font_dirs" . ,(vconcat (or dirs nil)))
                ("client_version" . ,tip-protocol-version))
              #'tip--handle-init-response)))
-      (message "tip-server failed to start"))))
+      (tip-log 'error 'server "tip-server failed to start"))))
 
 (defun tip--server-stderr-tail (&optional n-lines)
   "Return the last N-LINES of the tip-server stderr buffer, or nil.
@@ -347,21 +341,24 @@ Defaults to 10 lines."
   "Handle tip-server process state changes.
 On unexpected exits, surface the stderr tail so the user sees panic
 backtraces (RUST_BACKTRACE=1) instead of a bare `exited abnormally'."
-  (tip-debug-msg "tip-server: %s" (string-trim event))
+  (tip-log 'debug 'server "sentinel: %s" (string-trim event))
   (when (not (process-live-p proc))
     (setq tip--server-process nil)
     (let ((ev (string-trim event))
           (tail (tip--server-stderr-tail 20)))
       (cond
        ((or (string-match-p "finished" ev) (string-match-p "killed" ev))
-        (message "tip-server exited: %s" ev))
+        (tip-log 'info 'server "tip-server exited: %s" ev))
        (t
-        (message "tip-server exited: %s (M-x tip-show-server-stderr for details)%s"
-                 ev
-                 (if tail
-                     (format "\n--- last stderr lines ---\n%s"
-                             (string-trim tail))
-                   "")))))))
+        ;; Unexpected exit: error level, with stderr tail in detail
+        ;; so the user can hit RET in *tip-log* to see the panic.
+        (tip-log-with-detail
+         'error 'server
+         (if tail
+             "tip-server exited: %s (RET in *tip-log* for stderr tail)"
+           "tip-server exited: %s (M-x tip-show-server-stderr)")
+         (if tail (format "--- last stderr lines ---\n%s" (string-trim tail)) nil)
+         ev))))))
 
 ;;;###autoload
 (defun tip-show-server-stderr ()
@@ -388,7 +385,7 @@ RUST_BACKTRACE=1 is set at process spawn so panics include frames."
                    (result (alist-get 'result response))
                    (callback (gethash id tip--pending-callbacks)))
               (remhash id tip--pending-callbacks)
-              (tip-debug-msg "tip-server response id=%s" id)
+              (tip-log-protocol 'recv (alist-get 'kind result) id result)
               ;; Any error inside a user callback (dead buffer,
               ;; type mismatch, etc.) must not propagate — emacs
               ;; would print it as "error in process sentinel"
@@ -397,14 +394,17 @@ RUST_BACKTRACE=1 is set at process spawn so panics include frames."
                 (condition-case cb-err
                     (funcall callback result)
                   (error
-                   (tip-debug-msg "tip-server callback error: %S id=%s"
-                                  cb-err id))))
+                   (tip-log 'error 'protocol
+                            "callback error id=%s: %S" id cb-err))))
               (condition-case hook-err
                   (run-hook-with-args 'tip-server-response-functions result)
                 (error
-                 (tip-debug-msg "tip-server response-hook error: %S" hook-err))))
+                 (tip-log 'error 'protocol
+                          "response-hook error: %S" hook-err))))
           (error
-           (tip-debug-msg "tip-server parse error: %S for line: %s" err line)))))))
+           (tip-log-with-detail
+            'error 'protocol
+            "parse error: %S" line "%S" err)))))))
 
 ;;; * request/response
 
@@ -440,9 +440,9 @@ CALLBACK is called with the result alist when response arrives."
                     ("params" . ,params))))
     (when callback
       (puthash id callback tip--pending-callbacks))
-    (let ((json (concat (json-encode request) "\n")))
-      (tip-debug-msg "tip-server send: %s" (string-trim json))
-      (process-send-string tip--server-process json))))
+    (tip-log-protocol 'send method id params)
+    (process-send-string tip--server-process
+                         (concat (json-encode request) "\n"))))
 
 (defvar-local tip--last-sync-tick nil
   "`buffer-chars-modified-tick' value at the last successful sync.

@@ -39,14 +39,14 @@
   "Idle timer for echo-area error checking.")
 
 (defun tip-echo--handle-result (result)
-  "Show compilation errors in the echo area, ignore success."
+  "Log compilation errors via `tip-log'; ignore success."
   (let* ((err (alist-get 'error result))
          (frags (alist-get 'fragments result))
          (frag (and frags (> (length frags) 0) (aref frags 0)))
          (frag-err (and frag (alist-get 'error frag))))
     (cond
-     (err (message "TIP: %s" err))
-     (frag-err (message "TIP: %s" frag-err)))))
+     (err (tip-log 'warning 'compile "%s" err))
+     (frag-err (tip-log 'warning 'compile "%s" frag-err)))))
 
 (defun tip-echo--compile-partial ()
   "Compile fragment at point and echo errors."
@@ -93,10 +93,10 @@ Errors are shown both in the childframe and echoed to the message area."
     (cond
      (err
       (tip-childframe-show-text err 'error)
-      (message "TIP: %s" err))
+      (tip-log 'warning 'compile "%s" err))
      (frag-err
       (tip-childframe-show-text frag-err 'error)
-      (message "TIP: %s" frag-err))
+      (tip-log 'warning 'compile "%s" frag-err))
      ((and svg (> (length svg) 0) h (> h 0))
       (tip-childframe-show svg))
      (t (tip-childframe-hide)))))

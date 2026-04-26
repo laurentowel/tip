@@ -25,12 +25,12 @@
   (should (featurep 'tip)))
 
 (ert-deftest tip-test-customization-vars-exist ()
-  (should (boundp 'tip-enable-debug))
+  (should (boundp 'tip-log-min-level))
   (should (boundp 'tip-server-executable))
   (should (boundp 'tip-scale)))
 
 (ert-deftest tip-test-customization-defaults ()
-  (should (eq tip-enable-debug nil))
+  (should (eq tip-log-min-level 'info))
   (should (or (null tip-server-executable) (stringp tip-server-executable)))
   ;; tip-scale is 'auto by default (computes scale from font size); allow
   ;; either the sentinel symbol or a positive number.
