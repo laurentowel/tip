@@ -194,6 +194,23 @@ Returns one of:
     'display-multi)
    (t 'inline)))
 
+;;; * skeleton view
+
+(declare-function tip--show-debug-skeleton "tip")
+
+(defun tip-typst-show-skeleton ()
+  "Show the scoped skeleton for the Typst fragment at point.
+Typst scope varies by position, so a fragment under point is required."
+  (let ((bounds (tip-bounds-at-point (point))))
+    (unless bounds
+      (user-error
+       "Typst skeleton requires point inside a math/figure fragment"))
+    (tip--show-debug-skeleton
+     (1- (position-bytes (car bounds)))
+     (1- (position-bytes (cdr bounds)))
+     "*tip-skeleton*"
+     (and (fboundp 'typst-ts-mode) #'typst-ts-mode))))
+
 ;;; * backend registration
 
 (defvar tip-server-executable)
@@ -206,7 +223,8 @@ Returns one of:
   :bounds-at-point-fn #'tip--get-bounds-of-math-at-point
   :build-preamble-fn #'tip--build-preamble
   :classify-fragment-fn #'tip-typst-classify-fragment
-  :server-executable "tip-server"))
+  :server-executable "tip-server"
+  :show-skeleton-fn #'tip-typst-show-skeleton))
 
 (provide 'tip-typst)
 

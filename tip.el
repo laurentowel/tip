@@ -468,66 +468,52 @@ Prints the dump directory when done so you can copy-paste it."
      (t (user-error "tip-dump-compile-inputs: backend %S not supported"
                     backend-name)))))
 
+(defun tip--show-debug-skeleton (byte-start byte-end buffer-name init-mode)
+  "Send `debug_skeleton' for byte range and show the result.
+BUFFER-NAME is the buffer to display the source in; INIT-MODE is a
+zero-arg function that initializes the major mode (or nil).  This
+is a generic helper backends call from their `show-skeleton-fn'."
+  (tip--sync-buffer)
+  (tip--send-request
+   "debug_skeleton"
+   `(("uri" . ,(buffer-file-name))
+     ("start" . ,byte-start)
+     ("end" . ,byte-end))
+   (lambda (result)
+     (let ((source (alist-get 'source result))
+           (err (alist-get 'error result)))
+       (cond
+        (err (message "TIP skeleton error: %s" err))
+        ((or (null source) (string-empty-p source))
+         (message "TIP: no skeleton/preamble for this buffer"))
+        (t
+         (let ((buf (get-buffer-create buffer-name)))
+           (with-current-buffer buf
+             (let ((inhibit-read-only t))
+               (erase-buffer)
+               (insert source)
+               (when (functionp init-mode) (funcall init-mode))
+               (goto-char (point-min)))
+             (special-mode))
+           (display-buffer buf))))))))
+
 ;;;###autoload
 (defun tip-show-skeleton-at-point ()
-  "Display the assembled preamble / scope skeleton.
-
-For LaTeX: shows the multi-file preamble the server would prepend
-to a fragment compile from this buffer.  No fragment-at-point
-required — the preamble is document-wide.
-
-For Typst: shows the scoped skeleton at the fragment containing
-point (`#let' / `#import' / `#show' / `#set' that are in scope).
-Requires point inside a fragment because typst scope varies by
-position."
+  "Display the backend-specific skeleton / preamble.
+Dispatches to the active backend's `show-skeleton-fn'.  What gets
+displayed and where is the backend's choice."
   (interactive)
   (tip--ensure-mode)
-  (let* ((b (tip-active-backend))
-         (backend (and b (tip-backend-name b)))
-         (bounds (tip-bounds-at-point (point)))
-         (byte-start (if bounds
-                         (1- (position-bytes (car bounds)))
-                       0))
-         (byte-end (if bounds
-                       (1- (position-bytes (cdr bounds)))
-                     0)))
-    (when (and (eq backend 'typst) (not bounds))
-      (user-error
-       "Typst skeleton requires point inside a math/figure fragment"))
-    (tip--sync-buffer)
-    (tip--send-request
-     "debug_skeleton"
-     `(("uri" . ,(buffer-file-name))
-       ("start" . ,byte-start)
-       ("end" . ,byte-end))
-     (lambda (result)
-       (let ((source (alist-get 'source result))
-             (err (alist-get 'error result)))
-         (cond
-          (err (message "TIP skeleton error: %s" err))
-          ((or (null source) (string-empty-p source))
-           (message "TIP: no skeleton/preamble for this buffer"))
-          (t
-           (let ((buf (get-buffer-create
-                       (pcase backend
-                         ('latex   "*tip-preamble*")
-                         ('typst   "*tip-skeleton*")
-                         (_        "*tip-skeleton*")))))
-             (with-current-buffer buf
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (insert source)
-                 (pcase backend
-                   ('latex (when (fboundp 'latex-mode) (latex-mode)))
-                   ('typst (when (fboundp 'typst-ts-mode) (typst-ts-mode))))
-                 (goto-char (point-min)))
-               (special-mode))
-             (display-buffer buf)))))))))
+  (let ((b (tip-active-backend)))
+    (unless b (user-error "No tip backend active in this buffer"))
+    (let ((fn (tip-backend-show-skeleton-fn b)))
+      (if fn
+          (funcall fn)
+        (message "tip: %s backend has no skeleton view"
+                 (tip-backend-name b))))))
 
 (defalias 'tip-show-preamble #'tip-show-skeleton-at-point
-  "Alias for `tip-show-skeleton-at-point' that reads better for LaTeX
-buffers — there's no fragment-at-point requirement on the LaTeX
-side, just the assembled multi-file preamble.")
+  "Friendlier name for `tip-show-skeleton-at-point' in LaTeX-heavy use.")
 
 ;;; * cursor and overlay management (delegates to preview-toggle)
 

@@ -34,14 +34,22 @@ Fields:
                          `display-single' (gets an indicator), `display-multi',
                          or `block'.
   SERVER-EXECUTABLE      string (binary name on PATH) or a zero-arg function
-                         returning a path."
+                         returning a path.
+  SHOW-SKELETON-FN       optional zero-arg function that displays the
+                         backend-specific skeleton or preamble for the
+                         current buffer (Typst: scope at point; LaTeX:
+                         the assembled root preamble).  Called by
+                         `tip-show-skeleton-at-point' when the user runs
+                         it.  When nil, the command messages
+                         \"not supported by BACKEND\"."
   name
   major-modes
   collect-fragments-fn
   bounds-at-point-fn
   build-preamble-fn
   classify-fragment-fn
-  server-executable)
+  server-executable
+  show-skeleton-fn)
 
 (defvar tip-backends nil
   "Alist mapping backend name → `tip-backend' struct.")

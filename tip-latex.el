@@ -353,6 +353,19 @@ Called from `tip-mode' activation via the LaTeX backend."
        (has-inc
         (tip-latex-set-root (tip-latex--prompt-for-root)))))))
 
+;;; * skeleton view
+
+(declare-function tip--show-debug-skeleton "tip")
+
+(defun tip-latex-show-skeleton ()
+  "Show the assembled LaTeX preamble for this buffer.
+LaTeX preambles are document-wide; no fragment-at-point required.
+The server walks the multi-file project (when active) and returns
+the preamble it would prepend to a fragment compile."
+  (tip--show-debug-skeleton
+   0 0 "*tip-preamble*"
+   (and (fboundp 'latex-mode) #'latex-mode)))
+
 ;;; * backend registration
 
 (tip-register-backend
@@ -363,7 +376,8 @@ Called from `tip-mode' activation via the LaTeX backend."
   :bounds-at-point-fn #'tip-latex-bounds-at-point
   :build-preamble-fn #'tip-latex-build-preamble
   :classify-fragment-fn #'tip-latex-classify-fragment
-  :server-executable "tip-server"))
+  :server-executable "tip-server"
+  :show-skeleton-fn #'tip-latex-show-skeleton))
 
 (provide 'tip-latex)
 
