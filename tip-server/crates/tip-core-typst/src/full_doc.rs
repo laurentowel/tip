@@ -234,6 +234,7 @@ pub fn extract_fragment_svg(
         let mut keep: Vec<(Point, FrameItem)> = Vec::new();
         let mut bounds = ItemBounds::empty();
         let mut max_text_size = Abs::zero();
+        let mut group_baselines: Vec<Abs> = Vec::new();
         collect_for_fragment(
             &page.frame,
             Point::zero(),
@@ -244,6 +245,7 @@ pub fn extract_fragment_svg(
             &mut keep,
             &mut bounds,
             &mut max_text_size,
+            &mut group_baselines,
         );
         if keep.is_empty() || bounds.is_empty() {
             continue;
@@ -285,15 +287,35 @@ pub fn extract_fragment_svg(
                 _ => None,
             })
             .collect();
-        let (baseline_y, external) =
-            match find_external_baseline(&page.frame, &frag_baselines, main, &main_src, start, end)
-            {
-                Some(b) => (b, true),
-                None => (
-                    frag_baselines.iter().copied().max().unwrap_or(bounds.max_y),
-                    false,
-                ),
-            };
+        // Baseline picker (priority order):
+        //
+        //   1. **Group baseline** from a fragment-bearing Group with
+        //      `has_baseline()=true`.  Typst sets this on math
+        //      equations and is what the synthetic compiler uses via
+        //      `find_group_baseline`.  Sits ~0.5 pt above raw
+        //      TextItem `pos.y` due to math-axis alignment.
+        //   2. **frag_max** = lowest TextItem baseline in the
+        //      fragment.  Used when the fragment has no explicit
+        //      Group baseline.
+        //   3. **external** = surrounding-text line baseline within
+        //      tol.  Used when the fragment is sub/super-shifted
+        //      (`^2` after `phantom(a)` etc.) — its own baselines
+        //      sit far above the line, so we have to reach out for
+        //      the real line baseline.
+        //   4. **bounds.max_y** as a last resort (Shape-only
+        //      fragments).
+        let frag_max = frag_baselines.iter().copied().max();
+        let group_baseline = group_baselines.iter().copied().max();
+        let external_y =
+            find_external_baseline(&page.frame, &frag_baselines, main, &main_src, start, end);
+        const SHIFT_THRESHOLD: f64 = 2.0;
+        let (baseline_y, external) = match (group_baseline, frag_max, external_y) {
+            (Some(gb), _, _) => (gb, false),
+            (None, Some(fm), Some(ex)) if (ex - fm).to_pt() > SHIFT_THRESHOLD => (ex, true),
+            (None, Some(fm), _) => (fm, false),
+            (None, None, Some(ex)) => (ex, true),
+            (None, None, None) => (bounds.max_y, false),
+        };
 
         // Crop bounds: tight to ink in x; in y, EXTEND to include the
         // baseline so callers placing the image at `:ascent (depth/H)`
@@ -311,7 +333,13 @@ pub fn extract_fragment_svg(
         let min_y = crop_min_y - pad;
         let width = bounds.max_x - bounds.min_x + pad * 2.0;
         let height = crop_max_y - crop_min_y + pad * 2.0;
-        let depth = (crop_max_y - baseline_y).max(Abs::zero());
+        // Depth = ink-below-baseline + bottom pad.  The pad is empty
+        // crop space we added below `crop_max_y`; from the displayer's
+        // perspective the image extends `pad` below the baseline too,
+        // so it has to be included or the image floats up by 0.5 pt.
+        // Matches the synthetic compiler's `cropped_height -
+        // baseline_in_crop` arithmetic.
+        let depth = ((crop_max_y - baseline_y) + pad).max(Abs::zero());
 
         // Rebuild a flat Frame at the cropped origin.  Clone is cheap
         // — FrameItem is `derive(Clone)` and Text/Shape are Arcs/Vecs.
@@ -534,14 +562,36 @@ fn collect_for_fragment(
     keep: &mut Vec<(Point, FrameItem)>,
     bounds: &mut ItemBounds,
     max_text_size: &mut Abs,
+    group_baselines: &mut Vec<Abs>,
 ) {
     for (pos, item) in frame.items() {
         let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
         match item {
             FrameItem::Group(g) => {
+                let prev_keep_len = keep.len();
                 collect_for_fragment(
-                    &g.frame, abs, main, src, start, end, keep, bounds, max_text_size,
+                    &g.frame,
+                    abs,
+                    main,
+                    src,
+                    start,
+                    end,
+                    keep,
+                    bounds,
+                    max_text_size,
+                    group_baselines,
                 );
+                // If this Group contributed in-range items AND has an
+                // explicit baseline (Typst sets this on math equations
+                // and similar layout containers), capture its baseline
+                // — that's the canonical baseline the synthetic strategy
+                // already uses via `find_group_baseline`, and it sits
+                // ~0.5 pt above raw TextItem `pos.y` due to the math-
+                // axis alignment.  Without this our depth shrinks and
+                // the displayed image floats above the line.
+                if keep.len() > prev_keep_len && g.frame.has_baseline() {
+                    group_baselines.push(abs.y + g.frame.baseline());
+                }
             }
             FrameItem::Text(t) => {
                 let any = t
@@ -742,10 +792,9 @@ text $phantom(a)^2$ and $a^2$ done
         let f_plain = extract_fragment_svg(&world, &doc, r_plain.start, r_plain.end)
             .expect("plain render");
 
-        assert!(
-            f_phantom.baseline_external && f_plain.baseline_external,
-            "both fragments should pick up the surrounding-text baseline"
-        );
+        // What matters is matching depth + height — whether the picker
+        // got there via Group baseline, frag-text baseline, or external
+        // is implementation detail.
         // The plain a^2 has a real `a` glyph touching the baseline, so
         // its depth is ~0 (no descender).  The phantom version's only
         // ink is `^2` entirely above the baseline, so depth is also 0.
@@ -819,6 +868,52 @@ $x + y$ default size
     /// covered by the `font_size_tracks_*` test above — synthetic
     /// always reports 11 pt, full-doc reports the actual size, so
     /// equivalence on mixed-size is by design false.
+    /// Live-bug probe: print height/depth/baseline for `$a+b=c$` in
+    /// both strategies.  Eyeballed against GUI rendering — synthetic
+    /// looks correct; full-doc reportedly puts math too high.
+    #[test]
+    #[ignore = "diagnostic only, run with --ignored"]
+    fn diag_depth_for_inline() {
+        use crate::compiler::FragmentCompiler;
+        let mut w_full = TipWorld::new();
+        let mut w_syn = TipWorld::new();
+        let src = "Default 11pt: $a + b = c$ and rest.\n";
+        let doc = compile_real_document(&mut w_full, src).expect("compile");
+        let r = locate(src, "$a + b = c$");
+        let f = extract_fragment_svg(&w_full, &doc, r.start, r.end).unwrap();
+        let s = FragmentCompiler::compile_fragment_scoped(
+            &mut w_syn,
+            src,
+            r.start,
+            r.end,
+            tip_protocol::svg_color::STANDIN_HEX,
+            None,
+            None,
+        )
+        .unwrap();
+        let spans = collect_leaf_spans(&w_full, &doc);
+        for s in &spans {
+            if let Some(ref r2) = s.source_range {
+                if r2.start >= r.start && r2.end <= r.end {
+                    eprintln!("  frag glyph range={:?} pos.y={:.3}", r2, s.pos_pt.1);
+                }
+            }
+        }
+        eprintln!(
+            "full:  h={:.3} d={:.3} w={:.3} fs={:.3} ext={}",
+            f.height_pt, f.depth_pt, f.width_pt, f.font_size_pt, f.baseline_external
+        );
+        eprintln!(
+            "synth: h={:.3} d={:.3} w={:.3}",
+            s.height_pt, s.depth_pt, s.width_pt
+        );
+        eprintln!(
+            "ascent_full={:.1}%  ascent_synth={:.1}%",
+            (f.height_pt - f.depth_pt) / f.height_pt * 100.0,
+            (s.height_pt - s.depth_pt) / s.height_pt * 100.0,
+        );
+    }
+
     #[test]
     fn synthetic_and_full_doc_agree_on_default_size() {
         use crate::compiler::FragmentCompiler;
