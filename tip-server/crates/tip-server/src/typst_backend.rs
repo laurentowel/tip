@@ -169,6 +169,26 @@ impl TypstBackend {
             }
         };
 
+        // Same dispatch as `handle_compile_fragments`: try full-doc
+        // first when configured; on document-level failure (very
+        // common during mid-edit syntax breakage) fall back to
+        // synthetic per-fragment.  Sharing the dispatch keeps the
+        // childframe preview visually consistent with the inline
+        // overlay — same baseline, same paragraph-context font size.
+        if matches!(self.strategy, CompileStrategy::FullDoc) {
+            let one = vec![FragmentLocation {
+                start: params.start,
+                end: params.end,
+            }];
+            if let Ok(mut results) =
+                FullDocCompiler::compile_all(&mut self.world, &content, &one)
+            {
+                if let Some(fragment) = results.pop() {
+                    return ResponseResult::Live { fragment };
+                }
+            }
+        }
+
         match FragmentCompiler::compile_fragment_scoped(
             &mut self.world,
             &content,
