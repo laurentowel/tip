@@ -61,7 +61,7 @@ impl FullDocCompiler {
                     height_pt: render.height_pt,
                     depth_pt: render.depth_pt,
                     width_pt: render.width_pt,
-                    font_size_pt: Some(11.0),
+                    font_size_pt: Some(render.font_size_pt),
                     error: None,
                     error_detail: None,
                 },
@@ -201,6 +201,14 @@ pub struct FragmentRender {
     /// items).  `false` => depth is best-effort; the caller may want
     /// to use `:ascent center` for display math.
     pub baseline_external: bool,
+    /// Largest `TextItem::size` among the fragment's items, in points.
+    /// Synthetic compiler always renders at 11 pt regardless of the
+    /// document's actual font size; full-doc captures the real size,
+    /// which matters when the user has `#set text(size: 14pt)` or
+    /// section-specific sizing.  Emacs's `tip--effective-scale` uses
+    /// this to scale the displayed image so the preview matches the
+    /// document's own typesetting.
+    pub font_size_pt: f64,
 }
 
 /// Build a minimal `Frame` containing only items belonging to the
@@ -225,6 +233,7 @@ pub fn extract_fragment_svg(
     for (page_idx, page) in doc.pages.iter().enumerate() {
         let mut keep: Vec<(Point, FrameItem)> = Vec::new();
         let mut bounds = ItemBounds::empty();
+        let mut max_text_size = Abs::zero();
         collect_for_fragment(
             &page.frame,
             Point::zero(),
@@ -234,6 +243,7 @@ pub fn extract_fragment_svg(
             end,
             &mut keep,
             &mut bounds,
+            &mut max_text_size,
         );
         if keep.is_empty() || bounds.is_empty() {
             continue;
@@ -273,6 +283,15 @@ pub fn extract_fragment_svg(
             out.push(Point::new(pos.x - min_x, pos.y - min_y), item);
         }
 
+        // Default to 11 pt when the fragment has no Text items at all
+        // (e.g., Shape-only diagram); matches the synthetic path's
+        // default and keeps `tip--effective-scale` at 1.0.
+        let font_size = if max_text_size > Abs::zero() {
+            max_text_size.to_pt()
+        } else {
+            11.0
+        };
+
         return Some(FragmentRender {
             svg: svg_frame(&out),
             width_pt: width.to_pt(),
@@ -280,6 +299,7 @@ pub fn extract_fragment_svg(
             depth_pt: depth.to_pt(),
             page: page_idx,
             baseline_external: external,
+            font_size_pt: font_size,
         });
     }
 
@@ -416,12 +436,15 @@ fn collect_for_fragment(
     end: usize,
     keep: &mut Vec<(Point, FrameItem)>,
     bounds: &mut ItemBounds,
+    max_text_size: &mut Abs,
 ) {
     for (pos, item) in frame.items() {
         let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
         match item {
             FrameItem::Group(g) => {
-                collect_for_fragment(&g.frame, abs, main, src, start, end, keep, bounds);
+                collect_for_fragment(
+                    &g.frame, abs, main, src, start, end, keep, bounds, max_text_size,
+                );
             }
             FrameItem::Text(t) => {
                 let any = t
@@ -442,6 +465,9 @@ fn collect_for_fragment(
                         abs.x + bbox.max.x,
                         abs.y + bbox.min.y,
                     );
+                    if t.size > *max_text_size {
+                        *max_text_size = t.size;
+                    }
                     keep.push((abs, FrameItem::Text(t.clone())));
                 }
             }
@@ -632,6 +658,99 @@ text $phantom(a)^2$ and $a^2$ done
             "depth diverged: phantom={:.3} plain={:.3}",
             f_phantom.depth_pt,
             f_plain.depth_pt
+        );
+    }
+
+    /// Mixed-size: the same `$x + y$` body inside a 14 pt section
+    /// must report `font_size_pt == 14`, while the same expression
+    /// at the document default reports ~11 pt.  Emacs's effective
+    /// scale uses this ratio so the preview matches the document's
+    /// own typesetting.
+    #[test]
+    fn font_size_tracks_document_text_size() {
+        let mut world = TipWorld::new();
+        let src = "\
+$x + y$ default size
+
+#text(size: 14pt)[$x + y$ bigger]
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        // `find` returns the FIRST match — locate the second `$x + y$`
+        // by skipping past the first one explicitly.
+        let first_start = src.find("$x + y$").unwrap();
+        let second_start = src[first_start + 7..].find("$x + y$").unwrap()
+            + first_start
+            + 7;
+
+        let f1 = extract_fragment_svg(&world, &doc, first_start, first_start + 7).unwrap();
+        let f2 = extract_fragment_svg(&world, &doc, second_start, second_start + 7).unwrap();
+
+        // Default text size in Typst is 11 pt (give or take).
+        assert!(
+            (f1.font_size_pt - 11.0).abs() < 0.5,
+            "expected default ~11 pt, got {:.3}",
+            f1.font_size_pt
+        );
+        assert!(
+            (f2.font_size_pt - 14.0).abs() < 0.5,
+            "expected 14 pt section, got {:.3}",
+            f2.font_size_pt
+        );
+        // Sanity: the 14 pt fragment renders bigger than the 11 pt one.
+        assert!(
+            f2.height_pt > f1.height_pt * 1.15,
+            "14pt fragment ({:.2}) should be visibly taller than 11pt ({:.2})",
+            f2.height_pt,
+            f1.height_pt
+        );
+    }
+
+    /// Comparison: render the same fragment with synthetic and
+    /// full-doc strategies on a default-size doc; metrics should
+    /// agree within sensible tolerances.  Mixed-size docs are
+    /// covered by the `font_size_tracks_*` test above — synthetic
+    /// always reports 11 pt, full-doc reports the actual size, so
+    /// equivalence on mixed-size is by design false.
+    #[test]
+    fn synthetic_and_full_doc_agree_on_default_size() {
+        use crate::compiler::FragmentCompiler;
+
+        let mut w_full = TipWorld::new();
+        let mut w_syn = TipWorld::new();
+        let src = "Body $x + y$ here.\n";
+        let doc = compile_real_document(&mut w_full, src).expect("compile");
+        let r = locate(src, "$x + y$");
+        let full = extract_fragment_svg(&w_full, &doc, r.start, r.end).unwrap();
+        let syn = FragmentCompiler::compile_fragment_scoped(
+            &mut w_syn,
+            src,
+            r.start,
+            r.end,
+            tip_protocol::svg_color::STANDIN_HEX,
+            None,
+            None,
+        )
+        .expect("synthetic compile");
+
+        // Width within 25% (different layout contexts produce slightly
+        // different glyph advances; allow some slack but flag big drift).
+        let wr = full.width_pt / syn.width_pt;
+        assert!(
+            wr > 0.75 && wr < 1.25,
+            "width drift: full={:.2} synthetic={:.2} ratio={:.2}",
+            full.width_pt,
+            syn.width_pt,
+            wr
+        );
+        // Height within 35% — synthetic adds 0.5pt padding and crops
+        // differently around margins, but the ink should be similar.
+        let hr = full.height_pt / syn.height_pt;
+        assert!(
+            hr > 0.65 && hr < 1.35,
+            "height drift: full={:.2} synthetic={:.2} ratio={:.2}",
+            full.height_pt,
+            syn.height_pt,
+            hr
         );
     }
 
