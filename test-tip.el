@@ -457,15 +457,12 @@ a figure returns nil (nothing renderable there)."
   (should (eq (tip-latex-classify-fragment "\\begin{equation}\nx\n\\end{equation}")
               'display-multi)))
 
-(ert-deftest tip-latex-test-refuse-when-includes-present ()
-  "Any live \\input/\\include/\\subimport anywhere in the buffer disables
-the backend — collect returns nil, bounds-at-point returns nil.
-
-EXPECTED FAILURE: TexProject support landed and the LaTeX backend now
-serves fragments even when includes are present (with a project-root
-sync).  Test predates that work; needs a rewrite that reflects the
-new contract."
-  :expected-result :failed
+(ert-deftest tip-latex-test-collects-fragments-with-includes-present ()
+  "TexProject support: \\input/\\include/\\subimport in the buffer no
+longer disables the backend.  Collect returns the math fragments;
+bounds-at-point resolves on math regardless of nearby includes.
+Project-root multi-file machinery handles the include resolution
+out-of-band."
   (dolist (cmd '("\\input{macros}" "\\include{chap1}" "\\subimport{sub}{file}"))
     (with-temp-buffer
       (delay-mode-hooks (latex-mode))
@@ -473,11 +470,11 @@ new contract."
       (insert "\\begin{document}\n")
       (insert "$x$ before " cmd " $y$ after.\n")
       (insert "\\end{document}\n")
-      ;; Both entry points must short-circuit.
-      (should (null (tip-latex-collect-fragments (point-min) (point-max))))
+      (let ((frags (tip-latex-collect-fragments (point-min) (point-max))))
+        (should (= 2 (length frags))))
       (goto-char (point-min))
       (search-forward "$x$")
-      (should (null (tip-latex-bounds-at-point (1- (point))))))))
+      (should (tip-latex-bounds-at-point (1- (point)))))))
 
 (ert-deftest tip-latex-test-preamble-under-narrowing ()
   "Narrowing to a section shouldn't hide the preamble from extraction."
@@ -508,13 +505,10 @@ new contract."
                             (point-min) (point-max))))))))
 
 (ert-deftest tip-latex-test-includes-detected-outside-narrowing ()
-  "A \\input in the preamble should still trigger refuse even when the
-user has narrowed to a section below \\begin{document}.
-
-EXPECTED FAILURE: same root cause as
-`tip-latex-test-refuse-when-includes-present' — TexProject made
-\\input non-fatal."
-  :expected-result :failed
+  "Detection of \\input in the preamble works regardless of buffer
+narrowing — `tip-latex--buffer-has-includes-p' walks the full buffer.
+TexProject reads this signal to know the document spans multiple
+files; collection no longer refuses on it."
   (with-temp-buffer
     (delay-mode-hooks (latex-mode))
     (insert "\\documentclass{article}\n"
@@ -527,9 +521,11 @@ EXPECTED FAILURE: same root cause as
                                        (line-beginning-position)))
           (body-end (point-max)))
       (narrow-to-region body-start body-end)
-      ;; Refuse must fire even though `\input' lies outside the narrow.
+      ;; Detection-still-fires invariant.
       (should (tip-latex--buffer-has-includes-p))
-      (should (null (tip-latex-collect-fragments (point-min) (point-max)))))))
+      ;; Collection still produces the fragment; refuse policy gone.
+      (should (= 1 (length (tip-latex-collect-fragments
+                            (point-min) (point-max))))))))
 
 ;;; * Error navigation, eldoc, and Flymake backend
 
@@ -777,18 +773,17 @@ legacy strict-overlap behavior."
       (should (equal (plist-get got :svg) "<svg/>"))
       (should (numberp (plist-get got :ts))))))
 
-(ert-deftest tip-test-compile-cache-miss-different-color ()
-  "Color changes should miss the cache.
-
-EXPECTED FAILURE: SVGs now bake `currentColor' as a sentinel and are
-recolored at display time (`tip--recolor-overlays'), so the cache key
-no longer needs to vary by color — a hit on the same fragment text
-under any color is correct.  Test reflects the old contract."
-  :expected-result :failed
+(ert-deftest tip-test-compile-cache-hit-across-colors ()
+  "Color changes should HIT the cache: SVGs bake `currentColor' as a
+sentinel and `tip--recolor-overlays' rewrites it at display time, so
+the cache key no longer needs to vary by color.  A hit on the same
+fragment text under any color is correct."
   (with-temp-buffer
     (tip-clear-compile-cache)
     (tip--cache-put "$x$" "#000000" '(:svg "black"))
-    (should (null (tip--cache-get "$x$" "#ffffff")))))
+    (let ((hit (tip--cache-get "$x$" "#ffffff")))
+      (should hit)
+      (should (equal (plist-get hit :svg) "black")))))
 
 (ert-deftest tip-test-compile-cache-lru-eviction ()
   "Exceeding tip-cache-max-entries drops the LRU entry."
@@ -820,13 +815,13 @@ under any color is correct.  Test reflects the old contract."
       (kill-buffer bufA)
       (kill-buffer bufB))))
 
-(ert-deftest tip-latex-test-skip-blank-fragments ()
-  "Whitespace-only math (`$ $', `\\[ \\]', empty env) must not produce fragments.
-
-EXPECTED FAILURE: collector now hands blank fragments to the server
-and lets the server-side classifier decide.  Filtering moved out of
-the elisp side."
-  :expected-result :failed
+(ert-deftest tip-latex-test-collects-all-math-including-blank ()
+  "The elisp collector returns every math fragment in range, including
+whitespace-only ones (`$ $', `\\[ \\]', empty env).  Filtering moved
+server-side: the server classifier sees the blank text and decides
+not to render it (returns an empty SVG / no result).  This keeps the
+client purely structural — it doesn't have to encode \"empty math\"
+rules."
   (with-temp-buffer
     (delay-mode-hooks (latex-mode))
     (insert "Real $a$\nblank1 $ $\nblank2 \\[  \\]\n"
@@ -839,7 +834,10 @@ the elisp side."
                       (buffer-substring-no-properties
                        (byte-to-position sb) (byte-to-position eb))))
                   (tip-latex-collect-fragments (point-min) (point-max)))))
-      (should (equal texts '("$a$" "$b$"))))))
+      ;; All six fragments collected — real and blank alike.
+      (should (= 6 (length texts)))
+      (should (member "$a$" texts))
+      (should (member "$b$" texts)))))
 
 (ert-deftest tip-latex-test-commented-include-allowed ()
   "A \\input inside a comment must NOT disable previewing."
