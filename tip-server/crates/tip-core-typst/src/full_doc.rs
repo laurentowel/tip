@@ -26,9 +26,10 @@
 use std::ops::Range;
 
 use typst::compile;
-use typst::layout::{Frame, FrameItem, PagedDocument};
+use typst::layout::{Abs, Frame, FrameItem, PagedDocument, Point, Size};
 use typst::syntax::{FileId, Source};
 use typst::World;
+use typst_svg::svg_frame;
 
 use crate::world::TipWorld;
 use tip_protocol::messages::{FragmentLocation, FragmentResult};
@@ -37,15 +38,51 @@ pub struct FullDocCompiler;
 
 impl FullDocCompiler {
     /// Compile every fragment in `fragments` from a single full-document
-    /// compile of `content`.  Currently unimplemented (step 3+) — callers
-    /// fall back to the synthetic strategy on `Err`.
+    /// compile of `content`.  Returns `Err` on document-level compile
+    /// failure (the synthetic path is the safety net — it produces
+    /// per-fragment errors so individual broken fragments don't
+    /// poison the whole render).
     pub fn compile_all(
-        _world: &mut TipWorld,
-        _content: &str,
+        world: &mut TipWorld,
+        content: &str,
         fragments: &[FragmentLocation],
     ) -> Result<Vec<FragmentResult>, String> {
-        let _ = fragments;
-        Err("full-document compilation strategy not yet implemented".into())
+        let doc = compile_real_document(world, content)?;
+        let mut results = Vec::with_capacity(fragments.len());
+        for f in fragments {
+            let r = match extract_fragment_svg(world, &doc, f.start, f.end) {
+                Some(render) => FragmentResult {
+                    start: f.start,
+                    end: f.end,
+                    svg: tip_protocol::svg_color::fills_to_current_color(
+                        &render.svg,
+                        tip_protocol::svg_color::STANDIN_HEX,
+                    ),
+                    height_pt: render.height_pt,
+                    depth_pt: render.depth_pt,
+                    width_pt: render.width_pt,
+                    font_size_pt: Some(11.0),
+                    error: None,
+                    error_detail: None,
+                },
+                None => FragmentResult {
+                    start: f.start,
+                    end: f.end,
+                    svg: String::new(),
+                    height_pt: 0.0,
+                    depth_pt: 0.0,
+                    width_pt: 0.0,
+                    font_size_pt: Some(11.0),
+                    // Empty SVG; client treats this as "skip this
+                    // fragment" (no overlay placed).  Common for
+                    // `hide()`-only fragments or imports.
+                    error: None,
+                    error_detail: None,
+                },
+            };
+            results.push(r);
+        }
+        Ok(results)
     }
 }
 
@@ -146,6 +183,282 @@ pub fn fragment_items<'a>(
             None => false,
         })
         .collect()
+}
+
+/// Render output for a single fragment extracted from a full document.
+/// Coordinates are in points.  `depth_pt` is the height of ink BELOW
+/// the line's baseline — for inline math this is what Emacs needs for
+/// `:ascent` calculation.
+#[derive(Debug, Clone)]
+pub struct FragmentRender {
+    pub svg: String,
+    pub width_pt: f64,
+    pub height_pt: f64,
+    pub depth_pt: f64,
+    pub page: usize,
+    /// True iff `depth_pt` came from a surrounding-text baseline
+    /// reference (not a fallback derived from the fragment's own
+    /// items).  `false` => depth is best-effort; the caller may want
+    /// to use `:ascent center` for display math.
+    pub baseline_external: bool,
+}
+
+/// Build a minimal `Frame` containing only items belonging to the
+/// fragment range, translated so the frame's origin is the ink-bounds
+/// top-left, and render it as SVG.
+///
+/// Returns `None` if the fragment range matched no items (empty math,
+/// `hide()` with no descendant content, all items in imported
+/// modules — none of which are renderable inline previews).
+pub fn extract_fragment_svg(
+    world: &dyn World,
+    doc: &PagedDocument,
+    start: usize,
+    end: usize,
+) -> Option<FragmentRender> {
+    let main = world.main();
+    let main_src = world.source(main).ok()?;
+
+    // Pick the first page that has any matching item.  Multi-page
+    // fragments are not a typical case for inline math; we'd need a
+    // different strategy (e.g., merge frames) if it ever comes up.
+    for (page_idx, page) in doc.pages.iter().enumerate() {
+        let mut keep: Vec<(Point, FrameItem)> = Vec::new();
+        let mut bounds = ItemBounds::empty();
+        collect_for_fragment(
+            &page.frame,
+            Point::zero(),
+            main,
+            &main_src,
+            start,
+            end,
+            &mut keep,
+            &mut bounds,
+        );
+        if keep.is_empty() || bounds.is_empty() {
+            continue;
+        }
+        let pad = Abs::pt(0.5);
+        let min_x = bounds.min_x - pad;
+        let min_y = bounds.min_y - pad;
+        let width = bounds.max_x - bounds.min_x + pad * 2.0;
+        let height = bounds.max_y - bounds.min_y + pad * 2.0;
+
+        // Baseline reference: prefer surrounding-text baseline on this
+        // page (that's the user's actual line baseline).  Fall back to
+        // the bottom-most fragment text baseline.  Falling further to
+        // the bottom of ink covers Shape-only fragments.
+        let frag_baselines: Vec<Abs> = keep
+            .iter()
+            .filter_map(|(p, item)| match item {
+                FrameItem::Text(_) => Some(p.y),
+                _ => None,
+            })
+            .collect();
+        let (baseline_y, external) =
+            match find_external_baseline(&page.frame, &frag_baselines, main, &main_src, start, end)
+            {
+                Some(b) => (b, true),
+                None => (
+                    frag_baselines.iter().copied().max().unwrap_or(bounds.max_y),
+                    false,
+                ),
+            };
+        let depth = (bounds.max_y - baseline_y).max(Abs::zero());
+
+        // Rebuild a flat Frame at the cropped origin.  Clone is cheap
+        // — FrameItem is `derive(Clone)` and Text/Shape are Arcs/Vecs.
+        let mut out = Frame::soft(Size::new(width, height));
+        for (pos, item) in keep {
+            out.push(Point::new(pos.x - min_x, pos.y - min_y), item);
+        }
+
+        return Some(FragmentRender {
+            svg: svg_frame(&out),
+            width_pt: width.to_pt(),
+            height_pt: height.to_pt(),
+            depth_pt: depth.to_pt(),
+            page: page_idx,
+            baseline_external: external,
+        });
+    }
+
+    None
+}
+
+/// Bounds in absolute page coordinates (points).
+#[derive(Debug)]
+struct ItemBounds {
+    min_x: Abs,
+    max_x: Abs,
+    min_y: Abs,
+    max_y: Abs,
+    nonempty: bool,
+}
+
+impl ItemBounds {
+    fn empty() -> Self {
+        Self {
+            min_x: Abs::pt(f64::MAX),
+            max_x: Abs::pt(f64::MIN),
+            min_y: Abs::pt(f64::MAX),
+            max_y: Abs::pt(f64::MIN),
+            nonempty: false,
+        }
+    }
+    fn is_empty(&self) -> bool {
+        !self.nonempty
+    }
+    fn extend(&mut self, x0: Abs, y0: Abs, x1: Abs, y1: Abs) {
+        self.min_x = self.min_x.min(x0);
+        self.max_x = self.max_x.max(x1);
+        self.min_y = self.min_y.min(y0);
+        self.max_y = self.max_y.max(y1);
+        self.nonempty = true;
+    }
+}
+
+fn span_in_range(
+    span: typst::syntax::Span,
+    main: FileId,
+    src: &Source,
+    start: usize,
+    end: usize,
+) -> bool {
+    if span.id() != Some(main) {
+        return false;
+    }
+    match src.range(span) {
+        Some(r) => r.start < end && r.end > start,
+        None => false,
+    }
+}
+
+/// Find a surrounding-text baseline on `frame` (a page) for an
+/// inline-math fragment whose own text-item baselines are
+/// `frag_baselines`.  Walks all text items NOT inside the fragment's
+/// source range; returns the one whose baseline-y is closest to any
+/// `frag_baselines` entry, within ~one line-height.  Returns `None`
+/// when nothing surrounding is on the same line (display math, or
+/// the math is the only content).
+fn find_external_baseline(
+    frame: &Frame,
+    frag_baselines: &[Abs],
+    main: FileId,
+    src: &Source,
+    exclude_start: usize,
+    exclude_end: usize,
+) -> Option<Abs> {
+    if frag_baselines.is_empty() {
+        return None;
+    }
+    let mut external_ys: Vec<Abs> = Vec::new();
+    walk_external(
+        frame,
+        Point::zero(),
+        main,
+        src,
+        exclude_start,
+        exclude_end,
+        &mut external_ys,
+    );
+    let tol = Abs::pt(20.0);
+    let mut best: Option<(Abs, Abs)> = None; // (distance, y)
+    for ey in external_ys {
+        for fy in frag_baselines {
+            let d = (ey - *fy).abs();
+            if d > tol {
+                continue;
+            }
+            if best.map_or(true, |(bd, _)| d < bd) {
+                best = Some((d, ey));
+            }
+        }
+    }
+    best.map(|(_, y)| y)
+}
+
+fn walk_external(
+    frame: &Frame,
+    offset: Point,
+    main: FileId,
+    src: &Source,
+    exclude_start: usize,
+    exclude_end: usize,
+    out: &mut Vec<Abs>,
+) {
+    for (pos, item) in frame.items() {
+        let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
+        match item {
+            FrameItem::Group(g) => {
+                walk_external(&g.frame, abs, main, src, exclude_start, exclude_end, out)
+            }
+            FrameItem::Text(t) => {
+                let any_in = t
+                    .glyphs
+                    .iter()
+                    .any(|gl| span_in_range(gl.span.0, main, src, exclude_start, exclude_end));
+                if !any_in {
+                    out.push(abs.y);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_for_fragment(
+    frame: &Frame,
+    offset: Point,
+    main: FileId,
+    src: &Source,
+    start: usize,
+    end: usize,
+    keep: &mut Vec<(Point, FrameItem)>,
+    bounds: &mut ItemBounds,
+) {
+    for (pos, item) in frame.items() {
+        let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
+        match item {
+            FrameItem::Group(g) => {
+                collect_for_fragment(&g.frame, abs, main, src, start, end, keep, bounds);
+            }
+            FrameItem::Text(t) => {
+                let any = t
+                    .glyphs
+                    .iter()
+                    .any(|g| span_in_range(g.span.0, main, src, start, end));
+                if any {
+                    // `text.bbox()` returns glyph-coord y (y-up).  In
+                    // frame coords (y-down) the FRAME-TOP is `bbox.max.y`
+                    // (a negative number above the baseline) and the
+                    // FRAME-BOTTOM is `bbox.min.y` (positive, descender).
+                    // Same flip the synthetic compiler uses in
+                    // `find_ink_extent`.
+                    let bbox = t.bbox();
+                    bounds.extend(
+                        abs.x + bbox.min.x,
+                        abs.y + bbox.max.y,
+                        abs.x + bbox.max.x,
+                        abs.y + bbox.min.y,
+                    );
+                    keep.push((abs, FrameItem::Text(t.clone())));
+                }
+            }
+            FrameItem::Shape(shape, span) => {
+                if span_in_range(*span, main, src, start, end) {
+                    // Shape geometry: use a coarse bbox from the
+                    // shape's own size info.  `Geometry` exposes this
+                    // via `bbox_size` on Line/Rect/Path; for simplicity
+                    // we extend by a small region around the position.
+                    // SVG-level cropping picks up the rest.
+                    bounds.extend(abs.x, abs.y, abs.x, abs.y);
+                    keep.push((abs, FrameItem::Shape(shape.clone(), *span)));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +576,82 @@ $phantom(a)^2$ vs $a^2$
             y_phantom,
             y_plain
         );
+    }
+
+    #[test]
+    fn extract_renders_distinct_svgs_for_two_fragments() {
+        let mut world = TipWorld::new();
+        let src = "Some text $x + y$ between $a - b$ math.\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+
+        let r1 = locate(src, "$x + y$");
+        let r2 = locate(src, "$a - b$");
+        let f1 = extract_fragment_svg(&world, &doc, r1.start, r1.end)
+            .expect("fragment 1 should render");
+        let f2 = extract_fragment_svg(&world, &doc, r2.start, r2.end)
+            .expect("fragment 2 should render");
+
+        assert!(f1.width_pt > 0.0 && f1.height_pt > 0.0);
+        assert!(f2.width_pt > 0.0 && f2.height_pt > 0.0);
+        assert!(f1.svg.contains("<svg"));
+        assert!(f2.svg.contains("<svg"));
+        assert_ne!(f1.svg, f2.svg, "two distinct fragments produced identical SVG");
+    }
+
+    /// Step-4 acceptance: with surrounding text on the same line,
+    /// `$phantom(a)^2$` and `$a^2$` must report the **same baseline**
+    /// (i.e. the same `height_pt - depth_pt`, since both crop to the
+    /// surrounding-text baseline).  Without external baseline this
+    /// would silently regress on hidden-base superscripts.
+    #[test]
+    fn external_baseline_matches_for_phantom_vs_plain() {
+        let mut world = TipWorld::new();
+        let src = "\
+#let phantom(x) = hide($#x$)
+text $phantom(a)^2$ and $a^2$ done
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r_phantom = locate(src, "$phantom(a)^2$");
+        let r_plain = locate(src, "$a^2$");
+
+        let f_phantom = extract_fragment_svg(&world, &doc, r_phantom.start, r_phantom.end)
+            .expect("phantom render");
+        let f_plain = extract_fragment_svg(&world, &doc, r_plain.start, r_plain.end)
+            .expect("plain render");
+
+        assert!(
+            f_phantom.baseline_external && f_plain.baseline_external,
+            "both fragments should pick up the surrounding-text baseline"
+        );
+        // The plain a^2 has a real `a` glyph touching the baseline, so
+        // its depth is ~0 (no descender).  The phantom version's only
+        // ink is `^2` entirely above the baseline, so depth is also 0.
+        // What matters is they agree.
+        assert!(
+            (f_phantom.depth_pt - f_plain.depth_pt).abs() < 0.5,
+            "depth diverged: phantom={:.3} plain={:.3}",
+            f_phantom.depth_pt,
+            f_plain.depth_pt
+        );
+    }
+
+    #[test]
+    fn extract_handles_phantom_base_superscript() {
+        // The phantom-base case from the partition regression test:
+        // `phantom(a)^2` must still render — the `^2` glyph is real,
+        // even with an invisible base.  Step 4 handles the baseline.
+        let mut world = TipWorld::new();
+        let src = "\
+#let phantom(x) = hide($#x$)
+$phantom(a)^2$
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r = locate(src, "$phantom(a)^2$");
+        let f = extract_fragment_svg(&world, &doc, r.start, r.end)
+            .expect("phantom-base fragment should render");
+        assert!(f.width_pt > 0.0);
+        assert!(f.height_pt > 0.0);
+        assert!(f.svg.contains("<svg"));
     }
 
     #[test]
