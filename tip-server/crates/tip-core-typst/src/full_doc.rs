@@ -23,11 +23,12 @@
 //! Step 5 (planned): error-fallback policy + comparison test against
 //!   the synthetic strategy on the existing visual-test corpus.
 
+use std::collections::HashMap;
 use std::ops::Range;
 
 use typst::compile;
 use typst::layout::{Abs, Frame, FrameItem, PagedDocument, Point, Size};
-use typst::syntax::{FileId, Source};
+use typst::syntax::{FileId, LinkedNode, Source, Span};
 use typst::World;
 use typst_svg::svg_frame;
 
@@ -57,10 +58,15 @@ impl FullDocCompiler {
         let mut page_index: Vec<(Vec<FlatLeaf>, Vec<GroupRecord>)> =
             Vec::with_capacity(doc.pages.len());
         if let Some(ms) = &main_src {
+            // Build span→range index ONCE, reused across all pages.
+            let span_index = build_span_index(ms);
             for page in &doc.pages {
                 let mut leaves = Vec::new();
                 let mut groups = Vec::new();
-                flatten_leaves(&page.frame, Point::zero(), main, ms, &mut leaves, &mut groups);
+                flatten_leaves_inner(
+                    &page.frame, Point::zero(), main, &span_index,
+                    &mut leaves, &mut groups,
+                );
                 page_index.push((leaves, groups));
             }
         }
@@ -575,6 +581,22 @@ struct GroupRecord {
     leaf_range: Range<usize>,
 }
 
+/// Build a `Span → byte range` index for `source` by walking the
+/// AST once.  `Source::range` is O(depth) per call (it does an AST
+/// walk) so calling it 100k times during flatten is a 50× perf
+/// regression.  This index turns each lookup into a single hash hit.
+fn build_span_index(source: &Source) -> HashMap<Span, Range<usize>> {
+    let mut map = HashMap::with_capacity(2048);
+    fn walk(node: LinkedNode, map: &mut HashMap<Span, Range<usize>>) {
+        map.insert(node.span(), node.range());
+        for child in node.children() {
+            walk(child, map);
+        }
+    }
+    walk(LinkedNode::new(source.root()), &mut map);
+    map
+}
+
 fn ranges_minmax(ranges: &[Range<usize>]) -> (usize, usize) {
     if ranges.is_empty() {
         return (usize::MAX, 0);
@@ -595,7 +617,7 @@ fn ranges_minmax(ranges: &[Range<usize>]) -> (usize, usize) {
 fn collect_text_spans(
     t: &typst::text::TextItem,
     main: FileId,
-    src: &Source,
+    span_index: &HashMap<Span, Range<usize>>,
 ) -> (Vec<Range<usize>>, bool) {
     let mut ranges = Vec::new();
     let mut has_other = false;
@@ -604,8 +626,8 @@ fn collect_text_spans(
         match span.id() {
             None => {}
             Some(id) if id == main => {
-                if let Some(r) = src.range(span) {
-                    ranges.push(r);
+                if let Some(r) = span_index.get(&span) {
+                    ranges.push(r.clone());
                 }
             }
             Some(_) => has_other = true,
@@ -615,14 +637,14 @@ fn collect_text_spans(
 }
 
 fn collect_shape_span(
-    span: typst::syntax::Span,
+    span: Span,
     main: FileId,
-    src: &Source,
+    span_index: &HashMap<Span, Range<usize>>,
 ) -> (Vec<Range<usize>>, bool) {
     match span.id() {
         None => (Vec::new(), false),
-        Some(id) if id == main => match src.range(span) {
-            Some(r) => (vec![r], false),
+        Some(id) if id == main => match span_index.get(&span) {
+            Some(r) => (vec![r.clone()], false),
             None => (Vec::new(), false),
         },
         Some(_) => (Vec::new(), true),
@@ -643,12 +665,26 @@ fn flatten_leaves(
     out_leaves: &mut Vec<FlatLeaf>,
     out_groups: &mut Vec<GroupRecord>,
 ) {
+    let span_index = build_span_index(src);
+    flatten_leaves_inner(frame, offset, main, &span_index, out_leaves, out_groups);
+}
+
+fn flatten_leaves_inner(
+    frame: &Frame,
+    offset: Point,
+    main: FileId,
+    span_index: &HashMap<Span, Range<usize>>,
+    out_leaves: &mut Vec<FlatLeaf>,
+    out_groups: &mut Vec<GroupRecord>,
+) {
     for (pos, item) in frame.items() {
         let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
         match item {
             FrameItem::Group(g) => {
                 let before = out_leaves.len();
-                flatten_leaves(&g.frame, abs, main, src, out_leaves, out_groups);
+                flatten_leaves_inner(
+                    &g.frame, abs, main, span_index, out_leaves, out_groups,
+                );
                 let after = out_leaves.len();
                 if g.frame.has_baseline() {
                     out_groups.push(GroupRecord {
@@ -658,7 +694,7 @@ fn flatten_leaves(
                 }
             }
             FrameItem::Text(t) => {
-                let (ranges, has_other) = collect_text_spans(t, main, src);
+                let (ranges, has_other) = collect_text_spans(t, main, span_index);
                 let (min_r, max_r) = ranges_minmax(&ranges);
                 out_leaves.push(FlatLeaf {
                     pos: abs,
@@ -671,7 +707,7 @@ fn flatten_leaves(
                 });
             }
             FrameItem::Shape(shape, span) => {
-                let (ranges, has_other) = collect_shape_span(*span, main, src);
+                let (ranges, has_other) = collect_shape_span(*span, main, span_index);
                 let (min_r, max_r) = ranges_minmax(&ranges);
                 out_leaves.push(FlatLeaf {
                     pos: abs,
@@ -1504,6 +1540,154 @@ $x + y$ default size
         );
     }
 
+    /// Probe: what's slow in flatten?  Compare three variants:
+    /// (a) full flatten as we ship it,
+    /// (b) flatten that skips `src.range()` calls (just count glyphs),
+    /// (c) just `frame.items()` walk without touching glyphs at all.
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_flatten_breakdown() {
+        use std::time::Instant;
+        let (src, _) = build_5kloc_corpus();
+        let mut world = TipWorld::new();
+        let doc = compile_real_document(&mut world, &src).expect("compile");
+        let main = world.main();
+        let main_src = world.source(main).ok().unwrap();
+
+        // (a) full flatten
+        let t = Instant::now();
+        let mut leaves = Vec::new();
+        let mut groups = Vec::new();
+        for page in &doc.pages {
+            flatten_leaves(&page.frame, Point::zero(), main, &main_src, &mut leaves, &mut groups);
+        }
+        eprintln!(
+            "(a) flatten_leaves: {:.1} ms  leaves={} groups={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            leaves.len(),
+            groups.len()
+        );
+
+        // (b) walk + glyph count, no src.range
+        let t = Instant::now();
+        let mut total_glyphs = 0usize;
+        let mut walked = 0usize;
+        fn walk_b(frame: &Frame, total_glyphs: &mut usize, walked: &mut usize) {
+            for (_pos, item) in frame.items() {
+                *walked += 1;
+                match item {
+                    FrameItem::Group(g) => walk_b(&g.frame, total_glyphs, walked),
+                    FrameItem::Text(t) => *total_glyphs += t.glyphs.len(),
+                    _ => {}
+                }
+            }
+        }
+        for page in &doc.pages {
+            walk_b(&page.frame, &mut total_glyphs, &mut walked);
+        }
+        eprintln!(
+            "(b) walk + count: {:.1} ms  walked_items={}, glyphs={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            walked,
+            total_glyphs
+        );
+
+        // (c) walk + src.range per glyph
+        let t = Instant::now();
+        let mut got_range = 0usize;
+        fn walk_c(frame: &Frame, main: FileId, src: &Source, got: &mut usize) {
+            for (_pos, item) in frame.items() {
+                match item {
+                    FrameItem::Group(g) => walk_c(&g.frame, main, src, got),
+                    FrameItem::Text(t) => {
+                        for g in &t.glyphs {
+                            let span = g.span.0;
+                            if span.id() == Some(main) {
+                                if src.range(span).is_some() {
+                                    *got += 1;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for page in &doc.pages {
+            walk_c(&page.frame, main, &main_src, &mut got_range);
+        }
+        eprintln!(
+            "(c) walk + src.range per glyph: {:.1} ms  resolved={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            got_range
+        );
+    }
+
+    /// Phase-by-phase timing for the full-doc batch path.  Splits
+    /// total cost into compile, flatten, linear-pass, frame-build,
+    /// svg-render so we know where to optimize.
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_full_doc_phases() {
+        use std::time::Instant;
+        let (src, fragments) = build_5kloc_corpus();
+        let n_lines = src.lines().count();
+        let n_frag = fragments.len();
+        eprintln!(
+            "[phases] {} lines, {} fragments, {} bytes",
+            n_lines, n_frag, src.len()
+        );
+        let mut world = TipWorld::new();
+        let t = Instant::now();
+        let doc = compile_real_document(&mut world, &src).expect("compile");
+        let compile = t.elapsed().as_secs_f64() * 1000.0;
+        let main = world.main();
+        let main_src = world.source(main).ok().unwrap();
+        let t = Instant::now();
+        let mut leaves_vec = Vec::new();
+        let mut groups_vec = Vec::new();
+        for page in &doc.pages {
+            let mut leaves = Vec::new();
+            let mut groups = Vec::new();
+            flatten_leaves(&page.frame, Point::zero(), main, &main_src, &mut leaves, &mut groups);
+            leaves_vec.push(leaves);
+            groups_vec.push(groups);
+        }
+        let total_leaves: usize = leaves_vec.iter().map(|v| v.len()).sum();
+        let flatten = t.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("  total leaves across pages: {}", total_leaves);
+
+        // Build pages index ONCE (move out of fragment loop).
+        let pages: Vec<(Vec<FlatLeaf>, Vec<GroupRecord>)> = leaves_vec
+            .into_iter()
+            .zip(groups_vec.into_iter())
+            .collect();
+        let mut extract_ms = 0.0;
+        let mut hits = 0;
+        for r in &fragments {
+            let t = Instant::now();
+            let render = extract_from_index(&pages, r.start, r.end);
+            extract_ms += t.elapsed().as_secs_f64() * 1000.0;
+            if render.is_some() {
+                hits += 1;
+            }
+        }
+        eprintln!(
+            "  compile: {:.1} ms",
+            compile
+        );
+        eprintln!(
+            "  flatten (all pages): {:.1} ms",
+            flatten
+        );
+        eprintln!(
+            "  per-fragment extract+render: total={:.1} ms ({:.3} ms/frag) hits={}",
+            extract_ms,
+            extract_ms / n_frag as f64,
+            hits
+        );
+    }
+
     /// Bench: full-doc with `compile_all` (which currently is the
     /// same as the loop in `bench_full_doc` but exists as the public
     /// API path the server hits).
@@ -1536,10 +1720,14 @@ $x + y$ default size
         );
     }
 
-    /// Bench: editing latency.  Emulate the user typing N characters
-    /// at the END of a 5000-line document, measuring per-keystroke
-    /// compile time.  This is the live-preview hot path: we want
-    /// well below 30 ms per keystroke for a fluid edit experience.
+    /// Bench: editing latency.  Emulate the user appending a NEW
+    /// 5001th line containing a math fragment, character by
+    /// character, on top of an existing N-line document.  Each
+    /// keystroke triggers a full compile + extract for the new
+    /// fragment.  This is the live-preview hot path; we want well
+    /// below 30 ms per keystroke for a fluid edit experience.
+    /// `comemo` should cache layout for unchanged content, so
+    /// subsequent keystrokes are much cheaper than the first.
     #[test]
     #[ignore = "perf bench, run with --ignored"]
     fn bench_5kloc_edit_latency() {
