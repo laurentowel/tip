@@ -79,19 +79,26 @@ modification-hook already blocks nested edits of the same region.")
     buf))
 
 (defun tip-edit-indirect--show-preview (payload kind)
-  "Render PAYLOAD into the preview buffer.  KIND is `image' or `error'."
-  (let ((buf (tip-edit-indirect--ensure-preview-buffer)))
+  "Render PAYLOAD into the preview buffer.  KIND is `image' or `error'.
+For images, sizes the SVG to fit the preview window with a small margin."
+  (let* ((buf (tip-edit-indirect--ensure-preview-buffer))
+         (win (get-buffer-window buf t)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (pcase kind
           ('image
-           (let* ((font-pt (if (fboundp 'tip--font-size-pt) (tip--font-size-pt) 11.0))
-                  (scale (/ font-pt 11.0))
+           ;; Cap the SVG to the visible preview window so a tall
+           ;; equation doesn't push the image past the split.  Leave
+           ;; ~16 px slack for fringes/margins; fall back to 600x300
+           ;; if the buffer isn't currently displayed (test path).
+           (let* ((max-w (if win (max 80 (- (window-pixel-width win) 32)) 600))
+                  (max-h (if win (max 60 (- (window-pixel-height win) 32)) 300))
                   (img (list 'image
                              :type 'svg
                              :data payload
-                             :scale (* scale 2.0)
+                             :max-width max-w
+                             :max-height max-h
                              :ascent 'center)))
              (insert "\n  ")
              (insert-image img)
@@ -176,10 +183,16 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
            (text (buffer-substring-no-properties beg end))
            (src-buf (current-buffer))
            (ov (make-overlay beg end))
-           (edit-buf (generate-new-buffer
-                      (format "*tip-edit:%s*"
-                              (truncate-string-to-width
-                               (string-trim text) 30))))
+           ;; Sanitize the fragment text for the buffer name: collapse
+           ;; any internal whitespace run (newlines, tabs) into a single
+           ;; space, then trim and truncate.  Without this, display
+           ;; math like `$\n  x^2\n$` produces a buffer name with a
+           ;; literal `^J` in it.
+           (label (truncate-string-to-width
+                   (string-trim
+                    (replace-regexp-in-string "[ \t\n\r]+" " " text))
+                   30))
+           (edit-buf (generate-new-buffer (format "*tip-edit:%s*" label)))
            (preview-buf (tip-edit-indirect--ensure-preview-buffer)))
       ;; Mark source region so the user can't edit it from elsewhere.
       (overlay-put ov 'face 'highlight)
@@ -194,6 +207,12 @@ updates the preview on idle.  \\[tip-edit-indirect-commit] saves back,
         (when (fboundp 'typst-ts-mode)
           (condition-case nil (typst-ts-mode) (error nil)))
         (tip-edit-indirect-mode 1)
+        (setq-local header-line-format
+                    (substitute-command-keys
+                     (concat
+                      " Edit fragment — "
+                      "\\[tip-edit-indirect-commit] commit, "
+                      "\\[tip-edit-indirect-abort] abort")))
         (setq-local tip-edit-indirect--source-buffer src-buf)
         (setq-local tip-edit-indirect--source-overlay ov)
         (setq-local tip-edit-indirect--content-cache "")
