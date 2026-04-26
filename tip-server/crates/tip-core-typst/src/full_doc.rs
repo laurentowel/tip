@@ -320,31 +320,35 @@ pub fn extract_fragment_svg(
             .collect();
         // Baseline picker (priority order):
         //
-        //   1. **Group baseline** from a fragment-bearing Group with
-        //      `has_baseline()=true`.  Typst sets this on math
-        //      equations and is what the synthetic compiler uses via
-        //      `find_group_baseline`.  Sits ~0.5 pt above raw
-        //      TextItem `pos.y` due to math-axis alignment.
-        //   2. **frag_max** = lowest TextItem baseline in the
-        //      fragment.  Used when the fragment has no explicit
-        //      Group baseline.
-        //   3. **external** = surrounding-text line baseline within
-        //      tol.  Used when the fragment is sub/super-shifted
-        //      (`^2` after `phantom(a)` etc.) — its own baselines
-        //      sit far above the line, so we have to reach out for
-        //      the real line baseline.
-        //   4. **bounds.max_y** as a last resort (Shape-only
-        //      fragments).
+        //   1. **Group baseline** from the OUTERMOST fragment-bearing
+        //      Group with `has_baseline()=true`.  Typst sets this on
+        //      math equations and the outer Group's baseline is the
+        //      canonical line baseline (inner Groups' baselines are
+        //      math-internally shifted for sub/super/frac layout).
+        //   2. **External** = surrounding-text line baseline.  Kicks
+        //      in for inlined math (no Group wrapper).  When fragment
+        //      glyphs are sub/super-shifted, external is below them —
+        //      the `>` comparison naturally falls through to "use
+        //      external".  When fragment glyphs sit at the line,
+        //      external == frag_max anyway, so order doesn't matter.
+        //   3. **frag_max** = lowest TextItem baseline in the fragment.
+        //      Used when there's no Group AND no external candidate
+        //      (display math alone, or no surrounding prose on the line).
+        //   4. **bounds.max_y** as a last resort (Shape-only fragments).
+        //
+        // Previously had a `SHIFT_THRESHOLD = 2pt` guard to distinguish
+        // "fragment is at line baseline" from "fragment is sup-shifted",
+        // but that's now redundant: outer Group baseline handles all
+        // wrapped math; for inlined math, external (when present) is
+        // always at least as authoritative as frag_max.
         let frag_max = frag_baselines.iter().copied().max();
         let group_baseline = outermost_group_baseline;
         let external_y =
             find_external_baseline(&page.frame, &frag_baselines, max_text_size, main, &main_src, start, end);
-        const SHIFT_THRESHOLD: f64 = 2.0;
-        let (baseline_y, external) = match (group_baseline, frag_max, external_y) {
+        let (baseline_y, external) = match (group_baseline, external_y, frag_max) {
             (Some(gb), _, _) => (gb, false),
-            (None, Some(fm), Some(ex)) if (ex - fm).to_pt() > SHIFT_THRESHOLD => (ex, true),
-            (None, Some(fm), _) => (fm, false),
-            (None, None, Some(ex)) => (ex, true),
+            (None, Some(ex), _) => (ex, true),
+            (None, None, Some(fm)) => (fm, false),
             (None, None, None) => (bounds.max_y, false),
         };
 
