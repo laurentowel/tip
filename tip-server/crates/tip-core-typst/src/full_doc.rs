@@ -248,12 +248,32 @@ pub fn extract_fragment_svg(
         if keep.is_empty() || bounds.is_empty() {
             continue;
         }
-        let pad = Abs::pt(0.5);
-        let min_x = bounds.min_x - pad;
-        let min_y = bounds.min_y - pad;
-        let width = bounds.max_x - bounds.min_x + pad * 2.0;
-        let height = bounds.max_y - bounds.min_y + pad * 2.0;
-
+        // Pass 2: detached-span glyphs.  Typst synthesizes glyphs
+        // for math symbols (`dif`, `pi`, accents, operators, auto-
+        // spacing) through math-scope resolution; the resulting
+        // TextItems carry spans whose `id() == None` — neither in
+        // the main source nor in any importable file.  These get
+        // dropped by pass 1 even though they're visually part of
+        // the user's fragment.  Pull them back in by spatial
+        // proximity: same line as an in-range item, x within one
+        // em of the cluster's horizontal range.
+        let neighborhood_x = if max_text_size > Abs::zero() {
+            max_text_size
+        } else {
+            Abs::pt(11.0)
+        };
+        let neighborhood_y = Abs::pt(2.0);
+        let bx_min = bounds.min_x - neighborhood_x;
+        let bx_max = bounds.max_x + neighborhood_x;
+        let by_min = bounds.min_y - neighborhood_y;
+        let by_max = bounds.max_y + neighborhood_y;
+        collect_detached_neighbors(
+            &page.frame,
+            Point::zero(),
+            (bx_min, by_min, bx_max, by_max),
+            &mut keep,
+            &mut bounds,
+        );
         // Baseline reference: prefer surrounding-text baseline on this
         // page (that's the user's actual line baseline).  Fall back to
         // the bottom-most fragment text baseline.  Falling further to
@@ -274,7 +294,24 @@ pub fn extract_fragment_svg(
                     false,
                 ),
             };
-        let depth = (bounds.max_y - baseline_y).max(Abs::zero());
+
+        // Crop bounds: tight to ink in x; in y, EXTEND to include the
+        // baseline so callers placing the image at `:ascent (depth/H)`
+        // get the right visual position.  Without this, a fragment
+        // whose ink is entirely above the baseline (e.g. a bare
+        // `^2`, or `phantom(a)^2`) crops to just the superscript and
+        // looks baseline-aligned on itself — losing the "high up"
+        // appearance the user expects.  Extending the bottom of the
+        // crop down to baseline_y reserves blank space below the ink
+        // so the resulting image's bottom edge IS the baseline.
+        let pad = Abs::pt(0.5);
+        let crop_max_y = bounds.max_y.max(baseline_y);
+        let crop_min_y = bounds.min_y.min(baseline_y);
+        let min_x = bounds.min_x - pad;
+        let min_y = crop_min_y - pad;
+        let width = bounds.max_x - bounds.min_x + pad * 2.0;
+        let height = crop_max_y - crop_min_y + pad * 2.0;
+        let depth = (crop_max_y - baseline_y).max(Abs::zero());
 
         // Rebuild a flat Frame at the cropped origin.  Clone is cheap
         // — FrameItem is `derive(Clone)` and Text/Shape are Arcs/Vecs.
@@ -354,6 +391,55 @@ fn span_in_range(
     }
 }
 
+/// Pull in detached-span items (`span.id() == None`) whose position
+/// lies inside `(min_x, min_y, max_x, max_y)`.  These are math-scope
+/// synthesized glyphs (`dif`, `pi`, accents, operators, auto-spacing)
+/// that pass-1 drops because their spans don't resolve to any source
+/// file.  Including by spatial neighborhood is the only signal we have.
+fn collect_detached_neighbors(
+    frame: &Frame,
+    offset: Point,
+    bounds: (Abs, Abs, Abs, Abs),
+    keep: &mut Vec<(Point, FrameItem)>,
+    out_bounds: &mut ItemBounds,
+) {
+    let (min_x, min_y, max_x, max_y) = bounds;
+    for (pos, item) in frame.items() {
+        let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
+        match item {
+            FrameItem::Group(g) => {
+                collect_detached_neighbors(&g.frame, abs, bounds, keep, out_bounds);
+            }
+            FrameItem::Text(t) => {
+                // Only consider TextItems whose glyphs ALL have detached
+                // spans.  Items with at least one resolvable-but-not-in-
+                // fragment span belong elsewhere (different fragment,
+                // imported module) and must not be co-opted.
+                let any_attached = t.glyphs.iter().any(|g| g.span.0.id().is_some());
+                if any_attached {
+                    continue;
+                }
+                if abs.x < min_x || abs.x > max_x || abs.y < min_y || abs.y > max_y {
+                    continue;
+                }
+                // Avoid duplicate insertion if pass 1 somehow pushed it.
+                if keep.iter().any(|(p, _)| p.x == abs.x && p.y == abs.y) {
+                    continue;
+                }
+                let bbox = t.bbox();
+                out_bounds.extend(
+                    abs.x + bbox.min.x,
+                    abs.y + bbox.max.y,
+                    abs.x + bbox.max.x,
+                    abs.y + bbox.min.y,
+                );
+                keep.push((abs, FrameItem::Text(t.clone())));
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Find a surrounding-text baseline on `frame` (a page) for an
 /// inline-math fragment whose own text-item baselines are
 /// `frag_baselines`.  Walks all text items NOT inside the fragment's
@@ -382,20 +468,24 @@ fn find_external_baseline(
         exclude_end,
         &mut external_ys,
     );
+    // Pick the LARGEST external pos.y within tol of any fragment
+    // baseline.  Rationale: in y-down frame coords, line-baselines sit
+    // BELOW super-script baselines (super shifts text UP).  If a
+    // fragment has only a `^2` glyph (e.g. `phantom(a)^2`), nearby
+    // candidates include other fragments' superscripts (~same y) AND
+    // the prose text on the same line (~5 pt larger y).  The line
+    // baseline is what we want — and it's always the maximum.  Using
+    // "closest y" mistakenly picks another super-baseline; using
+    // "max within tol" lands on the prose line every time.
     let tol = Abs::pt(20.0);
-    let mut best: Option<(Abs, Abs)> = None; // (distance, y)
+    let mut best: Option<Abs> = None;
     for ey in external_ys {
-        for fy in frag_baselines {
-            let d = (ey - *fy).abs();
-            if d > tol {
-                continue;
-            }
-            if best.map_or(true, |(bd, _)| d < bd) {
-                best = Some((d, ey));
-            }
+        let in_tol = frag_baselines.iter().any(|fy| (ey - *fy).abs() <= tol);
+        if in_tol && best.map_or(true, |b| ey > b) {
+            best = Some(ey);
         }
     }
-    best.map(|(_, y)| y)
+    best
 }
 
 fn walk_external(
@@ -659,6 +749,17 @@ text $phantom(a)^2$ and $a^2$ done
             f_phantom.depth_pt,
             f_plain.depth_pt
         );
+        // Crucial: phantom's frame height must extend DOWN to the
+        // baseline even though its ink doesn't.  Otherwise the
+        // resulting image looks baseline-aligned on the `^2` itself.
+        // Heights should agree within a glyph-descender's worth.
+        assert!(
+            (f_phantom.height_pt - f_plain.height_pt).abs() < 2.0,
+            "phantom height should match plain (both extend to baseline): \
+             phantom={:.3} plain={:.3}",
+            f_phantom.height_pt,
+            f_plain.height_pt
+        );
     }
 
     /// Mixed-size: the same `$x + y$` body inside a 14 pt section
@@ -751,6 +852,61 @@ $x + y$ default size
             full.height_pt,
             syn.height_pt,
             hr
+        );
+    }
+
+    /// Regression: `dif`, `pi`, and other typst math symbols are
+    /// referenced by user-written identifiers but resolved via the
+    /// math scope (or imported modules).  If their resulting glyphs
+    /// carry spans that point to the std-lib definition rather than
+    /// the user source, the fragment-range filter drops them and
+    /// the rendered SVG is missing `dif x` / `pi` etc.  Verify the
+    /// glyphs survive the filter.
+    #[test]
+    fn extract_keeps_math_symbol_glyphs() {
+        // Render `$dif x$` (full doc) and `$x$` alone.  If `dif`'s
+        // detached-span TextItem isn't recovered by the neighborhood
+        // pass, the rendered widths are equal — bug.  With recovery,
+        // `dif x` is wider than `x` by roughly the width of a `d`
+        // glyph plus its math spacing.
+        let mut world = TipWorld::new();
+        let src = "$dif x$ then $x$ alone\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r_dif = locate(src, "$dif x$");
+        let r_x = locate(src, "$x$");
+        let f_dif = extract_fragment_svg(&world, &doc, r_dif.start, r_dif.end)
+            .expect("dif x render");
+        let f_x = extract_fragment_svg(&world, &doc, r_x.start, r_x.end).expect("x render");
+        assert!(
+            f_dif.width_pt > f_x.width_pt + 4.0,
+            "expected `dif x` ({:.2}pt) noticeably wider than `x` ({:.2}pt) — \
+             detached `dif` glyph likely dropped",
+            f_dif.width_pt,
+            f_x.width_pt
+        );
+    }
+
+    #[test]
+    fn extract_keeps_sqrt_radicand() {
+        // Companion: `$sqrt(pi)$` must include the `pi` (π) glyph.
+        // Without the neighborhood pass it renders as just `√`.
+        let mut world = TipWorld::new();
+        let src = "Body $sqrt(pi)$ and $sqrt(x)$ done\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r_pi = locate(src, "$sqrt(pi)$");
+        let r_x = locate(src, "$sqrt(x)$");
+        let f_pi = extract_fragment_svg(&world, &doc, r_pi.start, r_pi.end).unwrap();
+        let f_x = extract_fragment_svg(&world, &doc, r_x.start, r_x.end).unwrap();
+        // sqrt(pi) and sqrt(x) should both render with a radicand —
+        // their widths shouldn't differ by more than a few pt.  If
+        // pi's glyph is dropped, sqrt(pi)'s ink is just the radical
+        // which is much narrower.
+        assert!(
+            (f_pi.width_pt - f_x.width_pt).abs() < 5.0,
+            "sqrt(pi) ({:.2}) and sqrt(x) ({:.2}) widths diverged — \
+             pi glyph probably missing",
+            f_pi.width_pt,
+            f_x.width_pt
         );
     }
 
