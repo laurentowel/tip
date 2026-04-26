@@ -58,6 +58,12 @@ modification-hooks already block direct edits to the region, but
 indirect changes (revert-buffer, font-lock injection bugs, batch
 replace-string in the source) can still slip through.")
 
+(defvar-local tip-edit-indirect--source-prev-read-only nil
+  "Saved value of `buffer-read-only' from the source buffer at entry.
+The source buffer is forced read-only while the edit is active so
+the user can't desync the two views by typing into the source.
+Restored on commit/abort.")
+
 (defvar tip-edit-indirect--saved-window-config nil
   "Window configuration captured on entry, restored on commit/abort.
 Single global slot — entering a second `tip-edit-indirect' while the
@@ -66,6 +72,14 @@ modification-hook already blocks nested edits of the same region.")
 
 (defconst tip-edit-indirect--preview-buffer "*tip-edit-preview*"
   "Name of the buffer that displays the live SVG / error in the top split.")
+
+(defcustom tip-edit-indirect-layout 'edit-on-top
+  "Vertical layout of the two `tip-edit-indirect' windows.
+`edit-on-top'    — edit pane on top, preview below (default).
+`preview-on-top' — preview pane on top, edit below."
+  :type '(choice (const :tag "Edit on top, preview below" edit-on-top)
+                 (const :tag "Preview on top, edit below" preview-on-top))
+  :group 'tip)
 
 ;;; * keymap and minor mode
 
@@ -330,6 +344,8 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
         (setq-local tip-edit-indirect--strip-amount strip)
         (setq-local tip-edit-indirect--source-hash
                     (secure-hash 'sha256 raw-text))
+        (setq-local tip-edit-indirect--source-prev-read-only
+                    (buffer-local-value 'buffer-read-only src-buf))
         (setq-local tip-edit-indirect--preview-timer
                     (run-with-idle-timer
                      0.3 t
@@ -337,14 +353,21 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
                        (when (and (buffer-live-p edit-buf)
                                   (eq (current-buffer) edit-buf))
                          (tip-edit-indirect--live-preview))))))
-      ;; Take over the current window: save config, lay out preview/edit,
-      ;; focus the edit window.
+      ;; Lock the source buffer so the user can't desync the two
+      ;; views by typing into the original.  Restored in cleanup.
+      (with-current-buffer src-buf
+        (setq buffer-read-only t))
+      ;; Take over the current window: save config, lay out preview/edit
+      ;; per `tip-edit-indirect-layout', focus the edit window.
       (setq tip-edit-indirect--saved-window-config (current-window-configuration))
       (delete-other-windows)
-      (let* ((preview-win (selected-window))
-             (edit-win (split-window preview-win nil 'below)))
-        (set-window-buffer preview-win preview-buf)
+      (let* ((top-win (selected-window))
+             (bot-win (split-window top-win nil 'below))
+             (edit-on-top (eq tip-edit-indirect-layout 'edit-on-top))
+             (edit-win (if edit-on-top top-win bot-win))
+             (preview-win (if edit-on-top bot-win top-win)))
         (set-window-buffer edit-win edit-buf)
+        (set-window-buffer preview-win preview-buf)
         (set-window-dedicated-p preview-win t)
         (select-window edit-win))
       ;; Kick off an immediate first compile so the preview isn't blank.
@@ -414,14 +437,27 @@ our fragment along with everything else.  On mismatch:
            (buffer-name stash))))
        (t
         (with-current-buffer src-buf
-          ;; `save-excursion' is enough: `delete-region' + `insert' at
-          ;; BEG leaves point at BEG + (length new-text), but the marker
-          ;; semantics restore the original source-buffer point on exit.
-          (save-excursion
+          (let ((current (buffer-substring-no-properties beg end))
+                ;; Source buffer is read-only while edit is alive
+                ;; (see entry).  Commit needs to bypass that, but
+                ;; only for the actual write-back below.
+                (inhibit-read-only t))
             (delete-overlay ov)
-            (goto-char beg)
-            (delete-region beg end)
-            (insert new-text)))
+            (cond
+             ;; No-op commit: text identical to source.  Skip the
+             ;; delete+insert so the source buffer's modified flag
+             ;; isn't flipped for nothing.
+             ((string-equal new-text current)
+              nil)
+             (t
+              ;; `save-excursion' is enough: `delete-region' +
+              ;; `insert' at BEG leaves point at BEG + (length
+              ;; new-text), but the marker semantics restore the
+              ;; original source-buffer point on exit.
+              (save-excursion
+                (goto-char beg)
+                (delete-region beg end)
+                (insert new-text))))))
         (tip-edit-indirect--cleanup)
         (message "Fragment updated."))))))
 
@@ -434,12 +470,19 @@ our fragment along with everything else.  On mismatch:
   (message "Edit cancelled."))
 
 (defun tip-edit-indirect--cleanup ()
-  "Tear down edit buffer + preview, restore window configuration."
+  "Tear down edit buffer + preview, restore window + source-buffer state.
+Restores the source buffer's `buffer-read-only' to its pre-entry
+value (the source was forced read-only while the edit was active)."
   (when tip-edit-indirect--preview-timer
     (cancel-timer tip-edit-indirect--preview-timer))
   (let ((edit-buf (current-buffer))
+        (src-buf tip-edit-indirect--source-buffer)
+        (prev-ro tip-edit-indirect--source-prev-read-only)
         (preview-buf (get-buffer tip-edit-indirect--preview-buffer))
         (saved tip-edit-indirect--saved-window-config))
+    (when (buffer-live-p src-buf)
+      (with-current-buffer src-buf
+        (setq buffer-read-only prev-ro)))
     (when (and preview-buf (buffer-live-p preview-buf))
       (with-current-buffer preview-buf
         (let ((inhibit-read-only t)) (erase-buffer)))
