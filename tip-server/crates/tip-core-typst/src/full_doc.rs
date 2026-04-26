@@ -1738,42 +1738,51 @@ $x + y$ default size
         // surrounded by context similar to other lines.
         src.push_str("Typing now: ");
 
+        // Build "context" by typing the prefix BEFORE timing each
+        // keystroke, so each measured iteration is a single char added
+        // to a buffer that already contained N-1 chars of the typed
+        // string.  We allow compile failures (the partial syntax
+        // mid-typing often won't parse — e.g. unmatched `$`); they're
+        // expected to fall through to synth at runtime.
+        let timed_keystrokes: Vec<usize> = (0..typed.len()).collect();
+
         eprintln!("=== FULL-DOC keystroke timing ===");
         {
             let mut world = TipWorld::new();
-            // Warm: first compile after appending one char.
             let mut buf = src.clone();
             buf.push('x');
             let t0 = Instant::now();
-            let _ = compile_real_document(&mut world, &buf).expect("warm compile");
-            let warm_ms = t0.elapsed().as_secs_f64() * 1000.0;
-            eprintln!("  warm-up compile: {:.1} ms", warm_ms);
+            let _ = compile_real_document(&mut world, &buf);
+            eprintln!("  warm-up compile: {:.1} ms", t0.elapsed().as_secs_f64() * 1000.0);
 
             let mut buf = src.clone();
             let mut total_ms = 0.0;
+            let mut succeeded = 0;
             let mut latencies = Vec::new();
-            for ch in typed.chars() {
+            for k in &timed_keystrokes {
+                let ch = typed.chars().nth(*k).unwrap();
                 buf.push(ch);
                 let t0 = Instant::now();
-                // For full-doc live: compile real doc + extract the
-                // current fragment (= last ~20 chars of buf).
-                let frag_start = buf.len() - 1; // last char only as proxy
-                let frag_end = buf.len();
-                let doc = compile_real_document(&mut world, &buf).expect("compile");
-                let _ = extract_fragment_svg(&world, &doc, frag_start, frag_end);
+                if let Ok(doc) = compile_real_document(&mut world, &buf) {
+                    let s = src.len(); // typed text starts here
+                    let frag_end = buf.len();
+                    // The math fragment under construction starts at `s`
+                    // (the appended "Typing now: " ends at s; first `$`
+                    // of the fragment is at s + len("Typing now: ") = s).
+                    // Since `typed` starts with "$", frag_start = s.
+                    let _ = extract_fragment_svg(&world, &doc, s, frag_end);
+                    succeeded += 1;
+                }
                 let dt = t0.elapsed().as_secs_f64() * 1000.0;
                 latencies.push(dt);
                 total_ms += dt;
             }
-            let avg = total_ms / typed.chars().count() as f64;
+            let avg = total_ms / latencies.len() as f64;
             let max = latencies.iter().copied().fold(f64::MIN, f64::max);
             let min = latencies.iter().copied().fold(f64::MAX, f64::min);
             eprintln!(
-                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({} keystrokes)",
-                avg,
-                min,
-                max,
-                latencies.len()
+                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({}/{} compiled)",
+                avg, min, max, succeeded, latencies.len()
             );
         }
 
@@ -1783,36 +1792,34 @@ $x + y$ default size
             let mut world = TipWorld::new();
             let mut buf = src.clone();
             let mut total_ms = 0.0;
+            let mut succeeded = 0;
             let mut latencies = Vec::new();
-            for ch in typed.chars() {
+            for k in &timed_keystrokes {
+                let ch = typed.chars().nth(*k).unwrap();
                 buf.push(ch);
-                let frag_start = buf.len() - 1;
+                let s = src.len();
                 let frag_end = buf.len();
                 let t0 = Instant::now();
-                // Note: synthetic compile may fail mid-edit (broken
-                // syntax).  We don't unwrap; we just time the call.
-                let _ = FragmentCompiler::compile_fragment_scoped(
+                let r = FragmentCompiler::compile_fragment_scoped(
                     &mut world,
                     &buf,
-                    frag_start,
+                    s,
                     frag_end,
                     tip_protocol::svg_color::STANDIN_HEX,
                     None,
                     None,
                 );
+                if r.is_ok() { succeeded += 1; }
                 let dt = t0.elapsed().as_secs_f64() * 1000.0;
                 latencies.push(dt);
                 total_ms += dt;
             }
-            let avg = total_ms / typed.chars().count() as f64;
+            let avg = total_ms / latencies.len() as f64;
             let max = latencies.iter().copied().fold(f64::MIN, f64::max);
             let min = latencies.iter().copied().fold(f64::MAX, f64::min);
             eprintln!(
-                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({} keystrokes)",
-                avg,
-                min,
-                max,
-                latencies.len()
+                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({}/{} compiled)",
+                avg, min, max, succeeded, latencies.len()
             );
         }
     }
