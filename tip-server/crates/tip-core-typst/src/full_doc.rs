@@ -469,15 +469,22 @@ fn find_external_baseline(
         &mut external_ys,
     );
     // Pick the LARGEST external pos.y within tol of any fragment
-    // baseline.  Rationale: in y-down frame coords, line-baselines sit
-    // BELOW super-script baselines (super shifts text UP).  If a
+    // baseline.  Rationale: in y-down frame coords, line-baselines
+    // sit BELOW super-script baselines (super shifts text UP).  If a
     // fragment has only a `^2` glyph (e.g. `phantom(a)^2`), nearby
     // candidates include other fragments' superscripts (~same y) AND
     // the prose text on the same line (~5 pt larger y).  The line
     // baseline is what we want — and it's always the maximum.  Using
     // "closest y" mistakenly picks another super-baseline; using
     // "max within tol" lands on the prose line every time.
-    let tol = Abs::pt(20.0);
+    //
+    // `tol` MUST be smaller than line spacing — typst's default at
+    // 11 pt is ~13 pt — otherwise we'd pick the NEXT line's baseline
+    // and the image renders too far below.  6 pt is enough to reach
+    // sub/super shifts (~3–5 pt at 11 pt) and stay well clear of the
+    // next line.  Scale modestly with the largest text size on the
+    // line (heuristic: tol = 0.6 × baseline candidate).
+    let tol = Abs::pt(6.0);
     let mut best: Option<Abs> = None;
     for ey in external_ys {
         let in_tol = frag_baselines.iter().any(|fy| (ey - *fy).abs() <= tol);
