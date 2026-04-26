@@ -24,20 +24,22 @@ mod flatten;
 #[cfg(test)]
 mod tests;
 
-use std::ops::Range;
-
 use typst::compile;
-use typst::layout::{Frame, FrameItem, PagedDocument, Point};
-use typst::syntax::{FileId, Source};
+use typst::layout::{PagedDocument, Point};
 use typst::World;
 
 use crate::world::TipWorld;
 use tip_protocol::messages::{FragmentLocation, FragmentResult};
 
-pub use extract::{extract_fragment_svg, FragmentRender};
-
 use extract::extract_from_index;
 use flatten::{build_span_index, flatten_leaves_inner, FlatLeaf, GroupRecord};
+
+#[cfg(test)]
+use {
+    std::ops::Range,
+    typst::layout::{Frame, FrameItem},
+    typst::syntax::{FileId, Source},
+};
 
 pub struct TopDownCompiler;
 
@@ -122,8 +124,11 @@ impl TopDownCompiler {
 /// `source_range` is `None` when the item's span doesn't resolve to
 /// the main source (e.g., the item came from an imported module — it
 /// can't belong to any user-supplied fragment range).
+///
+/// Test-only: production extraction uses `flatten::FlatLeaf` instead.
+#[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct LeafSpan {
+pub(crate) struct LeafSpan {
     pub source_range: Option<Range<usize>>,
     pub page: usize,
     pub pos_pt: (f64, f64),
@@ -131,7 +136,7 @@ pub struct LeafSpan {
 
 /// Compile the user's source as-is and return the laid-out document.
 /// On error returns the joined diagnostic messages.
-pub fn compile_real_document(
+pub(crate) fn compile_real_document(
     world: &mut TipWorld,
     content: &str,
 ) -> Result<PagedDocument, String> {
@@ -148,7 +153,8 @@ pub fn compile_real_document(
 /// Walk every page's frame tree and collect a `LeafSpan` for each
 /// leaf item (Text glyph, Shape).  Group offsets are accumulated so
 /// every position is in absolute page-frame coordinates.
-pub fn collect_leaf_spans(world: &dyn World, doc: &PagedDocument) -> Vec<LeafSpan> {
+#[cfg(test)]
+pub(crate) fn collect_leaf_spans(world: &dyn World, doc: &PagedDocument) -> Vec<LeafSpan> {
     let main = world.main();
     let main_src = world.source(main).ok();
     let mut out = Vec::new();
@@ -158,6 +164,7 @@ pub fn collect_leaf_spans(world: &dyn World, doc: &PagedDocument) -> Vec<LeafSpa
     out
 }
 
+#[cfg(test)]
 fn walk(
     frame: &Frame,
     page: usize,
@@ -199,7 +206,8 @@ fn walk(
 /// Items whose source range overlaps `[start, end)`.  Items with
 /// `source_range = None` are excluded — they can't belong to a
 /// user-fragment range by definition.
-pub fn fragment_items<'a>(
+#[cfg(test)]
+pub(crate) fn fragment_items<'a>(
     spans: &'a [LeafSpan],
     start: usize,
     end: usize,

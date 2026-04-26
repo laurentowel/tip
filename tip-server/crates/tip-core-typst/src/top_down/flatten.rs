@@ -158,6 +158,7 @@ fn collect_shape_span(
 /// becomes a `GroupRecord` whose `descendant_ranges` is the slice
 /// of leaf ranges contributing to it (so per-fragment we can ask
 /// "did this group hold any in-range leaf for me?" cheaply).
+#[cfg(test)]
 pub fn flatten_leaves(
     frame: &Frame,
     offset: Point,

@@ -7,6 +7,18 @@ use tip_core_typst::world::TipWorld;
 use tip_core_typst::CompileStrategy;
 use tip_protocol::messages::*;
 
+/// Read `TIP_COMPILE_STRATEGY` at process start.  Unrecognized values
+/// silently fall back to `BottomUp` so a typo can't brick the server.
+/// The legacy `full-doc` aliases are kept for one release for backward
+/// compat.
+fn strategy_from_env() -> CompileStrategy {
+    match std::env::var("TIP_COMPILE_STRATEGY").as_deref() {
+        Ok("top-down") | Ok("topdown") | Ok("top_down") => CompileStrategy::TopDown,
+        Ok("full-doc") | Ok("fulldoc") | Ok("full_doc") => CompileStrategy::TopDown,
+        _ => CompileStrategy::BottomUp,
+    }
+}
+
 pub struct TypstBackend {
     documents: DocumentStore,
     world: TipWorld,
@@ -18,7 +30,7 @@ impl TypstBackend {
         Self {
             documents: DocumentStore::new(),
             world: TipWorld::new(),
-            strategy: CompileStrategy::from_env(),
+            strategy: strategy_from_env(),
         }
     }
 

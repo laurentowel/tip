@@ -2,13 +2,17 @@
 //! baseline, the font size, builds a cropped Frame, renders SVG.
 //! See `super` for the strategy overview.
 
-use typst::layout::{Abs, Frame, FrameItem, PagedDocument, Point, Size};
-use typst::syntax::{FileId, Source};
-use typst::World;
+use typst::layout::{Abs, Frame, FrameItem, Point, Size};
 use typst_svg::svg_frame;
 
-use super::flatten::{
-    flatten_leaves, FlatLeaf, GroupRecord, LeafCategory,
+use super::flatten::{FlatLeaf, GroupRecord, LeafCategory};
+
+#[cfg(test)]
+use {
+    super::flatten::flatten_leaves,
+    typst::layout::PagedDocument,
+    typst::syntax::{FileId, Source},
+    typst::World,
 };
 
 /// Render output for a single fragment extracted from a full document.
@@ -16,6 +20,7 @@ use super::flatten::{
 /// the line's baseline — for inline math this is what Emacs needs for
 /// `:ascent` calculation.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // `page` and `baseline_external` are read only by tests
 pub struct FragmentRender {
     pub svg: String,
     pub width_pt: f64,
@@ -44,6 +49,11 @@ pub struct FragmentRender {
 /// Returns `None` if the fragment range matched no items (empty math,
 /// `hide()` with no descendant content, all items in imported
 /// modules — none of which are renderable inline previews).
+///
+/// Test-only.  The production hot path is `extract_from_index`, which
+/// reuses a pre-flattened page index across many fragments instead of
+/// re-walking per call.
+#[cfg(test)]
 pub fn extract_fragment_svg(
     world: &dyn World,
     doc: &PagedDocument,
@@ -290,6 +300,7 @@ impl ItemBounds {
     }
 }
 
+#[cfg(test)]
 fn span_in_range(
     span: typst::syntax::Span,
     main: FileId,
@@ -541,6 +552,7 @@ pub fn extract_from_index(
 /// `frag_baselines` entry, within ~half an em of `max_text_size`.
 /// Returns `None` when nothing surrounding is on the same line
 /// (display math, or the math is the only content).
+#[cfg(test)]
 pub fn find_external_baseline(
     frame: &Frame,
     frag_baselines: &[Abs],
@@ -581,6 +593,7 @@ pub fn find_external_baseline(
     best
 }
 
+#[cfg(test)]
 pub fn walk_external(
     frame: &Frame,
     offset: Point,
@@ -621,6 +634,7 @@ pub fn walk_external(
 /// `max_text_size` is the fragment's own largest text size, used to
 /// scale the same-line tolerance (`line_tol`).  At small body sizes
 /// a fixed tol bleeds across paragraph boundaries.
+#[cfg(test)]
 fn find_external_line_size(
     frame: &Frame,
     line_anchors: &[Abs],
@@ -651,6 +665,7 @@ fn find_external_line_size(
         .max()
 }
 
+#[cfg(test)]
 fn walk_external_size(
     frame: &Frame,
     offset: Point,
