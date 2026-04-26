@@ -1362,6 +1362,103 @@ text $phantom(a)^2$ and $a^2$ done
         }
     }
 
+    /// Stress: deeply nested superscript tower.  Each level shrinks
+    /// by Typst's super-scale (~0.7×) — the deepest `a` is tiny, but
+    /// the cumulative ascent piles ~7 levels' worth of glyphs above
+    /// the baseline.  Tests the crop's vertical extent and ensures
+    /// baseline picker doesn't get confused by the wide y-range of
+    /// fragment items.
+    #[test]
+    fn extreme_nested_superscripts() {
+        let mut world = TipWorld::new();
+        let src = "Body $a^(a^(a^(a^(a^(a^(a^a))))))$ done\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r = locate(src, "$a^(a^(a^(a^(a^(a^(a^a))))))$");
+        let f = extract_fragment_svg(&world, &doc, r.start, r.end).unwrap();
+        eprintln!(
+            "nested-sup: h={:.3} d={:.3} w={:.3} fs={:.3}",
+            f.height_pt, f.depth_pt, f.width_pt, f.font_size_pt
+        );
+        // Sanity:
+        // - Height noticeably taller than a normal `$a^2$` (ascent
+        //   tower piles up).
+        // - Width modest — each level only adds one shrinking glyph.
+        // - Depth ≈ 0 + pad — base `a` sits on baseline, no descender.
+        // - Font size = paragraph context (~11 pt).
+        assert!(f.height_pt > 12.0, "nested sup height {:.3} too small", f.height_pt);
+        assert!(f.height_pt < 60.0, "nested sup height {:.3} absurd", f.height_pt);
+        // Width: 7 superscripts stacked diagonally accumulate to ~30–40 pt at 11 pt body.
+        assert!(f.width_pt > 0.0 && f.width_pt < 80.0, "width {:.3}", f.width_pt);
+        assert!(
+            (f.font_size_pt - 11.0).abs() < 0.5,
+            "fs {:.3}",
+            f.font_size_pt
+        );
+    }
+
+    /// Stress: deeply nested subscript tower.  Cumulative descent
+    /// piles below the baseline; depth_pt should be much larger than
+    /// for a normal `$a_2$`.
+    #[test]
+    fn extreme_nested_subscripts() {
+        let mut world = TipWorld::new();
+        let src = "Body $a_(a_(a_(a_(a_(a_(a_a))))))$ done\n";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r = locate(src, "$a_(a_(a_(a_(a_(a_(a_a))))))$");
+        let f = extract_fragment_svg(&world, &doc, r.start, r.end).unwrap();
+        eprintln!(
+            "nested-sub: h={:.3} d={:.3} w={:.3} fs={:.3}",
+            f.height_pt, f.depth_pt, f.width_pt, f.font_size_pt
+        );
+        assert!(f.height_pt > 8.0, "nested sub height {:.3} too small", f.height_pt);
+        assert!(f.height_pt < 60.0, "nested sub height {:.3} absurd", f.height_pt);
+        assert!(
+            f.depth_pt > 5.0,
+            "nested sub depth {:.3} too small — descender tower lost",
+            f.depth_pt
+        );
+        assert!(
+            (f.font_size_pt - 11.0).abs() < 0.5,
+            "fs {:.3}",
+            f.font_size_pt
+        );
+    }
+
+    /// Stress: deeply nested fractions at 1 pt body.  Combines small-
+    /// size tol [H2/H4] and complex Group structure (each `frac`
+    /// produces its own equation Group with baseline).  At 7 levels
+    /// of nesting the inner fractions render at sub-fractional pt
+    /// sizes — exercises numerical stability of crop/baseline math.
+    #[test]
+    fn extreme_nested_fractions_small() {
+        let mut world = TipWorld::new();
+        let src = "\
+#set text(size: 1pt)
+text $frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, x)))))))$ done
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        let r = locate(
+            src,
+            "$frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, x)))))))$",
+        );
+        let f = extract_fragment_svg(&world, &doc, r.start, r.end).unwrap();
+        eprintln!(
+            "nested-frac 1pt: h={:.3} d={:.3} w={:.3} fs={:.3}",
+            f.height_pt, f.depth_pt, f.width_pt, f.font_size_pt
+        );
+        // The fraction tower's height at 1 pt body should be in
+        // the low single digits.  Inner fractions are tiny but
+        // cumulative.
+        assert!(f.height_pt > 0.5);
+        assert!(f.height_pt < 20.0, "height {:.3} suggests cross-paragraph contamination", f.height_pt);
+        assert!(
+            (f.font_size_pt - 1.0).abs() < 0.3,
+            "fs {:.3} — font picker drifted",
+            f.font_size_pt
+        );
+        assert!(f.svg.contains("<svg"));
+    }
+
     #[test]
     fn extreme_zero_leading() {
         let mut world = TipWorld::new();
