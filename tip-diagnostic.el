@@ -100,6 +100,65 @@ the `*tip-doctor*' buffer."
   (tip--doctor-insert title 'font-lock-keyword-face)
   (insert "\n"))
 
+(defun tip--doctor-client-row (label ok &optional detail hint)
+  "Render a client-side dependency row.
+LABEL on the left, ✓/✗ for OK, optional DETAIL after, optional HINT
+on a continuation line when not OK."
+  (insert "    ")
+  (insert (tip--doctor-mark ok))
+  (insert " ")
+  (tip--doctor-insert (format "%-22s" label) 'font-lock-function-name-face)
+  (when detail
+    (tip--doctor-insert (format "%s" detail)
+                        (if ok 'font-lock-constant-face 'error)))
+  (insert "\n")
+  (when (and (not ok) hint)
+    (tip--doctor-insert (format "                          %s\n" hint) 'shadow)))
+
+(defun tip--doctor-format-client ()
+  "Render the client-side (Emacs) dependency section.
+Tree-sitter availability + relevant grammars + major-mode packages.
+Without these the server can do its job perfectly and fragments
+will still never appear in the buffer."
+  (let* ((ts-ok       (and (fboundp 'treesit-available-p)
+                           (treesit-available-p)))
+         (typst-mode  (or (fboundp 'typst-ts-mode) (fboundp 'typst-mode)))
+         (typst-gram  (and ts-ok
+                           (treesit-language-available-p 'typst)))
+         (latex-mode  (or (fboundp 'latex-mode) (fboundp 'LaTeX-mode)))
+         (latex-gram  (and ts-ok
+                           (treesit-language-available-p 'latex)))
+         (md-mode     (fboundp 'markdown-ts-mode))
+         (md-gram     (and ts-ok
+                           (treesit-language-available-p 'markdown))))
+    (tip--doctor-section "Client (Emacs side)"
+                         (and ts-ok (or typst-gram latex-gram md-gram)))
+    (tip--doctor-client-row
+     "tree-sitter built-in" ts-ok
+     (if ts-ok "yes" "no")
+     "Emacs 29+ required (or build with --with-tree-sitter)")
+    (tip--doctor-client-row
+     "typst-ts-mode" typst-mode
+     (if typst-mode "loaded" "not loaded")
+     "M-x package-vc-install RET https://codeberg.org/meow_king/typst-ts-mode RET")
+    (tip--doctor-client-row
+     "typst grammar" typst-gram
+     (if typst-gram "installed" "missing")
+     "Use typst-ts-mode's installer, or `M-x treesit-install-language-grammar RET typst RET'")
+    (tip--doctor-client-row
+     "latex-mode" latex-mode
+     (if latex-mode "available" "missing"))
+    (tip--doctor-client-row
+     "latex grammar" latex-gram
+     (if latex-gram "installed" "missing")
+     "M-x tip-latex-install-treesit-grammar (clones latex-lsp/tree-sitter-latex)")
+    (tip--doctor-client-row
+     "markdown-ts-mode" md-mode
+     (if md-mode "loaded" "not loaded — KaTeX backend won't activate"))
+    (tip--doctor-client-row
+     "markdown grammar" md-gram
+     (if md-gram "installed" "missing"))))
+
 (defun tip--doctor-format (r)
   "Insert a formatted report from the alist R."
   (cl-labels ((field (k) (alist-get k r))
@@ -112,15 +171,16 @@ the `*tip-doctor*' buffer."
     (tip--doctor-kv "Platform" (format "%s / %s" (field 'os) (field 'arch)))
     (let ((tp (field 'typst)))
       (when tp
-        (tip--doctor-section "Typst backend" (eq (sub tp 'ok) t))
+        (tip--doctor-section "Typst backend (server)" (eq (sub tp 'ok) t))
         (tip--doctor-kv "typst" (sub tp 'typst_version) 'font-lock-constant-face)
         (tip--doctor-kv "fonts" (format "%d" (sub tp 'fonts_found)))))
     (let ((lx (field 'latex)))
       (when lx
-        (tip--doctor-section "LaTeX backend" (eq (sub lx 'ok) t))
+        (tip--doctor-section "LaTeX backend (server)" (eq (sub lx 'ok) t))
         (tip--doctor-dep "latex"       (sub lx 'latex))
         (tip--doctor-dep "dvisvgm"     (sub lx 'dvisvgm))
         (tip--doctor-dep "preview.sty" (sub lx 'preview_sty))))
+    (tip--doctor-format-client)
     (let ((ws (field 'warnings)))
       (when (and ws (> (length ws) 0))
         (insert "\n")
