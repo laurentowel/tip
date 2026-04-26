@@ -48,9 +48,30 @@ impl FullDocCompiler {
         fragments: &[FragmentLocation],
     ) -> Result<Vec<FragmentResult>, String> {
         let doc = compile_real_document(world, content)?;
+        // Pre-flatten all pages ONCE.  Per-fragment extraction then
+        // does a linear pass over the cached `Vec<FlatLeaf>` instead
+        // of re-walking the frame tree — the difference between O(N)
+        // and O(N · content) for a batch of N fragments.
+        let main = world.main();
+        let main_src = world.source(main).ok();
+        let mut page_index: Vec<(Vec<FlatLeaf>, Vec<GroupRecord>)> =
+            Vec::with_capacity(doc.pages.len());
+        if let Some(ms) = &main_src {
+            for page in &doc.pages {
+                let mut leaves = Vec::new();
+                let mut groups = Vec::new();
+                flatten_leaves(&page.frame, Point::zero(), main, ms, &mut leaves, &mut groups);
+                page_index.push((leaves, groups));
+            }
+        }
         let mut results = Vec::with_capacity(fragments.len());
         for f in fragments {
-            let r = match extract_fragment_svg(world, &doc, f.start, f.end) {
+            let render = if main_src.is_some() {
+                extract_from_index(&page_index, f.start, f.end)
+            } else {
+                None
+            };
+            let r = match render {
                 Some(render) => FragmentResult {
                     start: f.start,
                     end: f.end,
@@ -73,9 +94,6 @@ impl FullDocCompiler {
                     depth_pt: 0.0,
                     width_pt: 0.0,
                     font_size_pt: Some(11.0),
-                    // Empty SVG; client treats this as "skip this
-                    // fragment" (no overlay placed).  Common for
-                    // `hide()`-only fragments or imports.
                     error: None,
                     error_detail: None,
                 },
@@ -242,8 +260,6 @@ pub fn extract_fragment_svg(
             Point::zero(),
             main,
             &main_src,
-            start,
-            end,
             &mut leaves,
             &mut group_records,
         );
@@ -267,7 +283,7 @@ pub fn extract_fragment_svg(
         let mut detached_buffer: Vec<usize> = Vec::new();
         let mut in_fragment = false;
         for (i, leaf) in leaves.iter().enumerate() {
-            match leaf.category {
+            match leaf.category_for(start, end) {
                 LeafCategory::InRange => {
                     for j in detached_buffer.drain(..) {
                         push_leaf(&leaves[j], &mut keep, &mut bounds, &mut max_text_size);
@@ -295,20 +311,25 @@ pub fn extract_fragment_svg(
 
         // Group baselines that belong to fragment-bearing groups.
         // `flatten_leaves` pushes in post-order (children before
-        // parents), so the LAST `has_in_range` record is the
-        // outermost — the math-equation Group whose baseline aligns
-        // with the surrounding paragraph.  For a nested sub/sup
-        // tower, inner Groups' baselines are shifted down/up; only
-        // the outer baseline matches the line baseline.
+        // parents), so the LAST has-in-range group is the outermost
+        // — the math-equation Group whose baseline aligns with the
+        // surrounding paragraph.  For a nested sub/sup tower, inner
+        // Groups' baselines are shifted down/up; only the outer
+        // baseline matches the line baseline.
+        let group_has_in_range = |g: &GroupRecord| {
+            leaves[g.leaf_range.clone()]
+                .iter()
+                .any(|l| matches!(l.category_for(start, end), LeafCategory::InRange))
+        };
         let outermost_group_baseline = group_records
             .iter()
             .rev()
-            .find(|r| r.has_in_range)
-            .map(|r| r.baseline_y);
+            .find(|g| group_has_in_range(g))
+            .map(|g| g.baseline_y);
         let group_baselines: Vec<Abs> = group_records
             .iter()
-            .filter(|r| r.has_in_range)
-            .map(|r| r.baseline_y)
+            .filter(|g| group_has_in_range(g))
+            .map(|g| g.baseline_y)
             .collect();
 
         let frag_baselines: Vec<Abs> = keep
@@ -478,14 +499,58 @@ fn span_in_range(
     }
 }
 
-/// One leaf (Text or Shape) flattened from the frame tree, with its
-/// fragment-membership category pre-computed.  Group offsets are
-/// already accumulated into `pos`.
+/// One leaf (Text or Shape) flattened from the frame tree.  Group
+/// offsets are already accumulated into `pos`.  `ranges_in_main` and
+/// `has_attached_non_main` together let `category_for(start, end)`
+/// compute the fragment-membership category WITHOUT re-walking the
+/// frame tree — critical for batch extraction over many fragments,
+/// which would otherwise be O(fragments × content).
 struct FlatLeaf {
     pos: Point,
     item: FrameItem,
-    category: LeafCategory,
     text_size: Option<Abs>,
+    /// Resolved byte ranges in the main source for each attached-main
+    /// span (one per glyph for TextItems, single entry for Shape).
+    ranges_in_main: Vec<Range<usize>>,
+    /// At least one span attached to a NON-main file id (imported
+    /// module / external).
+    has_attached_non_main: bool,
+    /// Fast-path bounds covering all `ranges_in_main`: any
+    /// `[start, end)` query disjoint from `[min_range, max_range)`
+    /// short-circuits without iterating individual glyph ranges.
+    /// `(usize::MAX, 0)` if `ranges_in_main` is empty.
+    min_range: usize,
+    max_range: usize,
+}
+
+impl FlatLeaf {
+    fn category_for(&self, start: usize, end: usize) -> LeafCategory {
+        // Fast path: union of ranges in main is fully outside [start, end).
+        if !self.ranges_in_main.is_empty()
+            && (self.max_range <= start || self.min_range >= end)
+        {
+            // None of our main-attached ranges overlap.  Decide
+            // OutAttached vs Detached without scanning ranges.
+            return LeafCategory::OutAttached;
+        }
+        // Slow path: check each range individually.
+        let mut has_in = false;
+        let mut has_out = self.has_attached_non_main;
+        for r in &self.ranges_in_main {
+            if r.start < end && r.end > start {
+                has_in = true;
+            } else {
+                has_out = true;
+            }
+        }
+        if has_in {
+            LeafCategory::InRange
+        } else if has_out {
+            LeafCategory::OutAttached
+        } else {
+            LeafCategory::Detached
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,59 +567,79 @@ enum LeafCategory {
 }
 
 /// A `Group` we walked through and its (possibly set) baseline.
+/// `leaf_range` is the slice of `FlatLeaf` indices contributed by
+/// this Group's descendants — so we can ask "is any of these in
+/// my fragment range?" without re-walking.
 struct GroupRecord {
     baseline_y: Abs,
-    has_in_range: bool,
+    leaf_range: Range<usize>,
 }
 
-fn classify_text(t: &typst::text::TextItem, main: FileId, src: &Source, start: usize, end: usize) -> LeafCategory {
-    let mut has_in_range = false;
-    let mut has_out_attached = false;
+fn ranges_minmax(ranges: &[Range<usize>]) -> (usize, usize) {
+    if ranges.is_empty() {
+        return (usize::MAX, 0);
+    }
+    let mut lo = usize::MAX;
+    let mut hi = 0usize;
+    for r in ranges {
+        if r.start < lo {
+            lo = r.start;
+        }
+        if r.end > hi {
+            hi = r.end;
+        }
+    }
+    (lo, hi)
+}
+
+fn collect_text_spans(
+    t: &typst::text::TextItem,
+    main: FileId,
+    src: &Source,
+) -> (Vec<Range<usize>>, bool) {
+    let mut ranges = Vec::new();
+    let mut has_other = false;
     for g in &t.glyphs {
         let span = g.span.0;
         match span.id() {
-            None => {} // detached
-            Some(id) if id == main => match src.range(span) {
-                Some(r) if r.start < end && r.end > start => has_in_range = true,
-                Some(_) => has_out_attached = true,
-                None => {} // attached-but-unresolvable; treat like detached
-            },
-            Some(_) => has_out_attached = true, // attached to another file
+            None => {}
+            Some(id) if id == main => {
+                if let Some(r) = src.range(span) {
+                    ranges.push(r);
+                }
+            }
+            Some(_) => has_other = true,
         }
     }
-    if has_in_range {
-        LeafCategory::InRange
-    } else if has_out_attached {
-        LeafCategory::OutAttached
-    } else {
-        LeafCategory::Detached
-    }
+    (ranges, has_other)
 }
 
-fn classify_span(span: typst::syntax::Span, main: FileId, src: &Source, start: usize, end: usize) -> LeafCategory {
+fn collect_shape_span(
+    span: typst::syntax::Span,
+    main: FileId,
+    src: &Source,
+) -> (Vec<Range<usize>>, bool) {
     match span.id() {
-        None => LeafCategory::Detached,
+        None => (Vec::new(), false),
         Some(id) if id == main => match src.range(span) {
-            Some(r) if r.start < end && r.end > start => LeafCategory::InRange,
-            Some(_) => LeafCategory::OutAttached,
-            None => LeafCategory::Detached,
+            Some(r) => (vec![r], false),
+            None => (Vec::new(), false),
         },
-        Some(_) => LeafCategory::OutAttached,
+        Some(_) => (Vec::new(), true),
     }
 }
 
 /// Walk the frame tree depth-first, accumulating Group offsets.  Each
-/// leaf becomes a `FlatLeaf`; each Group with `has_baseline()` becomes
-/// a `GroupRecord` flagged with whether any of its descendants are
-/// in-range.  Groups themselves don't appear as leaves — they're
-/// transparent for the run-based pass.
+/// leaf becomes a `FlatLeaf` carrying its raw span data — no per-
+/// fragment categorization yet.  Each Group with `has_baseline()`
+/// becomes a `GroupRecord` whose `descendant_ranges` is the slice
+/// of leaf ranges contributing to it (so per-fragment we can ask
+/// "did this group hold any in-range leaf for me?" cheaply).
 fn flatten_leaves(
     frame: &Frame,
     offset: Point,
     main: FileId,
     src: &Source,
-    start: usize,
-    end: usize,
     out_leaves: &mut Vec<FlatLeaf>,
     out_groups: &mut Vec<GroupRecord>,
 ) {
@@ -563,31 +648,39 @@ fn flatten_leaves(
         match item {
             FrameItem::Group(g) => {
                 let before = out_leaves.len();
-                flatten_leaves(&g.frame, abs, main, src, start, end, out_leaves, out_groups);
+                flatten_leaves(&g.frame, abs, main, src, out_leaves, out_groups);
+                let after = out_leaves.len();
                 if g.frame.has_baseline() {
-                    let has_in_range = out_leaves[before..]
-                        .iter()
-                        .any(|l| matches!(l.category, LeafCategory::InRange));
                     out_groups.push(GroupRecord {
                         baseline_y: abs.y + g.frame.baseline(),
-                        has_in_range,
+                        leaf_range: before..after,
                     });
                 }
             }
             FrameItem::Text(t) => {
+                let (ranges, has_other) = collect_text_spans(t, main, src);
+                let (min_r, max_r) = ranges_minmax(&ranges);
                 out_leaves.push(FlatLeaf {
                     pos: abs,
                     item: FrameItem::Text(t.clone()),
-                    category: classify_text(t, main, src, start, end),
                     text_size: Some(t.size),
+                    ranges_in_main: ranges,
+                    has_attached_non_main: has_other,
+                    min_range: min_r,
+                    max_range: max_r,
                 });
             }
             FrameItem::Shape(shape, span) => {
+                let (ranges, has_other) = collect_shape_span(*span, main, src);
+                let (min_r, max_r) = ranges_minmax(&ranges);
                 out_leaves.push(FlatLeaf {
                     pos: abs,
                     item: FrameItem::Shape(shape.clone(), *span),
-                    category: classify_span(*span, main, src, start, end),
                     text_size: None,
+                    ranges_in_main: ranges,
+                    has_attached_non_main: has_other,
+                    min_range: min_r,
+                    max_range: max_r,
                 });
             }
             _ => {}
@@ -646,6 +739,183 @@ fn line_tol(max_text_size: Abs) -> Abs {
     } else {
         scaled
     }
+}
+
+/// Indexed variant: pick external baseline by iterating pre-flattened
+/// leaves rather than re-walking the page frame.  O(L) per fragment
+/// instead of O(content) per fragment.
+fn find_external_baseline_from_leaves(
+    leaves: &[FlatLeaf],
+    frag_baselines: &[Abs],
+    max_text_size: Abs,
+    start: usize,
+    end: usize,
+) -> Option<Abs> {
+    if frag_baselines.is_empty() {
+        return None;
+    }
+    let tol = line_tol(max_text_size);
+    let mut best: Option<Abs> = None;
+    for l in leaves {
+        if !matches!(l.item, FrameItem::Text(_)) {
+            continue;
+        }
+        if matches!(l.category_for(start, end), LeafCategory::InRange) {
+            continue;
+        }
+        let ey = l.pos.y;
+        let in_tol = frag_baselines.iter().any(|fy| (ey - *fy).abs() <= tol);
+        if in_tol && best.map_or(true, |b| ey > b) {
+            best = Some(ey);
+        }
+    }
+    best
+}
+
+fn find_external_line_size_from_leaves(
+    leaves: &[FlatLeaf],
+    line_anchors: &[Abs],
+    max_text_size: Abs,
+    start: usize,
+    end: usize,
+) -> Option<Abs> {
+    if line_anchors.is_empty() {
+        return None;
+    }
+    let tol = line_tol(max_text_size);
+    let mut best: Option<Abs> = None;
+    for l in leaves {
+        let size = match l.text_size {
+            Some(s) => s,
+            None => continue,
+        };
+        if matches!(l.category_for(start, end), LeafCategory::InRange) {
+            continue;
+        }
+        let ey = l.pos.y;
+        let in_tol = line_anchors.iter().any(|a| (ey - *a).abs() <= tol);
+        if in_tol && best.map_or(true, |b| size > b) {
+            best = Some(size);
+        }
+    }
+    best
+}
+
+/// Per-page extraction using a pre-flattened index.  No frame-tree
+/// walking inside this function.
+fn extract_from_index(
+    pages: &[(Vec<FlatLeaf>, Vec<GroupRecord>)],
+    start: usize,
+    end: usize,
+) -> Option<FragmentRender> {
+    for (page_idx, (leaves, group_records)) in pages.iter().enumerate() {
+        // Linear run pass.
+        let mut keep: Vec<(Point, FrameItem)> = Vec::new();
+        let mut bounds = ItemBounds::empty();
+        let mut max_text_size = Abs::zero();
+        let mut detached_buffer: Vec<usize> = Vec::new();
+        let mut in_fragment = false;
+        for (i, leaf) in leaves.iter().enumerate() {
+            match leaf.category_for(start, end) {
+                LeafCategory::InRange => {
+                    for j in detached_buffer.drain(..) {
+                        push_leaf(&leaves[j], &mut keep, &mut bounds, &mut max_text_size);
+                    }
+                    push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
+                    in_fragment = true;
+                }
+                LeafCategory::Detached => {
+                    if in_fragment {
+                        push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
+                    } else {
+                        detached_buffer.push(i);
+                    }
+                }
+                LeafCategory::OutAttached => {
+                    in_fragment = false;
+                    detached_buffer.clear();
+                }
+            }
+        }
+        if keep.is_empty() || bounds.is_empty() {
+            continue;
+        }
+
+        let group_has_in_range = |g: &GroupRecord| {
+            leaves[g.leaf_range.clone()]
+                .iter()
+                .any(|l| matches!(l.category_for(start, end), LeafCategory::InRange))
+        };
+        let outermost_group_baseline = group_records
+            .iter()
+            .rev()
+            .find(|g| group_has_in_range(g))
+            .map(|g| g.baseline_y);
+        let group_baselines: Vec<Abs> = group_records
+            .iter()
+            .filter(|g| group_has_in_range(g))
+            .map(|g| g.baseline_y)
+            .collect();
+        let frag_baselines: Vec<Abs> = keep
+            .iter()
+            .filter_map(|(p, item)| match item {
+                FrameItem::Text(_) => Some(p.y),
+                _ => None,
+            })
+            .collect();
+        let frag_max = frag_baselines.iter().copied().max();
+        let group_baseline = outermost_group_baseline;
+        let external_y = find_external_baseline_from_leaves(
+            leaves, &frag_baselines, max_text_size, start, end,
+        );
+        let (baseline_y, external) = match (group_baseline, external_y, frag_max) {
+            (Some(gb), _, _) => (gb, false),
+            (None, Some(ex), _) => (ex, true),
+            (None, None, Some(fm)) => (fm, false),
+            (None, None, None) => (bounds.max_y, false),
+        };
+
+        let pad = Abs::pt(0.5);
+        let crop_max_y = bounds.max_y.max(baseline_y);
+        let crop_min_y = bounds.min_y.min(baseline_y);
+        let min_x = bounds.min_x - pad;
+        let min_y = crop_min_y - pad;
+        let width = bounds.max_x - bounds.min_x + pad * 2.0;
+        let height = crop_max_y - crop_min_y + pad * 2.0;
+        let depth = ((crop_max_y - baseline_y) + pad).max(Abs::zero());
+
+        let mut out = Frame::soft(Size::new(width, height));
+        for (pos, item) in keep {
+            out.push(Point::new(pos.x - min_x, pos.y - min_y), item);
+        }
+
+        let line_anchors: Vec<Abs> = group_baselines
+            .iter()
+            .copied()
+            .chain(frag_baselines.iter().copied())
+            .collect();
+        let external_size = find_external_line_size_from_leaves(
+            leaves, &line_anchors, max_text_size, start, end,
+        );
+        let candidate_sizes = [Some(max_text_size), external_size];
+        let derived = candidate_sizes
+            .iter()
+            .filter_map(|x| *x)
+            .filter(|s| *s > Abs::zero())
+            .max();
+        let font_size = derived.map(|a| a.to_pt()).unwrap_or(11.0);
+
+        return Some(FragmentRender {
+            svg: svg_frame(&out),
+            width_pt: width.to_pt(),
+            height_pt: height.to_pt(),
+            depth_pt: depth.to_pt(),
+            page: page_idx,
+            baseline_external: external,
+            font_size_pt: font_size,
+        });
+    }
+    None
 }
 
 /// Find a surrounding-text baseline on `frame` (a page) for an
@@ -1068,6 +1338,420 @@ $x + y$ default size
     /// covered by the `font_size_tracks_*` test above — synthetic
     /// always reports 11 pt, full-doc reports the actual size, so
     /// equivalence on mixed-size is by design false.
+    fn walk_synth_dbg(
+        frame: &Frame,
+        depth: usize,
+        y_off: f64,
+        out: &mut Vec<(usize, f64, bool)>,
+    ) {
+        for (pos, item) in frame.items() {
+            if let FrameItem::Group(g) = item {
+                let gy = y_off + pos.y.to_pt();
+                let bl = g.frame.baseline().to_pt();
+                out.push((depth, gy + bl, g.frame.has_baseline()));
+                walk_synth_dbg(&g.frame, depth + 1, gy, out);
+            }
+        }
+    }
+
+    /// Build a deterministic ~5000-line typst document with ~500
+    /// inline math fragments scattered through prose paragraphs.
+    /// Used by the perf benches below.  Returns (source, fragment
+    /// byte ranges).
+    fn build_5kloc_corpus() -> (String, Vec<Range<usize>>) {
+        let templates = [
+            "$a + b = c$",
+            "$x^2 + y^2$",
+            "$sum_(i=1)^n i$",
+            "$integral_0^1 x dif x$",
+            "$frac(1, 2)$",
+            "$sqrt(pi)$",
+            "$alpha beta gamma$",
+            "$a_1 + a_2$",
+            "$lim_(n -> infinity) 1/n$",
+            "$mat(1, 0; 0, 1)$",
+            "$hat(x) tilde(y)$",
+            "$frac(a, b) + frac(c, d)$",
+        ];
+        let mut src = String::with_capacity(5000 * 80);
+        let mut fragments = Vec::new();
+        // Pseudo-random linear-congruential generator.
+        let mut rng: u64 = 0xDEADBEEF;
+        let mut next = || {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            rng
+        };
+        let n_lines: usize = std::env::var("TIP_BENCH_LINES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
+        for line_idx in 0..n_lines {
+            // Math-heavy: each line gets 1–3 inline fragments.
+            // Each fragment is interleaved with a few words.
+            let words = ["lorem", "ipsum", "dolor", "sit", "amet", "consectetur"];
+            let frags_this_line = 1 + (next() % 3) as usize; // 1, 2, or 3
+            for f in 0..frags_this_line {
+                let n_words = (next() % 3) as usize + 1;
+                for _ in 0..n_words {
+                    let w = words[(next() % words.len() as u64) as usize];
+                    src.push_str(w);
+                    src.push(' ');
+                }
+                let tpl = templates[(next() % templates.len() as u64) as usize];
+                let start = src.len();
+                src.push_str(tpl);
+                let end = src.len();
+                fragments.push(start..end);
+                if f < frags_this_line - 1 {
+                    src.push(' ');
+                }
+            }
+            // trailing prose
+            let n_words_post = (next() % 3) as usize + 1;
+            src.push(' ');
+            for _ in 0..n_words_post {
+                let w = words[(next() % words.len() as u64) as usize];
+                src.push_str(w);
+                src.push(' ');
+            }
+            src.push_str(".\n");
+            if line_idx % 20 == 19 {
+                src.push('\n');
+            }
+        }
+        (src, fragments)
+    }
+
+    /// Bench: synthetic strategy on a math-heavy corpus.
+    /// Set `TIP_BENCH_LINES=1000` to control corpus size.
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_synth() {
+        use crate::compiler::FragmentCompiler;
+        use std::time::Instant;
+        let (src, fragments) = build_5kloc_corpus();
+        let n_lines = src.lines().count();
+        let n_frag = fragments.len();
+        eprintln!(
+            "[synth] corpus: {} lines, {} fragments, {} bytes",
+            n_lines,
+            n_frag,
+            src.len()
+        );
+        let mut world = TipWorld::new();
+        let t0 = Instant::now();
+        let mut hits = 0;
+        for r in &fragments {
+            if FragmentCompiler::compile_fragment_scoped(
+                &mut world,
+                &src,
+                r.start,
+                r.end,
+                tip_protocol::svg_color::STANDIN_HEX,
+                None,
+                None,
+            )
+            .is_ok()
+            {
+                hits += 1;
+            }
+        }
+        let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "SYNTH: total={:.1} ms ({:.2} ms/frag)  hits={}/{}",
+            total_ms,
+            total_ms / n_frag as f64,
+            hits,
+            n_frag,
+        );
+    }
+
+    /// Bench: full-doc strategy on the same corpus.
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_full_doc() {
+        use std::time::Instant;
+        let (src, fragments) = build_5kloc_corpus();
+        let n_lines = src.lines().count();
+        let n_frag = fragments.len();
+        eprintln!(
+            "[full-doc] corpus: {} lines, {} fragments, {} bytes",
+            n_lines,
+            n_frag,
+            src.len()
+        );
+        let mut world = TipWorld::new();
+        let t0 = Instant::now();
+        let doc = compile_real_document(&mut world, &src).expect("compile");
+        let compile_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let t0 = Instant::now();
+        let mut hits = 0;
+        for r in &fragments {
+            if extract_fragment_svg(&world, &doc, r.start, r.end).is_some() {
+                hits += 1;
+            }
+        }
+        let extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        eprintln!(
+            "FULL-DOC: compile={:.1} ms  extract_all={:.1} ms ({:.3} ms/frag)  hits={}/{}",
+            compile_ms,
+            extract_ms,
+            extract_ms / n_frag as f64,
+            hits,
+            n_frag,
+        );
+    }
+
+    /// Bench: full-doc with `compile_all` (which currently is the
+    /// same as the loop in `bench_full_doc` but exists as the public
+    /// API path the server hits).
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_full_doc_compile_all() {
+        use std::time::Instant;
+        let (src, fragments) = build_5kloc_corpus();
+        let n_lines = src.lines().count();
+        let n_frag = fragments.len();
+        let frag_locs: Vec<tip_protocol::messages::FragmentLocation> = fragments
+            .iter()
+            .map(|r| tip_protocol::messages::FragmentLocation { start: r.start, end: r.end })
+            .collect();
+        eprintln!(
+            "[full-doc compile_all] corpus: {} lines, {} fragments, {} bytes",
+            n_lines, n_frag, src.len()
+        );
+        let mut world = TipWorld::new();
+        let t0 = Instant::now();
+        let res = FullDocCompiler::compile_all(&mut world, &src, &frag_locs).unwrap();
+        let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let hits = res.iter().filter(|r| r.error.is_none() && !r.svg.is_empty()).count();
+        eprintln!(
+            "compile_all: total={:.1} ms ({:.3} ms/frag)  hits={}/{}",
+            total_ms,
+            total_ms / n_frag as f64,
+            hits,
+            n_frag,
+        );
+    }
+
+    /// Bench: editing latency.  Emulate the user typing N characters
+    /// at the END of a 5000-line document, measuring per-keystroke
+    /// compile time.  This is the live-preview hot path: we want
+    /// well below 30 ms per keystroke for a fluid edit experience.
+    #[test]
+    #[ignore = "perf bench, run with --ignored"]
+    fn bench_5kloc_edit_latency() {
+        use std::time::Instant;
+        let (mut src, _) = build_5kloc_corpus();
+        let typed = "$alpha + beta = gamma$";
+        // Append "(typing soon: ...)" prefix so the new fragment is
+        // surrounded by context similar to other lines.
+        src.push_str("Typing now: ");
+
+        eprintln!("=== FULL-DOC keystroke timing ===");
+        {
+            let mut world = TipWorld::new();
+            // Warm: first compile after appending one char.
+            let mut buf = src.clone();
+            buf.push('x');
+            let t0 = Instant::now();
+            let _ = compile_real_document(&mut world, &buf).expect("warm compile");
+            let warm_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("  warm-up compile: {:.1} ms", warm_ms);
+
+            let mut buf = src.clone();
+            let mut total_ms = 0.0;
+            let mut latencies = Vec::new();
+            for ch in typed.chars() {
+                buf.push(ch);
+                let t0 = Instant::now();
+                // For full-doc live: compile real doc + extract the
+                // current fragment (= last ~20 chars of buf).
+                let frag_start = buf.len() - 1; // last char only as proxy
+                let frag_end = buf.len();
+                let doc = compile_real_document(&mut world, &buf).expect("compile");
+                let _ = extract_fragment_svg(&world, &doc, frag_start, frag_end);
+                let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                latencies.push(dt);
+                total_ms += dt;
+            }
+            let avg = total_ms / typed.chars().count() as f64;
+            let max = latencies.iter().copied().fold(f64::MIN, f64::max);
+            let min = latencies.iter().copied().fold(f64::MAX, f64::min);
+            eprintln!(
+                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({} keystrokes)",
+                avg,
+                min,
+                max,
+                latencies.len()
+            );
+        }
+
+        eprintln!("=== SYNTH keystroke timing ===");
+        {
+            use crate::compiler::FragmentCompiler;
+            let mut world = TipWorld::new();
+            let mut buf = src.clone();
+            let mut total_ms = 0.0;
+            let mut latencies = Vec::new();
+            for ch in typed.chars() {
+                buf.push(ch);
+                let frag_start = buf.len() - 1;
+                let frag_end = buf.len();
+                let t0 = Instant::now();
+                // Note: synthetic compile may fail mid-edit (broken
+                // syntax).  We don't unwrap; we just time the call.
+                let _ = FragmentCompiler::compile_fragment_scoped(
+                    &mut world,
+                    &buf,
+                    frag_start,
+                    frag_end,
+                    tip_protocol::svg_color::STANDIN_HEX,
+                    None,
+                    None,
+                );
+                let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                latencies.push(dt);
+                total_ms += dt;
+            }
+            let avg = total_ms / typed.chars().count() as f64;
+            let max = latencies.iter().copied().fold(f64::MIN, f64::max);
+            let min = latencies.iter().copied().fold(f64::MAX, f64::min);
+            eprintln!(
+                "  per-keystroke: avg={:.1} ms  min={:.1} ms  max={:.1} ms  ({} keystrokes)",
+                avg,
+                min,
+                max,
+                latencies.len()
+            );
+        }
+    }
+
+    /// Audit synthetic's baseline picker against the same 7-level
+    /// sub tower that exposed the full-doc outer-vs-inner bug.
+    #[test]
+    #[ignore = "audit, run with --ignored"]
+    fn audit_synth_sub_tower_baseline() {
+        use crate::compiler::FragmentCompiler;
+        let mut world = TipWorld::new();
+        let src = "Body $a_(a_(a_(a_(a_(a_(a_a))))))$ end\n";
+        let r = locate(src, "$a_(a_(a_(a_(a_(a_(a_a))))))$");
+        let s = FragmentCompiler::compile_fragment_scoped(
+            &mut world,
+            src,
+            r.start,
+            r.end,
+            tip_protocol::svg_color::STANDIN_HEX,
+            None,
+            None,
+        )
+        .expect("synth compile");
+        eprintln!(
+            "SYNTH 7-sub-tower: h={:.3} d={:.3} w={:.3}  ascent={:.1}%",
+            s.height_pt,
+            s.depth_pt,
+            s.width_pt,
+            (s.height_pt - s.depth_pt) / s.height_pt * 100.0,
+        );
+        // Walk synth's compiled doc to enumerate Groups + baselines.
+        let synth_src = crate::compiler::FragmentCompiler::debug_scoped_source(
+            src, r.start, r.end,
+        )
+        .unwrap();
+        eprintln!("SYNTH source: {}", synth_src.replace('\n', " | "));
+        let mut w2 = TipWorld::new();
+        w2.set_main_source(&synth_src);
+        let synth_doc = typst::compile::<typst::layout::PagedDocument>(&w2).output.unwrap();
+        eprintln!("=== synth Groups (any has_baseline) ===");
+        let mut all_groups = Vec::<(usize, f64, bool)>::new();
+        walk_synth_dbg(&synth_doc.pages[0].frame, 0, 0.0, &mut all_groups);
+        for (depth, b, has) in &all_groups {
+            eprintln!("  depth={} baseline_y={:.3} has_baseline={}", depth, b, has);
+        }
+        // Same fragment under full-doc.
+        let mut wf = TipWorld::new();
+        let doc = compile_real_document(&mut wf, src).expect("compile");
+        let f = extract_fragment_svg(&wf, &doc, r.start, r.end).unwrap();
+        eprintln!(
+            "FULL  7-sub-tower: h={:.3} d={:.3} w={:.3}  ascent={:.1}%",
+            f.height_pt,
+            f.depth_pt,
+            f.width_pt,
+            (f.height_pt - f.depth_pt) / f.height_pt * 100.0,
+        );
+    }
+
+    #[test]
+    #[ignore = "diagnostic only"]
+    fn diag_phantom_baseline() {
+        use crate::compiler::FragmentCompiler;
+        let mut world = TipWorld::new();
+        let src = "\
+#let phantom(x) = hide($#x$)
+text $phantom(a)^2$ and $a^2$ done
+";
+        let doc = compile_real_document(&mut world, src).expect("compile");
+        for (label, anchor) in [("phantom", "$phantom(a)^2$"), ("plain", "$a^2$")] {
+            let r = locate(src, anchor);
+            // Synth metrics
+            let mut wsynth = TipWorld::new();
+            let s = FragmentCompiler::compile_fragment_scoped(
+                &mut wsynth, src, r.start, r.end,
+                tip_protocol::svg_color::STANDIN_HEX, None, None,
+            ).unwrap();
+            eprintln!(
+                "[{} synth]: h={:.3} d={:.3} w={:.3}  ascent={:.1}%",
+                label, s.height_pt, s.depth_pt, s.width_pt,
+                (s.height_pt - s.depth_pt) / s.height_pt * 100.0,
+            );
+            let main = world.main();
+            let main_src = world.source(main).ok().unwrap();
+            let mut leaves = Vec::new();
+            let mut groups = Vec::new();
+            flatten_leaves(
+                &doc.pages[0].frame,
+                Point::zero(),
+                main,
+                &main_src,
+                &mut leaves,
+                &mut groups,
+            );
+            eprintln!("=== {} ===", label);
+            for l in &leaves {
+                if matches!(l.category_for(r.start, r.end), LeafCategory::InRange) {
+                    eprintln!(
+                        "  leaf pos.y={:.3} size={:?}",
+                        l.pos.y.to_pt(),
+                        l.text_size.map(|s| s.to_pt())
+                    );
+                }
+            }
+            for (i, g) in groups.iter().enumerate() {
+                eprintln!(
+                    "  group #{i} baseline_y={:.3} has_in_range={}",
+                    g.baseline_y.to_pt(),
+                    g.leaf_range.start
+                );
+            }
+            let f = extract_fragment_svg(&world, &doc, r.start, r.end).unwrap();
+            eprintln!(
+                "  result: h={:.3} d={:.3} w={:.3} ext_used={}",
+                f.height_pt, f.depth_pt, f.width_pt, f.baseline_external
+            );
+            eprintln!("  baseline_in_image_pt = {:.3}", f.height_pt - f.depth_pt);
+            // Save SVG to disk for visual inspection.
+            let path = format!("/tmp/tip-fulldoc-demo/{}-fulldoc.svg", label);
+            std::fs::write(&path, &f.svg).unwrap();
+            eprintln!("  saved to {}", path);
+            // Save synth SVG too.
+            let synth_path = format!("/tmp/tip-fulldoc-demo/{}-synth.svg", label);
+            std::fs::write(&synth_path, &s.svg).unwrap();
+            eprintln!("  synth saved to {}", synth_path);
+        }
+    }
+
     /// Diagnostic for sub/cfrac tower baseline reporting in context.
     /// Prints what Group baseline says vs what surrounding text says.
     #[test]
@@ -1087,14 +1771,12 @@ $x + y$ default size
             Point::zero(),
             main,
             &main_src,
-            r.start,
-            r.end,
             &mut leaves,
             &mut groups,
         );
         eprintln!("=== leaves in fragment ===");
         for l in &leaves {
-            if matches!(l.category, LeafCategory::InRange) {
+            if matches!(l.category_for(r.start, r.end), LeafCategory::InRange) {
                 eprintln!(
                     "  pos.y={:.3} size={:?} kind={:?}",
                     l.pos.y.to_pt(),
@@ -1112,7 +1794,7 @@ $x + y$ default size
             eprintln!(
                 "  baseline_y={:.3} has_in_range={}",
                 g.baseline_y.to_pt(),
-                g.has_in_range
+                g.leaf_range.start
             );
         }
         eprintln!("=== external (out-of-frag, page-wide) text baselines ===");
