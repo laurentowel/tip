@@ -574,12 +574,6 @@ Automatically renders visible fragments and enables live preview."
         ;; fontaine-set-preset, etc.).  Theme-color changes don't need
         ;; tracking — SVGs use `currentColor'.
         (add-hook 'buffer-face-mode-hook #'tip--on-font-change nil t)
-        ;; Surrounding-face change tracking: when font-lock re-fontifies
-        ;; (e.g. user removed an `\\fbox{...}' wrapper around a math
-        ;; fragment), `tip-image-face' = `auto' would still report the
-        ;; old face on the overlay.  jit-lock walks each refontified
-        ;; region; we re-resolve face on any tip overlay there.
-        (jit-lock-register #'tip--refresh-overlay-faces-in-region)
         ;; Kodama integration (auto-detect)
         (when (fboundp 'tip-kodama-maybe-enable)
           (tip-kodama-maybe-enable))
@@ -610,7 +604,6 @@ Automatically renders visible fragments and enables live preview."
       (setq tip-echo--timer nil))
     (when tip-live-mode (tip-live-mode -1))
     (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)
-    (jit-lock-unregister #'tip--refresh-overlay-faces-in-region)
     (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
     (when (bound-and-true-p tip-flymake-mode) (tip-flymake-mode -1))
     (remove-hook 'eldoc-documentation-functions #'tip--eldoc-error t)

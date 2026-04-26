@@ -663,14 +663,23 @@ rebuilds the SVG image spec."
           (overlay-put ov 'face new-face)
           (overlay-put ov 'display (car spec)))))))
 
-(defun tip--refresh-overlay-faces-in-region (beg end)
-  "jit-lock callback: refresh face on every tip overlay in BEG..END.
-Hooked from `tip-mode' so that when font-lock re-fontifies a
-region (after, say, removing a `\\fbox{...}' wrapper) the overlay's
-tint follows without a recompile."
+;;;###autoload
+(defun tip-refresh-overlay-faces ()
+  "Re-resolve `tip-image-face' on every tip overlay in this buffer.
+Use after structural edits (e.g. removing a `\\fbox{...}' wrapper)
+that change the surrounding face but leave the math fragment
+itself intact.  No recompile.  Also runs as `:after' advice on
+`font-lock-update' (`C-x x f') for `tip-mode' buffers."
+  (interactive)
   (when tip-image-face
-    (dolist (ov (overlays-in beg end))
+    (dolist (ov (overlays-in (point-min) (point-max)))
       (tip--refresh-overlay-face ov))))
+
+(defun tip--refresh-on-font-lock-update (&rest _)
+  (when (bound-and-true-p tip-mode)
+    (tip-refresh-overlay-faces)))
+
+(advice-add 'font-lock-update :after #'tip--refresh-on-font-lock-update)
 
 (defun tip--on-font-change (&rest _)
   "Update all tip buffers after a font change.
