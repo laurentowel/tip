@@ -36,6 +36,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'cl-lib)
+(require 'tip-log)
 
 (declare-function flymake-make-diagnostic "flymake" (buffer beg end type text))
 (declare-function flymake-mode "flymake" (&optional arg))
@@ -307,18 +308,19 @@ eldoc providers (flymake, etc.) to contribute."
                    ((and at-point (zerop others)) "")
                    (at-point (format " (+%d more)" others))
                    ((zerop others) " (near)")
-                   (t (format " (near, +%d more)" others)))))
+                   (t (format " (near, +%d more)" others))))
+             (level (if (eq sev 'warning) 'warning 'error)))
         (when (and msg sev)
-          ;; `:thing' becomes the eldoc label prefix in the echo area
-          ;; (e.g. `tip-error: ...').  Encoding severity into it lets
-          ;; the line stay concise without losing that signal — the
-          ;; previous `TIP [%s]:' inside the message was redundant
-          ;; once eldoc gained the labeled-things UI.
+          ;; Build the same multi-face line tip-log--echo emits, so
+          ;; cursor-near-fragment (eldoc) and cursor-in-fragment
+          ;; (recompile → tip-log--echo via *Messages*) look identical.
+          ;; `:thing' is intentionally omitted — eldoc would otherwise
+          ;; prepend an unfontified `tip-error:' label and double up
+          ;; with our own `tip[…]:' prefix.
           (funcall callback
-                   (propertize (format "%s%s" msg tag)
-                               'face (overlay-get ov 'face))
-                   :thing (intern (format "tip-%s" sev))
-                   :face (overlay-get ov 'face)))))))
+                   (concat (tip-log-format-line level 'compile msg)
+                           (when (not (string-empty-p tag))
+                             (propertize tag 'face 'shadow)))))))))
 
 ;;; * Flymake backend
 

@@ -256,22 +256,28 @@ error).  No-op when MSG is empty (some err-message values arrive as
              (not (string-empty-p msg)))
     (display-warning 'tip msg :warning)))
 
-(defun tip-log--echo (level category msg)
-  "Mirror an entry to the echo area, painted to match *tip-log*'s
-columns: severity face on the level word + body, category face on
-the category word, `shadow' on the bracket / slash punctuation so
-the colored bits pop instead of reading as one monochromatic
-chunk."
+(defun tip-log-format-line (level category msg)
+  "Return the propertized `tip[LEVEL/CATEGORY]: MSG' string used by
+both `tip-log--echo' (mirror to *Messages*) and `tip--eldoc-error'
+(eldoc surface).  Severity face on the level word + body, category
+face on the category word, `shadow' on the bracket / slash
+punctuation so the colored bits pop instead of reading as one
+monochromatic chunk."
   (let ((sev-face (tip-log--face-for level))
         (cat-face 'font-lock-type-face)
         (sep-face 'shadow))
-    (message "%s%s%s%s%s %s"
-             (propertize "tip[" 'face sep-face)
-             (propertize (symbol-name level)    'face sev-face)
-             (propertize "/"   'face sep-face)
-             (propertize (symbol-name category) 'face cat-face)
-             (propertize "]:"  'face sep-face)
-             (propertize msg   'face sev-face))))
+    (concat
+     (propertize "tip[" 'face sep-face)
+     (propertize (symbol-name level)    'face sev-face)
+     (propertize "/"   'face sep-face)
+     (propertize (symbol-name category) 'face cat-face)
+     (propertize "]:"  'face sep-face)
+     " "
+     (propertize msg   'face sev-face))))
+
+(defun tip-log--echo (level category msg)
+  "Mirror an entry to the echo area using `tip-log-format-line'."
+  (message "%s" (tip-log-format-line level category msg)))
 
 ;;; * protocol scrubbing
 

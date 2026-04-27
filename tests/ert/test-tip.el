@@ -468,10 +468,9 @@ files; collection no longer refuses on it."
   (with-temp-buffer
     (insert "aaaaa bbbbb ccccc")
     (tip-test--mk-error-overlay 7 12 'error "Undefined control sequence" "$\\foo")
-    ;; Inside overlay → callback receives the message, no `(near)' tag.
-    ;; Severity rides on the eldoc `:thing' label (rendered as
-    ;; `tip-error:' / `tip-warning:' prefix in the echo area), not
-    ;; embedded in the message text.
+    ;; Inside overlay → callback receives a tip[error/compile] line
+    ;; matching tip-log--echo's format, no `(near)' tag.  No `:thing'
+    ;; argument — eldoc's auto-prefix would conflict with our own.
     (goto-char 9)
     (let (captured thing)
       (tip--eldoc-error
@@ -480,8 +479,9 @@ files; collection no longer refuses on it."
                thing (plist-get props :thing))))
       (should captured)
       (should (string-match-p "Undefined control sequence" captured))
+      (should (string-match-p "tip\\[error/compile\\]:" captured))
       (should-not (string-match-p "(near)" captured))
-      (should (eq thing 'tip-error)))))
+      (should-not thing))))
 
 (ert-deftest tip-test-eldoc-proximity-same-line ()
   "With default `tip-error-eldoc-proximity' = `same-line', cursor
