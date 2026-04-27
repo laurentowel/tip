@@ -165,12 +165,27 @@ protocol, but tip-log uses symbols throughout (filter dispatch,
   "All log entries, newest LAST.  A list (not a true ring) trimmed
 on each insert.  Lists are fast enough at 2000 entries.")
 
+(defun tip-log--ensure-buffer ()
+  "Return the *tip-log* buffer, creating + initializing it if absent.
+Called on the first entry so `C-x b *tip-log*' works without first
+running `tip-show-log'."
+  (let* ((name "*tip-log*")
+         (existing (get-buffer name)))
+    (or existing
+        (let ((buf (get-buffer-create name)))
+          (with-current-buffer buf
+            (tip-log-mode))
+          buf))))
+
 (defun tip-log--push (entry)
-  "Append ENTRY, trim to `tip-log-ring-size', refresh any open view."
+  "Append ENTRY, trim to `tip-log-ring-size', refresh any open view.
+Also materializes *tip-log* on first call so the user can `C-x b' to
+it before invoking `tip-show-log'."
   (setq tip-log--entries
         (let ((all (nconc tip-log--entries (list entry))))
           (let ((excess (- (length all) tip-log-ring-size)))
             (if (> excess 0) (nthcdr excess all) all))))
+  (tip-log--ensure-buffer)
   (tip-log--refresh-buffer-if-visible))
 
 ;;; * core API
@@ -492,10 +507,8 @@ silences the chatter again."
 (defun tip-show-log ()
   "Pop to the *tip-log* buffer."
   (interactive)
-  (let ((buf (get-buffer-create "*tip-log*")))
+  (let ((buf (tip-log--ensure-buffer)))
     (with-current-buffer buf
-      (unless (derived-mode-p 'tip-log-mode)
-        (tip-log-mode))
       (tip-log--refresh))
     (pop-to-buffer buf)))
 
