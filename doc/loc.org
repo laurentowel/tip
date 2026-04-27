@@ -167,8 +167,8 @@ external binaries is hard to unit-test; coverage relies on
 
 | File                         | Lines | Notes                                              |
 |------------------------------+-------+----------------------------------------------------|
-| =test/elisp-client/test-tip.el= |  886 | Pure-elisp ERT unit tests (62 tests)            |
-| =test/elisp-rs-integration/test-server.el= | 165 | Server round-trip + version handshake (3 tests) |
+| =tests/ert/test-tip.el= |  886 | Pure-elisp ERT unit tests (62 tests)            |
+| =tests/ert/test-server.el= | 165 | Server round-trip + version handshake (3 tests) |
 | =tip.el=                     |   924 | =tip-mode= + customs + commands                    |
 | =tip-render.el=              |   712 | Compile-result → overlay pipeline                  |
 | =tip-log.el=                 |   647 | Centralized log + tabulated view (=*tip-log*=)     |
@@ -179,10 +179,10 @@ external binaries is hard to unit-test; coverage relies on
 | =tip-diagnostic.el=          |   364 | Bug-report bundle + skeleton dump                  |
 | =tip-childframe.el=          |   295 | Optional childframe display                        |
 | =tip-markdown.el=            |   266 | Markdown / KaTeX backend                           |
-| =test/elisp-client/test-tip-markdown.el= | 252 | Markdown backend tests                  |
+| =tests/ert/test-tip-markdown.el= | 252 | Markdown backend tests                  |
 | =tip-latex-parse-treesit.el= |   252 | tree-sitter LaTeX fragment parser                  |
 | =tip-typst.el=               |   231 | Typst backend orchestration                        |
-| =test/elisp-client/test-tip-latex-treesit.el= | 218 | LaTeX tree-sitter tests          |
+| =tests/ert/test-tip-latex-treesit.el= | 218 | LaTeX tree-sitter tests          |
 | =preview-toggle.el=          |   168 | Generic auto-toggle framework (reusable)           |
 | =tip-live.el=                |   168 | Live preview + echo error feedback                 |
 | =tip-backend.el=             |   132 | Backend struct + dispatch                          |

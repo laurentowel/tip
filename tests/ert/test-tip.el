@@ -12,20 +12,15 @@
 ;;; Code:
 
 (require 'ert)
-
-;; Walk up two dirs (test/elisp-client/ → test/ → repo root) so
-;; (require 'preview-toggle) etc. resolve.
-(defconst tip-test--repo-root
-  (expand-file-name "../.." (file-name-directory load-file-name)))
-(add-to-list 'load-path tip-test--repo-root)
-(load (expand-file-name "tip.el" tip-test--repo-root))
+(load (expand-file-name "../setup.el" (file-name-directory load-file-name)))
+(load (expand-file-name "tip.el" tip-test-lisp-dir))
 
 ;;; * Byte compilation
 
 (ert-deftest tip-test-byte-compile ()
   "tip.el should byte-compile without errors or warnings."
   (let ((byte-compile-error-on-warn t)
-        (tip-el (expand-file-name "tip.el" tip-test--repo-root)))
+        (tip-el (expand-file-name "tip.el" tip-test-lisp-dir)))
     (should (byte-compile-file tip-el))))
 
 ;;; * Loading and basic definitions

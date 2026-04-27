@@ -13,10 +13,9 @@
 ;;; Code:
 
 (require 'ert)
-(add-to-list 'load-path
-             (expand-file-name "../.."
-                               (file-name-directory
-                                (or load-file-name buffer-file-name))))
+(load (expand-file-name "../setup.el"
+                        (file-name-directory
+                         (or load-file-name buffer-file-name))))
 (require 'tip-markdown)
 
 (defun ttm--frags (text)

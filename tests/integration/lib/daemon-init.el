@@ -39,17 +39,23 @@
 
 (let* ((this-file (or load-file-name buffer-file-name))
        (lib-dir (file-name-directory this-file))
+       ;; lib-dir = <repo>/tests/integration/lib/
+       ;; it-dir  = <repo>/tests/integration/
+       ;; tests-dir = <repo>/tests/
+       ;; repo-root = <repo>/
        (default-it-dir (file-name-directory (directory-file-name lib-dir)))
+       (default-tests-dir (file-name-directory (directory-file-name default-it-dir)))
        (default-repo-root (file-name-directory
-                           (directory-file-name default-it-dir)))
+                           (directory-file-name default-tests-dir)))
        (repo-root (or (getenv "TIP_REPO") default-repo-root))
        (it-dir (or (getenv "TIP_IT_DIR") default-it-dir))
-       (specs-override (getenv "TIP_IT_SPECS")))
+       (specs-override (getenv "TIP_IT_SPECS"))
+       (lisp-dir (expand-file-name "lisp" repo-root)))
   (setq tip-test--repo-root repo-root
         tip-test--specs-dir (or specs-override
                                 (expand-file-name "specs" it-dir))
         tip-test--lib-dir (expand-file-name "lib" it-dir))
-  (add-to-list 'load-path repo-root)
+  (add-to-list 'load-path lisp-dir)
   (add-to-list 'load-path lib-dir)
   (let ((gp (getenv "TIP_IT_GRAMMAR_PATH")))
     (when (and gp (file-directory-p gp))
@@ -62,7 +68,7 @@
   (let ((lp (getenv "TIP_IT_LATEX_GRAMMAR_PATH")))
     (when (and lp (file-directory-p lp))
       (add-to-list 'treesit-extra-load-path (file-name-as-directory lp))))
-  (load (expand-file-name "tip.el" repo-root) nil t)
+  (load (expand-file-name "tip.el" lisp-dir) nil t)
   (require 'tip-test))
 
 ;; Inter-test sleep for eye-balling results.

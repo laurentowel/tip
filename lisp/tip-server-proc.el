@@ -71,8 +71,16 @@ the user know they may see schema-shape errors until they upgrade."
 ;;; * font directory resolution
 
 (defun tip--package-dir ()
-  "Return the directory containing tip.el."
+  "Return the directory containing tip.el (the lisp/ subdir of the repo)."
   (file-name-directory (or load-file-name (locate-library "tip") "")))
+
+(defun tip--repo-root ()
+  "Return the repo root — the parent of `tip--package-dir'.
+The cargo-built server binary lives at
+`<repo-root>/tip-server/target/release/tip-server'."
+  (file-name-as-directory
+   (file-name-directory
+    (directory-file-name (tip--package-dir)))))
 
 (defun tip--resolve-font-dirs ()
   "Resolve `tip-font-dirs' to a list of absolute directory paths.
@@ -135,17 +143,20 @@ to the Typst default when no backend is active (e.g. bare test buffers)."
     (or (and absolute name)
         tip-server-executable
         (executable-find name)
-        ;; Check local build beside tip.el
+        ;; Check local cargo build at <repo>/tip-server/target/release/...
         (let ((local (expand-file-name
                       (concat "tip-server/target/release/" name)
-                      (tip--package-dir))))
+                      (tip--repo-root))))
           (when (file-executable-p local) local))
-        ;; Check in elpaca build dir (source repo)
-        (let ((elpaca-src (expand-file-name
-                           (concat "tip-server/target/release/" name)
-                           (file-name-directory
-                            (or (locate-library "tip") "")))))
-          (when (file-executable-p elpaca-src) elpaca-src))
+        ;; Same path under elpaca's source-fetched copy (locate-library
+        ;; finds tip.el under elpaca/repos/tip/lisp/tip.el).
+        (let* ((tip-el (locate-library "tip"))
+               (elpaca-src
+                (and tip-el
+                     (expand-file-name
+                      (concat "../tip-server/target/release/" name)
+                      (file-name-directory tip-el)))))
+          (when (and elpaca-src (file-executable-p elpaca-src)) elpaca-src))
         (tip--prompt-install))))
 
 (defun tip--prompt-install ()

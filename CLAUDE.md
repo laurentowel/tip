@@ -8,28 +8,14 @@ TIP is an Emacs minor mode that renders typeset math fragments (and, opt-in, fig
 
 ```
 tip-improve/
-├── tip*.el                 # Emacs package (MELPA-compliant): tip.el + per-feature files
-├── preview-toggle.el       # Generic overlay auto-toggle framework (reusable)
-├── tests/
-│   ├── elisp-client/           # Pure-elisp ERT, no server (3 files: test-tip[-markdown|-latex-treesit])
-│   └── elisp-rs-integration/   # ERT + GUI/perf tests that exercise tip-server
-│       ├── test-server.el          # Headless protocol + handshake round-trip
-│       ├── 07-multiline-open-close.el  # Overlay open/close all fragment types
-│       ├── 10-yasnippet-edit-cycle.el  # Realistic yasnippet edit workflow
-│       ├── 11-rapid-cursor-movement.el # Random jump + char-walk leak stress
-│       ├── 12-stress-create-edit-delete.el # 20 eqs, errors, multi-line, deletes
-│       ├── 30-interactive-visual.el        # Interactive baseline-stress sanity
-│       ├── 31-interactive-scale-baseline.el # Live scale/baseline tuning
-│       ├── 40-batch-perf-benchmark.el      # Perf: 50/200/1000 fragments
-│       ├── 41-generate-bench-files.el      # Fixture generator for #40
-│       ├── 60-latex-arxiv-corpus.el        # Latex collector against arXiv
-│       ├── 61-latex-live-render.el         # Latex e2e tip-server round-trip
-│       ├── 62-latex-interactive-basic.el   # Latex GUI basic
-│       ├── 63-latex-interactive-arxiv.el   # Latex GUI on real corpus
-│       ├── 65-latex-baseline-stress.el     # Latex baseline regression
-│       ├── emacs-sandbox/      # Cached tree-sitter grammar + typst-ts-mode
-│       ├── fixtures/           # Test fixture sources
-│       └── visual/             # Generated SVGs + comparison PDFs
+├── lisp/                   # Emacs package source (magit/pdf-tools layout)
+│   ├── tip.el                  # Main package file
+│   ├── tip-*.el                # Per-feature files (server-proc, render, log, …)
+│   └── preview-toggle.el       # Generic overlay auto-toggle framework
+├── tests/                  # See tests/README.md for the layout
+│   ├── ert/                    # Headless ERT (`emacs --batch -l <file>`)
+│   ├── integration/            # Daemon-driven specs (`tests/integration/run.sh`)
+│   └── manual/                 # Interactive + perf, run by hand
 ├── tip-server/         # Active development — Rust-native server
 │   ├── crates/
 │   │   ├── tip-protocol/       # Message types + stdio transport (serde, newline-delimited JSON) — shared across backends
@@ -226,53 +212,47 @@ Always check the published API, not the cloned source.
 cd tip-server
 cargo test
 
-# Emacs pure-elisp unit (62 tests: byte-compile, image spec, overlays, ...)
-emacs --batch -l test/elisp-client/test-tip.el
-emacs --batch -l test/elisp-client/test-tip-markdown.el
-emacs --batch -l test/elisp-client/test-tip-latex-treesit.el
-
-# Emacs ↔ tip-server integration (3 tests: round-trip, version handshake)
-emacs --batch -l test/elisp-rs-integration/test-server.el
+# Headless ERT (62 + 38 + 24 + 3 tests)
+emacs --batch -l tests/ert/test-tip.el
+emacs --batch -l tests/ert/test-tip-markdown.el
+emacs --batch -l tests/ert/test-tip-latex-treesit.el
+emacs --batch -l tests/ert/test-server.el        # spawns server; ert-skip if missing
 ```
 
-### Tier 2: Automated GUI (auto-exit, check exit code or results file)
+### Tier 2: Daemon-driven scenario specs (auto-exit, real GUI)
 
-Live under `tests/elisp-rs-integration/`.  Numeric prefixes order them
-roughly by category (00–19 typst overlays, 20–49 perf, 60+ latex).
+The framework lives under `tests/integration/` (long-lived emacs
+daemon, real overlays + treesit + typst-ts-mode + tree-sitter
+grammars).  19 specs covering both backends; `tip-test-deftest`
+registers each.  See `tests/README.md` for spec authoring.
 
 ```bash
-# Overlay open/close cycle (typst, all fragment types)
-emacs -Q -l tests/elisp-rs-integration/07-multiline-open-close.el
-
-# Yasnippet-style edit cycle (type $$, C-b, type math, C-f)
-emacs -Q -l tests/elisp-rs-integration/10-yasnippet-edit-cycle.el
-
-# Rapid movement stress (random jumps + char walk; leak check)
-emacs -Q -l tests/elisp-rs-integration/11-rapid-cursor-movement.el
-
-# Strenuous stress (20 eqs, syntax errors, multi-line display, deletes)
-emacs -Q -l tests/elisp-rs-integration/12-stress-create-edit-delete.el
-
-# Performance benchmarks (50/200/1000 fragments → results file)
-emacs -Q -l tests/elisp-rs-integration/40-batch-perf-benchmark.el
-emacs --batch -l tests/elisp-rs-integration/41-generate-bench-files.el  # generator
-
-# LaTeX backend tests
-emacs --batch -l tests/elisp-rs-integration/60-latex-arxiv-corpus.el
-emacs -Q       -l tests/elisp-rs-integration/61-latex-live-render.el
-emacs -Q       -l tests/elisp-rs-integration/62-latex-interactive-basic.el
-emacs -Q       -l tests/elisp-rs-integration/63-latex-interactive-arxiv.el
-emacs -Q       -l tests/elisp-rs-integration/65-latex-baseline-stress.el
+tests/integration/run.sh                       # all specs, GUI window
+tests/integration/run.sh --headless            # CI mode (no visible frame)
+TIP_IT_TEST=multiline tests/integration/run.sh # filter by substring
 ```
 
-### Tier 3: Interactive visual (stays open, human checks)
+### Tier 3: Interactive / perf — humans look at it
+
+Lives under `tests/manual/`.  Not part of CI; each file opens an
+emacs frame and either invites you to drive it (interactive) or
+reports numbers to a results file (perf).
 
 ```bash
-# Visual sanity check with baseline_stress.typ
-emacs -Q -l tests/elisp-rs-integration/30-interactive-visual.el
+# Interactive baseline-stress sanity
+emacs -Q -l tests/manual/30-interactive-visual.el
 
-# Scale + baseline tuning (C-c =/- scale, C-c [/] baseline offset)
-emacs -Q -l tests/elisp-rs-integration/31-interactive-scale-baseline.el
+# Scale + baseline tuning  (C-c =/- scale, C-c [/] baseline offset)
+emacs -Q -l tests/manual/31-interactive-scale-baseline.el
+
+# Performance benchmarks (50/200/1000 fragments → perf-results.txt)
+emacs --batch -l tests/manual/41-generate-bench-files.el   # generator
+emacs -Q      -l tests/manual/40-batch-perf-benchmark.el
+
+# LaTeX visual / interactive
+emacs -Q -l tests/manual/62-latex-interactive-basic.el
+emacs -Q -l tests/manual/63-latex-interactive-arxiv.el
+emacs -Q -l tests/manual/65-latex-baseline-stress.el
 ```
 
 ### Rust-side visual comparison PDFs

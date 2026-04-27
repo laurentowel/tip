@@ -1,8 +1,0 @@
-# Local emacs sandbox (elpa cache + tree-sitter grammars).  Regenerated
-# on first scenario run; not worth tracking the multi-megabyte tree.
-emacs-sandbox/
-
-# Visual comparison output (SVGs from `cargo test --nocapture`, PDFs
-# from `typst compile`).  Regenerable from sources; not tracked.
-visual/*.svg
-visual/*.pdf

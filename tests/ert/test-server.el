@@ -16,23 +16,13 @@
 ;;; Code:
 
 (require 'ert)
-
-;; Walk up two dirs (test/elisp-rs-integration/ → test/ → repo root).
-(defconst tip-test--repo-root
-  (expand-file-name "../.." (file-name-directory load-file-name)))
-(add-to-list 'load-path tip-test--repo-root)
-(load (expand-file-name "tip.el" tip-test--repo-root))
-
-(defconst tip-test--server-binary
-  (expand-file-name "tip-server/target/debug/tip-server" tip-test--repo-root)
-  "Path to the debug-build tip-server binary used by the tests below.
-Built by `cargo build' from the repo root.  Tests `ert-skip' when
-this isn't an executable, so missing the build only deselects them.")
+(load (expand-file-name "../setup.el" (file-name-directory load-file-name)))
+(load (expand-file-name "tip.el" tip-test-lisp-dir))
 
 
 (ert-deftest tip-test-server-spawn-and-shutdown ()
   "Should spawn tip-server, communicate, and shut down cleanly."
-  (let* ((tip-server-executable tip-test--server-binary)
+  (let* ((tip-server-executable tip-test-server-binary)
          (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
@@ -82,7 +72,7 @@ this isn't an executable, so missing the build only deselects them.")
 
 (ert-deftest tip-test-protocol-version-handshake-match ()
   "Init with the actual `tip-protocol-version' should report no mismatch."
-  (let* ((tip-server-executable tip-test--server-binary)
+  (let* ((tip-server-executable tip-test-server-binary)
          (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
@@ -116,7 +106,7 @@ this isn't an executable, so missing the build only deselects them.")
 (ert-deftest tip-test-protocol-version-handshake-mismatch ()
   "Init with a fake client_version should come back with a non-empty
 `version_mismatch' field naming both sides."
-  (let* ((tip-server-executable tip-test--server-binary)
+  (let* ((tip-server-executable tip-test-server-binary)
          (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
