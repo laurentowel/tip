@@ -7,10 +7,25 @@ edition = "2021"
 name = "tip-server"
 path = "src/main.rs"
 
+# Backends are feature-gated.  Default = all three compiled in (the
+# binary that ships in releases / CI / Nix).  Slim builds:
+#
+#   cargo build --no-default-features --features typst   # Typst-only
+#   cargo build --no-default-features --features latex   # LaTeX-only
+#   cargo build --no-default-features --features "typst latex"
+#
+# Disabled backends respond `error: backend not compiled in` to
+# any sync/compile/etc. request — see handler.rs.
+[features]
+default = ["typst", "latex", "katex"]
+typst = ["dep:tip-core-typst"]
+latex = ["dep:tip-core-latex"]
+katex = ["dep:tip-core-katex"]
+
 [dependencies]
-tip-core-typst = { path = "../tip-core-typst" }
-tip-core-latex = { path = "../tip-core-latex" }
-tip-core-katex = { path = "../tip-core-katex" }
+tip-core-typst = { path = "../tip-core-typst", optional = true }
+tip-core-latex = { path = "../tip-core-latex", optional = true }
+tip-core-katex = { path = "../tip-core-katex", optional = true }
 tip-protocol = { path = "../tip-protocol" }
 serde_json = "1"
 which = "6"

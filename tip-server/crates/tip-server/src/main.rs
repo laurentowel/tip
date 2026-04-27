@@ -1,7 +1,11 @@
 mod diagnostics;
 mod handler;
+
+#[cfg(feature = "katex")]
 mod katex_backend;
+#[cfg(feature = "latex")]
 mod latex_backend;
+#[cfg(feature = "typst")]
 mod typst_backend;
 
 use std::io::{self, BufReader};

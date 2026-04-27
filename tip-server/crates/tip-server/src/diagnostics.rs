@@ -9,19 +9,28 @@
 
 use std::process::Command;
 
-use tip_protocol::messages::{BinaryProbe, HealthReport, LatexHealth, TypstHealth};
+use tip_protocol::messages::{BinaryProbe, HealthReport, LatexHealth};
+#[cfg(feature = "typst")]
+use tip_protocol::messages::TypstHealth;
 
+#[cfg(feature = "typst")]
 use crate::typst_backend::TypstBackend;
 
 /// Collect a full diagnostic report.  Cheap enough (a few short
 /// subprocess calls) to run synchronously in the request handler.
-pub fn collect_report(typst: &TypstBackend) -> HealthReport {
+///
+/// `typst_input` carries a reference to the Typst backend so the
+/// report can include `fonts_found`; it's `Option<&()>` (always
+/// `None`) when the typst feature is disabled, in which case the
+/// `typst` field of the report comes back as `None`.
+#[cfg(feature = "typst")]
+pub fn collect_report(typst_input: Option<&TypstBackend>) -> HealthReport {
     let mut warnings = Vec::new();
     let latex = probe_latex_deps(&mut warnings);
-    let typst_health = Some(TypstHealth {
+    let typst_health = typst_input.map(|t| TypstHealth {
         ok: true,
         typst_version: typst_crate_version(),
-        fonts_found: typst.fonts_found(),
+        fonts_found: t.fonts_found(),
     });
     HealthReport {
         server_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -29,6 +38,22 @@ pub fn collect_report(typst: &TypstBackend) -> HealthReport {
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         typst: typst_health,
+        latex: Some(latex),
+        warnings,
+    }
+}
+
+/// `--no-default-features --features=latex` build path: no typst.
+#[cfg(not(feature = "typst"))]
+pub fn collect_report(_typst_input: Option<&()>) -> HealthReport {
+    let mut warnings = Vec::new();
+    let latex = probe_latex_deps(&mut warnings);
+    HealthReport {
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
+        target_triple: target_triple().to_string(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        typst: None,
         latex: Some(latex),
         warnings,
     }
@@ -190,6 +215,7 @@ fn version_at_least(found: &str, min: &str) -> bool {
     true
 }
 
+#[cfg(feature = "typst")]
 fn typst_crate_version() -> String {
     // Hardcoded because typst doesn't expose CARGO_PKG_VERSION via its public API
     // and we don't want to parse Cargo.lock at runtime.  Keep in sync with the
