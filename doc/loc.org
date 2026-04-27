@@ -69,13 +69,97 @@ maintained.  The recent split of top-down into
 =top_down/{mod,flatten,extract,tests}.rs= shows up here as the four
 files lower in the list.
 
-** Tests vs production (rust)
+** Tests vs production
 
-Per-file inspection shows roughly =4500/3800= production-vs-test
-inside =tip-core-typst= alone (=top_down/tests.rs= = 1405,
-=bottom_up.rs= contains its own inline test mod, fixtures contribute
-~1000 more).  Project-wide ratio is ~50/50 — tests are a first-class
-artifact.
+Counting raw lines (=wc -l=, includes blanks + comments) so the
+arithmetic stays trivial.  Test code lives in three different places
+in Rust, all of which the build system gates behind =cfg(test)=:
+
+1. *Integration tests* — every file under =crates/*/tests/=,
+   compiled as separate test binaries.
+2. *Inline =mod tests {}= blocks* — bodies inside production =.rs=
+   files, run alongside =cargo test=.
+3. *Sibling test files* — like =top_down/tests.rs=, declared in the
+   parent =mod.rs= as =#[cfg(test)] mod tests;= so the file only
+   compiles in test mode.  Conceptually identical to option 2 but
+   sized to deserve its own file.
+
+Plus =testkit/= — shared test infrastructure (process harness,
+assertions), only depended on as a dev-dependency.
+
+| Bucket                                       | Lines | Share |
+|----------------------------------------------+-------+-------|
+| Production                                   |  5130 |   48% |
+| Integration tests (=tests/=)                 |  2551 |   24% |
+| Sibling test files (=top_down/tests.rs=)     |  1741 |   16% |
+| Inline =mod tests {}= bodies                 |  1193 |   11% |
+| testkit                                      |   164 |    2% |
+|----------------------------------------------+-------+-------|
+| Total                                        | 10779 |  100% |
+
+Test-share = *52%*.
+
+** Tests broken down by crate
+
+| Crate            | Production | Inline | Sibling | =tests/= |
+|------------------+------------+--------+---------+----------|
+| =tip-core-typst= |       2159 |    245 |    1741 |     2332 |
+| =tip-core-latex= |       1259 |    343 |       — |        — |
+| =tip-server=     |       1142 |    286 |       — |      219 |
+| =tip-protocol=   |        477 |    270 |       — |        — |
+| =tip-core-katex= |         93 |     49 |       — |        — |
+
+A few observations:
+
+- =tip-core-typst= is the test-heavy crate.  The 1741-line
+  =top_down/tests.rs= is the biggest single test artifact; its
+  fragment-extraction soak suite covers nested towers, hidden bases,
+  font-size tracking, the synth-vs-top-down agreement sweep, etc.
+  Plus a 2332-line integration suite covering scope skeletons,
+  imports, fonts, baseline measurement, and visual checks.
+- =tip-core-latex= has zero integration tests today.  Its 343 inline
+  lines exercise the project graph and the preview-snippet emitter;
+  multi-file integration (tarball-style fixtures) is a known gap.
+- =tip-server= has only one integration test (=e2e_tests.rs=,
+  219 lines) — the actual server round-trip.  Per-backend handlers
+  carry their own inline tests.
+- =tip-protocol= is *56% test* (270/(270+477)) — small surface, but
+  every wire-shape needs a serde round-trip test, and they live
+  inline next to each =struct=.
+
+** Inline =mod tests {}= sizes per file
+
+| File                       | Inline | Total | Inline / Total |
+|----------------------------+--------+-------+----------------|
+| =bottom_up.rs=             |    221 |   738 |            30% |
+| =compiler.rs= (latex)      |    182 |   985 |            18% |
+| =project.rs= (latex)       |    161 |   579 |            28% |
+| =typst_backend.rs=         |    125 |   403 |            31% |
+| =messages.rs=              |    121 |   460 |            26% |
+| =transport.rs=             |     88 |   122 |            72% |
+| =katex_backend.rs=         |     65 |   242 |            27% |
+| =latex_backend.rs=         |     63 |   428 |            15% |
+| =svg_color.rs=             |     62 |   162 |            38% |
+| =katex/lib.rs=             |     49 |   142 |            34% |
+| =diagnostics.rs=           |     33 |   238 |            14% |
+| =typst/document.rs=        |     24 |    54 |            44% |
+
+=transport.rs= leads the per-file inline-test ratio (72%) — the
+serde wire layer's correctness is mostly testable as round-trips,
+so that's healthy.  =diagnostics.rs= has the lowest (14%): probing
+external binaries is hard to unit-test; coverage relies on
+=health_check= integration in =e2e_tests.rs=.
+
+** Per-crate ranking by total Rust footprint
+
+| Crate            | Total | Production | Tests |
+|------------------+-------+------------+-------|
+| =tip-core-typst= |  6477 |       2159 |  4318 |
+| =tip-core-latex= |  1602 |       1259 |   343 |
+| =tip-server=     |  1647 |       1142 |   505 |
+| =tip-protocol=   |   747 |        477 |   270 |
+| =tip-core-katex= |   142 |         93 |    49 |
+| =testkit=        |   164 |          0 |   164 |
 
 * Emacs Lisp (9.6 k code lines)
 
