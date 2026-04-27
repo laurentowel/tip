@@ -212,7 +212,7 @@ the echo area; `error' additionally raises `display-warning'."
                    :backend (tip-log--current-backend))))
       (tip-log--push entry)
       (when (tip-log--passes-p level tip-log-echo-level)
-        (message "tip[%s/%s]: %s" level category msg))
+        (tip-log--echo level category msg))
       (when (eq level 'error)
         (display-warning 'tip msg :warning)))))
 
@@ -232,9 +232,23 @@ the echo area; `error' additionally raises `display-warning'."
                    :backend (tip-log--current-backend))))
       (tip-log--push entry)
       (when (tip-log--passes-p level tip-log-echo-level)
-        (message "tip[%s/%s]: %s" level category msg))
+        (tip-log--echo level category msg))
       (when (eq level 'error)
         (display-warning 'tip msg :warning)))))
+
+(defun tip-log--echo (level category msg)
+  "Mirror an entry to the echo area with severity-colored prefix.
+The `tip[level/category]:' prefix picks up the level face
+(error → red, warning → amber, info → default, debug → shadow);
+MSG inherits the same face so a long compile error reads as a
+single colored chunk in *Messages* and is easy to skim."
+  (let* ((face (tip-log--face-for level))
+         (prefix (propertize (format "tip[%s/%s]:" level category)
+                             'face face))
+         (body (propertize msg 'face face)))
+    ;; `(message "%s" propertized)' preserves text properties — the
+    ;; echo area honors `face' and `*Messages*' picks up the same.
+    (message "%s %s" prefix body)))
 
 ;;; * protocol scrubbing
 
