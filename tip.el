@@ -245,6 +245,21 @@ Buffer-local."
   :local t)
 
 
+;;; * misc helpers
+
+(defun tip--format-elapsed (seconds)
+  "Format SECONDS as a compact duration string for log messages.
+< 1 ms  → \"<1ms\"   ; sub-millisecond, treat as instantaneous
+< 1 s   → \"NNNms\"  ; integer milliseconds
+< 60 s  → \"N.NNs\"  ; seconds with two decimals
+≥ 60 s  → \"MM:SS\"  ; minutes/seconds (rare path)"
+  (cond
+   ((< seconds 0.001) "<1ms")
+   ((< seconds 1.0)   (format "%dms" (round (* seconds 1000))))
+   ((< seconds 60.0)  (format "%.2fs" seconds))
+   (t (format "%d:%02d" (floor (/ seconds 60.0))
+              (round (mod seconds 60))))))
+
 ;;; * preamble (theme sync)
 
 (defun tip--color-to-hex (color)
@@ -309,7 +324,11 @@ Buffer-local."
       (let ((params `(("uri" . ,(tip--current-uri))
                       ("fragments" . ,(vconcat misses))
                       ("color" . ,fg)
-                      ("preamble" . ,preamble))))
+                      ("preamble" . ,preamble)))
+            ;; Captured at send-time; subtracted from float-time when
+            ;; the response lands so the log line shows wall-clock
+            ;; latency of the round-trip + render.
+            (start (float-time)))
         (when display-width-em
           (setq params
                 (append params
@@ -330,12 +349,15 @@ Buffer-local."
                       (errors (and frags
                                    (cl-count-if
                                     (lambda (f) (alist-get 'error f))
-                                    (append frags nil)))))
+                                    (append frags nil))))
+                      (elapsed (- (float-time) start)))
                  (tip--apply-fragment-results frags)
                  (tip--flymake-refresh)
                  (tip-log 'info 'render
-                          "%d/%d rendered (%d cached, %d error%s)"
-                          (+ cache-hits got) n cache-hits
+                          "%d/%d rendered in %s (%d cached, %d error%s)"
+                          (+ cache-hits got) n
+                          (tip--format-elapsed elapsed)
+                          cache-hits
                           (or errors 0)
                           (if (= (or errors 0) 1) "" "s"))))))))))
     n))
