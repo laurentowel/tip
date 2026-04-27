@@ -318,9 +318,8 @@ scrubbed summary so the table stays readable and recording stays cheap."
   "Buffer-local: only show entries with this category (nil = all).")
 
 (defvar tip-log--filter-file nil
-  "Buffer-local: only show entries whose `file' equals this string (nil = all).
-Compared as full paths.  Use `tip-log-filter-file-basename' to filter
-by basename instead.")
+  "Buffer-local: only show entries whose `file' equals this full path
+(nil = all).")
 
 (defvar tip-log--filter-backend nil
   "Buffer-local: only show entries with this backend symbol (nil = all).")
@@ -340,9 +339,7 @@ by basename instead.")
             (or (null cat) (eq (tip-log-entry-category e) cat))
             (or (null file)
                 (let ((ef (tip-log-entry-file e)))
-                  (and ef (or (string= ef file)
-                              (string= (file-name-nondirectory ef)
-                                       file)))))
+                  (and ef (string= ef file))))
             (or (null backend)
                 (let ((eb (tip-log-entry-backend e)))
                   ;; Tolerate string-form backends from older entries
@@ -563,19 +560,20 @@ silences the chatter again."
   (tip-log--refresh))
 
 (defun tip-log-filter-file (file)
-  "Show only entries whose `file' equals FILE (full path or basename).
-With prefix arg, clear the filter."
+  "Show only entries whose `file' equals FILE.
+Candidates are the full paths of file-associated entries already in
+the log; minibuffer completion (e.g. ido / vertico / fido) handles
+substring / basename matching.  With prefix arg, clear the filter."
   (interactive
    (list (if current-prefix-arg
              nil
            (completing-read
-            "File (path or basename): "
+            "File: "
             (delete-dups
              (cl-loop for e in tip-log--entries
                       for f = (tip-log-entry-file e)
-                      when f
-                      append (list f (file-name-nondirectory f))))
-            nil nil))))
+                      when f collect f))
+            nil t))))
   (setq-local tip-log--filter-file
               (and file (not (string-empty-p file)) file))
   (tip-log--refresh))

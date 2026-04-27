@@ -495,11 +495,21 @@ diagnostic is echoed and later errors get minimal visual weight."
         ;; DID render correctly, the warning is informational.  Those
         ;; fall through to the success path and attach a `⚑' hint
         ;; via a secondary overlay below.
+        ;; Log every compile failure (errors AND warnings) at the
+        ;; matching tip-log severity, with the full message in the
+        ;; entry's detail slot so RET in *tip-log* shows the
+        ;; multi-line context.  Done OUTSIDE the error-only branch
+        ;; below so warnings also reach the log — the inline overlay
+        ;; for warnings still flows through the success path.
+        (when (and frag-beg frag-end (or err err-detail))
+          (tip-log-with-detail
+           (if (eq err-severity 'warning) 'warning 'error)
+           'compile
+           (or err-full "")
+           "%s"
+           (or err-message err "compile failed")))
         (when (and frag-beg frag-end (or err err-detail)
                    (not (eq err-severity 'warning)))
-          (tip-log 'warning 'compile "[%s] %s"
-                   (or err-severity "error")
-                   (or err-message err "compile failed"))
           (dolist (ov (overlays-in frag-beg frag-end))
             (when (eq (overlay-get ov 'tip) 'tip)
               (delete-overlay ov)))
