@@ -16,7 +16,7 @@
 
 (defun corpus--dir ()
   (expand-file-name ".ref/arxiv-samples"
-                    (expand-file-name "../" (file-name-directory (or load-file-name ".")))))
+                    (expand-file-name "../../" (file-name-directory (or load-file-name ".")))))
 
 (defun corpus--tex-files ()
   (let ((d (corpus--dir)))

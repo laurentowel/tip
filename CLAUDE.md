@@ -12,7 +12,8 @@ tip-improve/
 │   ├── tip.el              # Main package file
 │   ├── preview-toggle.el   # Generic overlay auto-toggle framework (reusable)
 │   ├── PREVIEW-TOGGLE.md   # Flow diagrams and API docs for preview-toggle
-│   ├── test-tip.el         # ERT unit tests (emacs --batch -l test-tip.el)
+│   ├── test/elisp-client/  # ERT unit tests (no server needed)
+│   ├── test/elisp-rs-integration/ # ERT tests that spawn tip-server
 │   └── tests/              # Integration & visual tests
 │       ├── emacs-sandbox/      # Cached tree-sitter grammar + typst-ts-mode
 │       ├── visual/             # Generated SVGs + comparison PDFs
@@ -220,51 +221,53 @@ Always check the published API, not the cloned source.
 cd tip-server
 cargo test
 
-# Emacs unit (11 tests: byte-compile, image spec, server round-trip, overlays)
-cd /workspace/tip-improve
-emacs --batch -l tip/test-tip.el
+# Emacs pure-elisp unit (62 tests: byte-compile, image spec, overlays, ...)
+emacs --batch -l test/elisp-client/test-tip.el
+emacs --batch -l test/elisp-client/test-tip-markdown.el
+emacs --batch -l test/elisp-client/test-tip-latex-treesit.el
+
+# Emacs ↔ tip-server integration (3 tests: round-trip, version handshake)
+emacs --batch -l test/elisp-rs-integration/test-server.el
 ```
 
 ### Tier 2: Automated GUI (auto-exit, check exit code or results file)
 
-All need `--init-directory` for typst-ts-mode + tree-sitter grammar cache.
+Live under `tests/integrationtests/`.  Numeric prefixes order them
+roughly by category (00–19 typst overlays, 20–49 perf, 60+ latex).
 
 ```bash
-# Overlay open/close cycle (4 scenarios: enter, leave, switch fragments)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-open-close.el
+# Overlay open/close cycle (typst, all fragment types)
+emacs -Q -l tests/integrationtests/07-multiline-open-close.el
 
-# C-b backward into rendered overlay (2 scenarios)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-c-b-into-overlay.el
+# Yasnippet-style edit cycle (type $$, C-b, type math, C-f)
+emacs -Q -l tests/integrationtests/10-yasnippet-edit-cycle.el
 
-# Edit-then-leave recompile (yasnippet-style: type $$, C-b, type math, C-f)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-on-the-fly.el
+# Rapid movement stress (random jumps + char walk; leak check)
+emacs -Q -l tests/integrationtests/11-rapid-cursor-movement.el
 
-# Full edit lifecycle (create 2 eqs, re-enter, edit, x5 rapid)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-edit-cycle.el
+# Strenuous stress (20 eqs, syntax errors, multi-line display, deletes)
+emacs -Q -l tests/integrationtests/12-stress-create-edit-delete.el
 
-# Rapid movement stress (100 random jumps, 535 char-by-char walk, leak check)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-rapid-movement.el
+# Performance benchmarks (50/200/1000 fragments → results file)
+emacs -Q -l tests/integrationtests/40-batch-perf-benchmark.el
+emacs --batch -l tests/integrationtests/41-generate-bench-files.el  # generator
 
-# Strenuous stress (20 eqs, empty math, syntax errors, multi-line display,
-#   50 random jumps, edit 5 random eqs, delete half, rapid x15)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-stress-edit.el
-
-# Performance benchmarks (50/200/1000 fragments → perf-results.txt)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/perf-test.el
+# LaTeX backend tests
+emacs --batch -l tests/integrationtests/60-latex-arxiv-corpus.el
+emacs -Q       -l tests/integrationtests/61-latex-live-render.el
+emacs -Q       -l tests/integrationtests/62-latex-interactive-basic.el
+emacs -Q       -l tests/integrationtests/63-latex-interactive-arxiv.el
+emacs -Q       -l tests/integrationtests/65-latex-baseline-stress.el
 ```
 
 ### Tier 3: Interactive visual (stays open, human checks)
 
 ```bash
-# Visual test with baseline_stress.typ (check baseline alignment, clipping)
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/visual-test.el
+# Visual sanity check with baseline_stress.typ
+emacs -Q -l tests/integrationtests/30-interactive-visual.el
 
-# Interactive scale/baseline tuning
-# C-c =/- scale, C-c [/] baseline offset, C-c 0 report, C-c s exact
-emacs -Q --init-directory tip/tests/emacs-sandbox -l tip/tests/test-scale-slider.el
-
-# Ascent property verification (does Emacs :ascent shift images?)
-emacs -Q -l tip/tests/test-ascent-debug.el
+# Scale + baseline tuning (C-c =/- scale, C-c [/] baseline offset)
+emacs -Q -l tests/integrationtests/31-interactive-scale-baseline.el
 ```
 
 ### Rust-side visual comparison PDFs

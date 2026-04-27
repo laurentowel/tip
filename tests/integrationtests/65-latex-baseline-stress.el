@@ -20,10 +20,10 @@
       auto-save-default nil)
 
 (let ((base (file-name-directory (or load-file-name "."))))
-  (add-to-list 'load-path (expand-file-name ".." base))
-  (load (expand-file-name "../tip.el" base))
+  (add-to-list 'load-path (expand-file-name "../.." base))
+  (load (expand-file-name "../../tip.el" base))
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server" base))
+        (expand-file-name "../../tip-server/target/release/tip-server" base))
   (add-hook 'latex-mode-hook #'tip-mode)
   (find-file (expand-file-name "fixtures/latex_baseline_stress.tex" base)))
 

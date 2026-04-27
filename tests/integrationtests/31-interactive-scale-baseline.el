@@ -17,16 +17,16 @@
 
 (let ((base (file-name-directory load-file-name)))
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server" base))
-  (add-to-list 'load-path (expand-file-name ".." base))
-  (load (expand-file-name "../tip.el" base)))
+        (expand-file-name "../../tip-server/target/release/tip-server" base))
+  (add-to-list 'load-path (expand-file-name "../.." base))
+  (load (expand-file-name "../../tip.el" base)))
 
 (setq tip-enable-debug nil)
 
 ;; Open baseline test file
 (let ((base (file-name-directory load-file-name)))
   (find-file (expand-file-name
-              "../tip-server/crates/tip-core-typst/tests/fixtures/baseline_stress.typ"
+              "../../tip-server/crates/tip-core-typst/tests/fixtures/baseline_stress.typ"
               base)))
 (typst-ts-mode)
 (tip-mode 1)

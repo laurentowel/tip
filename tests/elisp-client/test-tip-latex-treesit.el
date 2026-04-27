@@ -12,8 +12,10 @@
 ;;; Code:
 
 (require 'ert)
-(add-to-list 'load-path (file-name-directory
-                         (or load-file-name buffer-file-name)))
+(add-to-list 'load-path
+             (expand-file-name "../.."
+                               (file-name-directory
+                                (or load-file-name buffer-file-name))))
 (require 'tip-latex)
 (require 'tip-latex-parse-treesit)
 

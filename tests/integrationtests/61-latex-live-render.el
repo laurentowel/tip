@@ -13,8 +13,8 @@
 ;;; Code:
 
 (let ((base (file-name-directory (or load-file-name "."))))
-  (add-to-list 'load-path (expand-file-name ".." base))
-  (load (expand-file-name "../tip.el" base) nil t))
+  (add-to-list 'load-path (expand-file-name "../.." base))
+  (load (expand-file-name "../../tip.el" base) nil t))
 
 (setq tip-enable-debug nil)
 
@@ -30,7 +30,7 @@
 (defun server-binary-p ()
   (let ((base (file-name-directory (or load-file-name "."))))
     (file-executable-p
-     (expand-file-name "../tip-server/target/release/tip-server" base))))
+     (expand-file-name "../../tip-server/target/release/tip-server" base))))
 
 (unless (tools-available-p)
   (message "SKIP: latex or dvisvgm not on PATH")
@@ -43,7 +43,7 @@
 ;; Point the backend at the built binary explicitly.
 (let ((base (file-name-directory (or load-file-name "."))))
   (setq tip-server-executable
-        (expand-file-name "../tip-server/target/release/tip-server" base)))
+        (expand-file-name "../../tip-server/target/release/tip-server" base)))
 
 (message "=== tip-latex end-to-end live test ===")
 
