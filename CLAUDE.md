@@ -205,38 +205,30 @@ Always check the published API, not the cloned source.
 
 ## Testing
 
-### Tier 1: Fully automated, headless (run on every change)
+Two umbrella entry points + one human-driven category.  Full setup +
+non-Nix instructions live in `tests/README.md`; the summary:
 
 ```bash
-# Rust (122 tests: protocol, core, e2e, baseline, scope, imports, fonts)
-cd tip-server
-cargo test
+# Everything that runs without a human (cargo + ERT + integration --headless).
+nix run .#test
 
-# Headless ERT (62 + 38 + 24 + 3 tests)
-emacs --batch -l tests/ert/test-tip.el
-emacs --batch -l tests/ert/test-tip-markdown.el
-emacs --batch -l tests/ert/test-tip-latex-treesit.el
-emacs --batch -l tests/ert/test-server.el        # spawns server; ert-skip if missing
+# Pick a manual probe interactively (lists files when called bare).
+nix run .#test-interactive
+nix run .#test-interactive -- 30-interactive-visual
+
+# Lower-level: drive each tier directly (covered in tests/README.md).
+(cd tip-server && cargo test)               # Rust (~150 tests)
+emacs --batch -l tests/ert/test-tip.el      # plus markdown / latex-treesit / server
+tests/integration/run.sh --headless         # daemon framework, 19 specs
+
+# Filter integration specs by substring:
+TIP_IT_TEST=multiline tests/integration/run.sh --headless
 ```
 
-### Tier 2: Daemon-driven scenario specs (auto-exit, real GUI)
-
-The framework lives under `tests/integration/` (long-lived emacs
-daemon, real overlays + treesit + typst-ts-mode + tree-sitter
-grammars).  19 specs covering both backends; `tip-test-deftest`
-registers each.  See `tests/README.md` for spec authoring.
-
-```bash
-tests/integration/run.sh                       # all specs, GUI window
-tests/integration/run.sh --headless            # CI mode (no visible frame)
-TIP_IT_TEST=multiline tests/integration/run.sh # filter by substring
-```
-
-### Tier 3: Interactive / perf — humans look at it
-
-Lives under `tests/manual/`.  Not part of CI; each file opens an
-emacs frame and either invites you to drive it (interactive) or
-reports numbers to a results file (perf).
+`tests/manual/` files (interactive scale tuning, batch perf
+benchmarks, latex visual stress) are humans-look-at-it and not
+part of CI — but `nix run .#test-interactive -- <name>` is the
+canonical way to launch one.
 
 ```bash
 # Interactive baseline-stress sanity
@@ -245,23 +237,14 @@ emacs -Q -l tests/manual/30-interactive-visual.el
 # Scale + baseline tuning  (C-c =/- scale, C-c [/] baseline offset)
 emacs -Q -l tests/manual/31-interactive-scale-baseline.el
 
-# Performance benchmarks (50/200/1000 fragments → perf-results.txt)
-emacs --batch -l tests/manual/41-generate-bench-files.el   # generator
-emacs -Q      -l tests/manual/40-batch-perf-benchmark.el
-
-# LaTeX visual / interactive
-emacs -Q -l tests/manual/62-latex-interactive-basic.el
-emacs -Q -l tests/manual/63-latex-interactive-arxiv.el
-emacs -Q -l tests/manual/65-latex-baseline-stress.el
-```
-
 ### Rust-side visual comparison PDFs
 
 ```bash
 cd tip-server
 cargo test -p tip-core-typst --test scope_check --test scope_insane --test scope_nesting \
   --test inline_vs_display --test three_imports_test --test baseline_test -- --nocapture
-cd tests/visual && typst compile --root /workspace/tip-improve/tip-server comparison_all.typ
+# Comparison .typ sources have been removed; if reviving the workflow,
+# add new comparison documents and consume the SVGs from test-output/.
 ```
 
 ## Performance

@@ -14,6 +14,69 @@ exports `tip-test-repo-root` / `tip-test-lisp-dir` /
 `tip-test-server-binary` so individual files don't have to recompute
 relative paths.
 
+## Running everything
+
+### With Nix (the easy path)
+
+```bash
+nix run .#test                        # cargo + ERT + integration --headless
+nix run .#test-interactive            # list manual probes; pass a name to launch
+nix run .#test-interactive -- 30-interactive-visual
+```
+
+`nix flake check` runs `cargo-test` + `emacs-batch-test` (ERT only — no
+server binary in the sandbox).  Use `nix run .#test` for the full
+matrix.
+
+### Without Nix (FHS distros: Arch, Ubuntu, Fedora, Debian, …)
+
+You'll need:
+
+| Tool                       | Used by             | Install hint (Arch / Debian)                              |
+|----------------------------|---------------------|-----------------------------------------------------------|
+| Rust toolchain (1.77+)     | cargo / build       | `pacman -S rust` / `apt install cargo rustc`              |
+| Emacs 28+                  | every elisp test    | `pacman -S emacs` / `apt install emacs`                   |
+| LaTeX + dvisvgm            | latex specs         | `pacman -S texlive-most` / `apt install texlive-full dvisvgm` |
+| `typst-ts-mode`            | typst specs         | install from melpa or fetch from codeberg.org/meow_king/typst-ts-mode |
+| tree-sitter grammars       | typst / latex / md  | put `libtree-sitter-{typst,latex,markdown}.so` somewhere on `treesit-extra-load-path`; `M-x treesit-install-language-grammar` is the easiest way |
+
+Build once, then run:
+
+```bash
+# Build the server (debug build is enough for the tests).
+cd tip-server && cargo build && cd ..
+
+# 1. Rust unit + integration tests (cargo).
+(cd tip-server && cargo test --workspace)
+
+# 2. Headless ERT.
+for f in tests/ert/*.el; do
+  echo "=== $f ==="
+  emacs --batch -l "$f"
+done
+
+# 3. Daemon-driven integration specs.
+#    --headless skips the visible frame (CI mode).
+tests/integration/run.sh --headless
+
+# 4. (Optional) interactive / perf probes — humans drive these.
+emacs -Q -l tests/manual/30-interactive-visual.el
+```
+
+If `tests/integration/run.sh` complains that `tip-test-daemon-run`
+never finished, the most common causes are: tip-server binary
+missing from `$PATH` (point at `tip-server/target/debug/tip-server`),
+or one of the tree-sitter grammars missing — set `TIP_IT_GRAMMAR_PATH`
+/ `TIP_IT_MARKDOWN_GRAMMAR_PATH` / `TIP_IT_LATEX_GRAMMAR_PATH` to
+directories containing `libtree-sitter-LANG.so`.
+
+Filter specs by substring:
+
+```bash
+TIP_IT_TEST=multiline tests/integration/run.sh --headless
+TIP_IT_TEST=katex     tests/integration/run.sh --headless
+```
+
 ## ert/  — headless ERT
 
 Plain ERT tests that run under `emacs --batch`.  Pure-elisp parsers,
