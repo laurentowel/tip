@@ -350,6 +350,8 @@ by basename instead.")
     (define-key map (kbd "F") #'tip-log-clear-filters)
     (define-key map (kbd "k") #'tip-log-clear)
     (define-key map (kbd "RET") #'tip-log-show-detail)
+    (define-key map (kbd "e") #'tip-log-cycle-echo-level)
+    (define-key map (kbd "m") #'tip-log-cycle-min-level)
     map)
   "Keymap for `tip-log-mode'.")
 
@@ -387,7 +389,10 @@ Bindings:
 (defun tip-log--update-header-line ()
   (setq header-line-format
         (concat
-         (format " %d entries" (length tip-log--entries))
+         (format " %d entries · rec≥%s · echo≥%s"
+                 (length tip-log--entries)
+                 tip-log-min-level
+                 tip-log-echo-level)
          (when tip-log--filter-level
            (format " | level≥%s" tip-log--filter-level))
          (when tip-log--filter-category
@@ -396,13 +401,15 @@ Bindings:
            (format " | be=%s" tip-log--filter-backend))
          (when tip-log--filter-file
            (format " | file=%s" tip-log--filter-file))
-         (format "  | %s lvl %s cat %s be %s file %s clr %s clr-flt %s detail"
+         (format "  | %s lvl %s cat %s be %s file %s clr %s clr-flt %s rec %s echo %s detail"
                  (propertize "L" 'face 'help-key-binding)
                  (propertize "C" 'face 'help-key-binding)
                  (propertize "B" 'face 'help-key-binding)
                  (propertize "f" 'face 'help-key-binding)
                  (propertize "k" 'face 'help-key-binding)
                  (propertize "F" 'face 'help-key-binding)
+                 (propertize "m" 'face 'help-key-binding)
+                 (propertize "e" 'face 'help-key-binding)
                  (propertize "RET" 'face 'help-key-binding)))))
 
 (defun tip-log--refresh-buffer-if-visible ()
@@ -414,6 +421,56 @@ visible log live without paying the cost when it's hidden."
         (tip-log--refresh)))))
 
 ;;; * commands
+
+(defconst tip-log--levels '(debug info warning error)
+  "Severity levels in ascending order.  Used by the cycle commands.")
+
+(defun tip-log--cycle-next (level)
+  "Return the next level after LEVEL, wrapping around."
+  (let* ((rest (cdr (memq level tip-log--levels))))
+    (or (car rest) (car tip-log--levels))))
+
+;;;###autoload
+(defun tip-log-set-echo-level (level)
+  "Set `tip-log-echo-level' to LEVEL interactively.
+LEVEL is one of `debug', `info', `warning', or `error'."
+  (interactive
+   (list (intern (completing-read
+                  (format "Echo level (currently %s): " tip-log-echo-level)
+                  '("debug" "info" "warning" "error") nil t))))
+  (setq tip-log-echo-level level)
+  (message "tip-log echo level: %s" level))
+
+;;;###autoload
+(defun tip-log-set-min-level (level)
+  "Set `tip-log-min-level' to LEVEL interactively.
+LEVEL is one of `debug', `info', `warning', or `error'.  Entries
+below this severity are dropped at the source — changing this
+won't surface earlier entries, but it caps the cost going forward."
+  (interactive
+   (list (intern (completing-read
+                  (format "Min recording level (currently %s): " tip-log-min-level)
+                  '("debug" "info" "warning" "error") nil t))))
+  (setq tip-log-min-level level)
+  (message "tip-log min recording level: %s" level))
+
+;;;###autoload
+(defun tip-log-cycle-echo-level ()
+  "Cycle `tip-log-echo-level' through debug → info → warning → error → debug.
+Convenient bind for a quickly-accessible toggle."
+  (interactive)
+  (setq tip-log-echo-level (tip-log--cycle-next tip-log-echo-level))
+  (message "tip-log echo level: %s" tip-log-echo-level))
+
+;;;###autoload
+(defun tip-log-cycle-min-level ()
+  "Cycle `tip-log-min-level' through the four severity levels.
+Bumping it to `debug' is the quickest way to start collecting
+protocol traces in *tip-log*; bumping back to `info' or higher
+silences the chatter again."
+  (interactive)
+  (setq tip-log-min-level (tip-log--cycle-next tip-log-min-level))
+  (message "tip-log min recording level: %s" tip-log-min-level))
 
 ;;;###autoload
 (defun tip-show-log ()
