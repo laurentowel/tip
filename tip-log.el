@@ -237,18 +237,21 @@ the echo area; `error' additionally raises `display-warning'."
         (display-warning 'tip msg :warning)))))
 
 (defun tip-log--echo (level category msg)
-  "Mirror an entry to the echo area with severity-colored prefix.
-The `tip[level/category]:' prefix picks up the level face
-(error → red, warning → amber, info → default, debug → shadow);
-MSG inherits the same face so a long compile error reads as a
-single colored chunk in *Messages* and is easy to skim."
-  (let* ((face (tip-log--face-for level))
-         (prefix (propertize (format "tip[%s/%s]:" level category)
-                             'face face))
-         (body (propertize msg 'face face)))
-    ;; `(message "%s" propertized)' preserves text properties — the
-    ;; echo area honors `face' and `*Messages*' picks up the same.
-    (message "%s %s" prefix body)))
+  "Mirror an entry to the echo area, painted to match *tip-log*'s
+columns: severity face on the level word + body, category face on
+the category word, `shadow' on the bracket / slash punctuation so
+the colored bits pop instead of reading as one monochromatic
+chunk."
+  (let ((sev-face (tip-log--face-for level))
+        (cat-face 'font-lock-type-face)
+        (sep-face 'shadow))
+    (message "%s%s%s%s%s %s"
+             (propertize "tip[" 'face sep-face)
+             (propertize (symbol-name level)    'face sev-face)
+             (propertize "/"   'face sep-face)
+             (propertize (symbol-name category) 'face cat-face)
+             (propertize "]:"  'face sep-face)
+             (propertize msg   'face sev-face))))
 
 ;;; * protocol scrubbing
 
