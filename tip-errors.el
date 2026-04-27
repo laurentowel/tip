@@ -309,10 +309,15 @@ eldoc providers (flymake, etc.) to contribute."
                    ((zerop others) " (near)")
                    (t (format " (near, +%d more)" others)))))
         (when (and msg sev)
+          ;; `:thing' becomes the eldoc label prefix in the echo area
+          ;; (e.g. `tip-error: ...').  Encoding severity into it lets
+          ;; the line stay concise without losing that signal — the
+          ;; previous `TIP [%s]:' inside the message was redundant
+          ;; once eldoc gained the labeled-things UI.
           (funcall callback
-                   (propertize (format "TIP [%s]%s: %s" sev tag msg)
+                   (propertize (format "%s%s" msg tag)
                                'face (overlay-get ov 'face))
-                   :thing 'tip-error
+                   :thing (intern (format "tip-%s" sev))
                    :face (overlay-get ov 'face)))))))
 
 ;;; * Flymake backend

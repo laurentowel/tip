@@ -600,13 +600,19 @@ files; collection no longer refuses on it."
     (insert "aaaaa bbbbb ccccc")
     (tip-test--mk-error-overlay 7 12 'error "Undefined control sequence" "$\\foo")
     ;; Inside overlay → callback receives the message, no `(near)' tag.
+    ;; Severity rides on the eldoc `:thing' label (rendered as
+    ;; `tip-error:' / `tip-warning:' prefix in the echo area), not
+    ;; embedded in the message text.
     (goto-char 9)
-    (let (captured)
-      (tip--eldoc-error (lambda (msg &rest _) (setq captured msg)))
+    (let (captured thing)
+      (tip--eldoc-error
+       (lambda (msg &rest props)
+         (setq captured msg
+               thing (plist-get props :thing))))
       (should captured)
       (should (string-match-p "Undefined control sequence" captured))
-      (should (string-match-p "\\[error\\]" captured))
-      (should-not (string-match-p "(near)" captured)))))
+      (should-not (string-match-p "(near)" captured))
+      (should (eq thing 'tip-error)))))
 
 (ert-deftest tip-test-eldoc-proximity-same-line ()
   "With default `tip-error-eldoc-proximity' = `same-line', cursor
