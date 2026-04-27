@@ -150,9 +150,16 @@ collapse that to nil)."
              (and (stringp u) (not (string-empty-p u)) u)))))
 
 (defun tip-log--current-backend ()
-  "Best-effort backend id for the entry being logged."
-  (and (fboundp 'tip--current-backend-id)
-       (tip--current-backend-id)))
+  "Best-effort backend id for the entry being logged.  Returns a
+symbol — `tip--current-backend-id' returns a string for the wire
+protocol, but tip-log uses symbols throughout (filter dispatch,
+`symbol-name' in the table view), so we coerce here."
+  (when (fboundp 'tip--current-backend-id)
+    (let ((id (tip--current-backend-id)))
+      (cond
+       ((symbolp id) id)
+       ((stringp id) (intern id))
+       (t nil)))))
 
 (defvar tip-log--entries nil
   "All log entries, newest LAST.  A list (not a true ring) trimmed
@@ -307,7 +314,14 @@ by basename instead.")
                   (and ef (or (string= ef file)
                               (string= (file-name-nondirectory ef)
                                        file)))))
-            (or (null backend) (eq (tip-log-entry-backend e) backend))))
+            (or (null backend)
+                (let ((eb (tip-log-entry-backend e)))
+                  ;; Tolerate string-form backends from older entries
+                  ;; that pre-date symbol coercion in
+                  ;; `tip-log--current-backend'.
+                  (or (eq eb backend)
+                      (and (stringp eb)
+                           (string= eb (symbol-name backend))))))))
      tip-log--entries)))
 
 (defun tip-log--tabulated-entries ()
@@ -320,7 +334,9 @@ by basename instead.")
              (file (tip-log-entry-file e))
              (file-cell (if file (file-name-nondirectory file) ""))
              (backend (tip-log-entry-backend e))
-             (backend-cell (if backend (symbol-name backend) "")))
+             (backend-cell (cond ((null backend) "")
+                                 ((symbolp backend) (symbol-name backend))
+                                 (t (format "%s" backend)))))
         (push
          (list i
                (vector
@@ -547,7 +563,9 @@ With prefix arg, clear the filter."
                     (delete-dups
                      (cl-loop for e in tip-log--entries
                               for b = (tip-log-entry-backend e)
-                              when b collect (symbol-name b)))
+                              when b
+                              collect (cond ((symbolp b) (symbol-name b))
+                                            (t (format "%s" b)))))
                     nil t)))))
   (setq-local tip-log--filter-backend backend)
   (tip-log--refresh))

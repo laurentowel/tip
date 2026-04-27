@@ -771,28 +771,38 @@ Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
 
 ;;; * stale overlay cleanup
 
-(defun tip--cleanup-stale-overlays (_beg _end _len)
-  "Remove invalidated tip overlays after an edit.
-Called from `after-change-functions'.  Two unconditional sweeps:
+(defun tip--cleanup-stale-overlays (beg end _len)
+  "Remove invalidated tip overlays after an edit between BEG and END.
+Called from `after-change-functions'.  Two cases:
+
 1. Zero-width overlays — deletion shrunk an overlay to a point.
-2. ALL error/warning overlays.  Their stored `tip-frag-beg'/`-end'
-   are static integers from when they were created and don't track
-   subsequent edits; the LaTeX fragment cache is stale-served on
-   purpose; mid-typing the opener/closer pairing can shift.  Trying
-   to detect \"is this edit in this overlay's fragment\" precisely
-   is unreliable.  Just nuke the error face on any edit — the
-   `tip--schedule-recompile' idle pass that fires alongside this
-   hook re-renders the now-current fragment, resurrecting any
-   genuine error from fresh text.
+2. Error overlays whose live extent (overlay markers, which track
+   edits) intersects the edit region [BEG, END).  Only THESE error
+   overlays are nuked, so a follow-up recompile re-paints them with
+   fresh text; errors on fragments far from the edit survive
+   intact.
+
+Older versions of this function nuked every error overlay in the
+buffer on any edit, on the theory that the static
+`tip-frag-beg'/`-end' integers couldn't be trusted.  But the live
+overlay markers DO track edits, so an intersection check on those
+is reliable, and the indiscriminate sweep was bug-visible:
+typing prose between three error fragments wiped all three.
+
 Image overlays (without `tip-error-severity') stay put — the next
 compile cycle replaces them in place."
   (dolist (ov (overlays-in (point-min) (point-max)))
     (when (eq (overlay-get ov 'tip) 'tip)
-      (cond
-       ((>= (overlay-start ov) (overlay-end ov))
-        (delete-overlay ov))
-       ((overlay-get ov 'tip-error-severity)
-        (delete-overlay ov))))))
+      (let ((ov-beg (overlay-start ov))
+            (ov-end (overlay-end ov)))
+        (cond
+         ((>= ov-beg ov-end)
+          (delete-overlay ov))
+         ((and (overlay-get ov 'tip-error-severity)
+               ;; Half-open intersection of [beg, end) with [ov-beg, ov-end].
+               (< beg ov-end)
+               (> end ov-beg))
+          (delete-overlay ov)))))))
 
 ;;; * cleanup
 
