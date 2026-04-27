@@ -1,0 +1,161 @@
+#+TITLE: tip — Lines of Code
+#+AUTHOR: TIP Project
+#+DATE: 2026-04-27
+
+Snapshot from =tokei 14.0.0= over the working tree, excluding =./ref/=,
+=./.ref/= (cloned upstreams), =legacy/= (replaced Python prototype),
+=forest/= (user content), and Cargo build artifacts.  Regenerate with:
+
+#+begin_src bash
+tokei --exclude '.ref' --exclude 'ref' --exclude 'legacy' \
+      --exclude 'tip-server/target' --exclude 'forest' .
+#+end_src
+
+* Global tally
+
+| Language        | Files |  Lines |   Code | Comments | Blanks |
+|-----------------+-------+--------+--------+----------+--------|
+| Rust            |    48 |   9830 |   8268 |      741 |    821 |
+| Emacs Lisp      |    65 |  12501 |   9570 |     1542 |   1389 |
+| Typst           |    17 |   1001 |    771 |       14 |    216 |
+| Markdown (doc)  |    26 |   4910 |      0 |     3597 |   1313 |
+| TeX             |     2 |    265 |    180 |       18 |     67 |
+| TOML            |     7 |     83 |     72 |        1 |     10 |
+| Shell           |     3 |    274 |    201 |       46 |     27 |
+| Python          |     1 |    328 |    290 |       11 |     27 |
+| Nix             |     1 |    576 |     98 |      463 |     15 |
+| Org             |     2 |     83 |     68 |        0 |     15 |
+| SVG (test out)  |   112 |   4777 |   4777 |        0 |      0 |
+|-----------------+-------+--------+--------+----------+--------|
+| Total           |   286 |  36186 |  24778 |     7385 |   4023 |
+
+The two biggest contributors are *Emacs Lisp* (the package) and *Rust*
+(=tip-server=).  Doc Markdown is dense but pure prose — tokei
+classifies all content as comments.  SVG count is committed test
+fixtures, not "code we maintain."
+
+* Rust =tip-server= (8.3 k code lines)
+
+** By crate
+
+| Crate                  | Code | Notes                                                  |
+|------------------------+------+--------------------------------------------------------|
+| =tip-core-typst=       | 4109 | Largest core: bottom-up + top-down strategies + tests  |
+| =tip-core-latex=       | 1152 | =preview.sty= driver + =TexProject= multi-file graph   |
+| =tip-server=           | 1326 | Dispatcher + per-backend handlers + e2e tests          |
+| =tip-protocol=         |  528 | Wire types + stdio transport                           |
+| =tip-core-katex=       |   78 | Stub: KaTeX backend, html targets                      |
+| =testkit= / =build.rs= |    7 | Shared assertions + build script                       |
+
+** Largest single files
+
+| File                                                  | Lines | Code |
+|-------------------------------------------------------+-------+------|
+| =tip-core-typst/src/top_down/tests.rs=                |  1604 | 1405 |
+| =tip-core-latex/src/compiler.rs=                      |   864 |  684 |
+| =tip-core-typst/src/bottom_up.rs=                     |   678 |  551 |
+| =tip-core-typst/src/top_down/extract.rs=              |   636 |  519 |
+| =tip-core-typst/tests/baseline_measure.rs=            |   544 |  406 |
+| =tip-core-latex/src/project.rs=                       |   493 |  446 |
+| =tip-server/src/typst_backend.rs=                     |   390 |  335 |
+| =tip-server/src/latex_backend.rs=                     |   385 |  312 |
+| =tip-protocol/src/messages.rs=                        |   354 |  319 |
+| =tip-server/src/katex_backend.rs=                     |   220 |  197 |
+
+The top-down test file is by far the heaviest — by design, a soak
+suite for frame-tree extraction.  =bottom_up.rs= and
+=top_down/extract.rs= are roughly balanced; both strategies are
+maintained.  The recent split of top-down into
+=top_down/{mod,flatten,extract,tests}.rs= shows up here as the four
+files lower in the list.
+
+** Tests vs production (rust)
+
+Per-file inspection shows roughly =4500/3800= production-vs-test
+inside =tip-core-typst= alone (=top_down/tests.rs= = 1405,
+=bottom_up.rs= contains its own inline test mod, fixtures contribute
+~1000 more).  Project-wide ratio is ~50/50 — tests are a first-class
+artifact.
+
+* Emacs Lisp (9.6 k code lines)
+
+** All =tip-*.el= files, sorted by raw lines
+
+| File                         | Lines | Notes                                              |
+|------------------------------+-------+----------------------------------------------------|
+| =test-tip.el=                |  1012 | Main ERT suite (65 tests)                          |
+| =tip.el=                     |   924 | =tip-mode= + customs + commands                    |
+| =tip-render.el=              |   712 | Compile-result → overlay pipeline                  |
+| =tip-log.el=                 |   647 | Centralized log + tabulated view (=*tip-log*=)     |
+| =tip-edit-indirect.el=       |   516 | C-c ' indirect-edit UI                             |
+| =tip-server-proc.el=         |   496 | JSON-RPC stdio + protocol handshake                |
+| =tip-latex.el=               |   406 | LaTeX backend orchestration                        |
+| =tip-errors.el=              |   383 | Error overlays + eldoc + Flymake                   |
+| =tip-diagnostic.el=          |   364 | Bug-report bundle + skeleton dump                  |
+| =tip-childframe.el=          |   295 | Optional childframe display                        |
+| =tip-markdown.el=            |   266 | Markdown / KaTeX backend                           |
+| =test-tip-markdown.el=       |   252 | Markdown backend tests                             |
+| =tip-latex-parse-treesit.el= |   252 | tree-sitter LaTeX fragment parser                  |
+| =tip-typst.el=               |   231 | Typst backend orchestration                        |
+| =test-tip-latex-treesit.el=  |   218 | LaTeX tree-sitter tests                            |
+| =preview-toggle.el=          |   168 | Generic auto-toggle framework (reusable)           |
+| =tip-live.el=                |   168 | Live preview + echo error feedback                 |
+| =tip-backend.el=             |   132 | Backend struct + dispatch                          |
+| =tip-kodama.el=              |    54 | Kodama integration (auto-detect)                   |
+| =tip-diagnostic-typst.el=    |    31 | Typst-side server probe                            |
+| =tip-diagnostic-latex.el=    |    30 | LaTeX-side server probe                            |
+
+** Ranked by responsibility
+
+- *core orchestration*: =tip.el= + =tip-server-proc.el= + =tip-render.el=
+  ≈ 2130 lines.  Mode, hooks, IPC, render pipeline.
+- *edit / UI*: =tip-edit-indirect.el= + =tip-childframe.el= + =tip-live.el=
+  ≈ 980 lines.
+- *backend orchestration*: =tip-typst.el= + =tip-latex.el= +
+  =tip-markdown.el= + =tip-backend.el= ≈ 1035 lines.
+- *errors / diagnostics*: =tip-errors.el= + =tip-diagnostic*.el=
+  ≈ 810 lines.
+- *log infrastructure*: =tip-log.el= = 647 lines (recent addition).
+- *tests*: =test-tip*.el= ≈ 1480 lines.
+
+* Typst fixtures (1 k lines)
+
+Demo content + visual-comparison sources used by the Rust test
+suite.  Included for transparency; not maintained as production code.
+
+* Documentation (4.9 k lines, dense prose)
+
+| File                                | Lines |
+|-------------------------------------+-------|
+| =doc/protocol.md=                   |   528 |
+| =doc/full-document-approach.md=     |   489 |
+| =doc/digestif-extraction.md=        |   447 |
+| =doc/compilation-pipeline.md=       |   424 |
+| =doc/latex-preview-survey.md=       |   360 |
+| =doc/baseline-alignment.md=         |   317 |
+| (10 more under =doc/=)              |       |
+
+CLAUDE.md (~600 lines) lives at the repo root and isn't counted
+under =doc/=.  The two biggest are =protocol.md= (canonical wire
+spec) and =full-document-approach.md= (architectural rationale for
+top-down).
+
+* What's excluded
+
+| Path             | Reason                                              |
+|------------------+-----------------------------------------------------|
+| =./.ref/=, =./ref/= | Vendored upstreams (typst, tinymist, kodama, ...)|
+| =legacy/=        | Replaced Python prototype                           |
+| =tip-server/target/= | Cargo build artifacts                           |
+| =forest/=        | User-supplied math content                          |
+| =*.elc=          | Byte-compile output                                 |
+
+* Notes on the totals
+
+The Rust / Markdown sub-row in tokei's output (947 lines tagged
+=Markdown=) is doc-comments inside =.rs= files — tokei pulls them
+out so the "Code" total reflects pure Rust.  Same trick for the
+Markdown file row, which is why "Markdown · Code = 0".
+
+The "Lines" column = code + comments + blanks; it's what =wc -l=
+would report.  "Code" alone is what most people mean by LOC.
