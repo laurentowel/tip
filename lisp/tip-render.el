@@ -507,7 +507,14 @@ diagnostic is echoed and later errors get minimal visual weight."
            'compile
            (or err-full "")
            "%s"
-           (or err-message err "compile failed")))
+           ;; `or' only short-circuits on nil — empty strings pass through.
+           ;; Pick first non-empty-string source so the log entry doesn't
+           ;; end up empty when the server gives us err-message="".
+           (cond ((and (stringp err-message) (not (string-empty-p err-message)))
+                  err-message)
+                 ((and (stringp err) (not (string-empty-p err)))
+                  err)
+                 (t "compile failed"))))
         (when (and frag-beg frag-end (or err err-detail)
                    (not (eq err-severity 'warning)))
           (dolist (ov (overlays-in frag-beg frag-end))

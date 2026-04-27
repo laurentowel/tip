@@ -199,7 +199,10 @@ FMT and ARGS are passed to `format'.
 
 Entries below `tip-log-min-level' are dropped — no string formatting
 cost.  Entries at or above `tip-log-echo-level' are also mirrored to
-the echo area; `error' additionally raises `display-warning'."
+the echo area.  `display-warning' is raised only for *internal*
+errors (server crash, protocol mismatch); user compile errors
+already surface via overlay + flymake + eldoc, so we don't double up
+in *Warnings*.  See `tip-log--display-warning-categories'."
   (when (tip-log--passes-p level tip-log-min-level)
     (let* ((msg (apply #'format fmt args))
            (entry (make-tip-log-entry
@@ -213,8 +216,7 @@ the echo area; `error' additionally raises `display-warning'."
       (tip-log--push entry)
       (when (tip-log--passes-p level tip-log-echo-level)
         (tip-log--echo level category msg))
-      (when (eq level 'error)
-        (display-warning 'tip msg :warning)))))
+      (tip-log--maybe-warn level category msg))))
 
 ;;;###autoload
 (defun tip-log-with-detail (level category fmt detail &rest args)
@@ -233,8 +235,26 @@ the echo area; `error' additionally raises `display-warning'."
       (tip-log--push entry)
       (when (tip-log--passes-p level tip-log-echo-level)
         (tip-log--echo level category msg))
-      (when (eq level 'error)
-        (display-warning 'tip msg :warning)))))
+      (tip-log--maybe-warn level category msg))))
+
+(defcustom tip-log-display-warning-categories '(server protocol render edit)
+  "Categories whose `error'-level entries trigger `display-warning'.
+User compile errors (`compile' category) intentionally do NOT raise
+display-warning — they already get overlay + flymake + eldoc
+attention, and re-rendering on every cursor move would otherwise
+spam *Warnings*."
+  :type '(repeat symbol)
+  :group 'tip-log)
+
+(defun tip-log--maybe-warn (level category msg)
+  "Raise `display-warning' for an internal error (not a user compile
+error).  No-op when MSG is empty (some err-message values arrive as
+\"\" rather than nil)."
+  (when (and (eq level 'error)
+             (memq category tip-log-display-warning-categories)
+             (stringp msg)
+             (not (string-empty-p msg)))
+    (display-warning 'tip msg :warning)))
 
 (defun tip-log--echo (level category msg)
   "Mirror an entry to the echo area, painted to match *tip-log*'s
