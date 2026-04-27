@@ -9,7 +9,7 @@
 //! Contrast: `BottomUpCompiler::compile_fragment_scoped` builds `N`
 //! synthetic single-page documents (skeleton + fragment) and runs
 //! `compile()` `N` times — `N` cache misses, no shared layout work.
-//! See `doc/full-document-approach.md` and the post-mortem on the
+//! See `devdoc/full-document-approach.md` and the post-mortem on the
 //! `parallel-compile` branch (kept as a documented dead end).
 //!
 //! ## Submodules

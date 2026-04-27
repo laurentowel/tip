@@ -216,7 +216,7 @@ typical papers (50-200 fragments) but caps memory on pathologically
 large buffers.  Set to nil to disable eviction.
 
 The cache is in-memory only; it does not survive Emacs restart.
-Persistent cache is future work (see doc/latex-preview-survey.md)."
+Persistent cache is future work (see devdoc/latex-preview-survey.md)."
   :type '(choice (const :tag "Unbounded (not recommended)" nil)
                  (integer :tag "Max entries"))
   :group 'tip)

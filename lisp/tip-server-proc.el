@@ -14,7 +14,7 @@
 ;;   `tip--send-request' fire a method call, invoke callback on response
 ;;   `tip--sync-buffer'  send the current buffer content as `sync'
 ;;
-;; Wire-protocol spec lives in `doc/protocol.md' (URI semantics,
+;; Wire-protocol spec lives in `devdoc/protocol.md' (URI semantics,
 ;; message shapes, backend dispatch).  Rust-side canonical types are
 ;; in tip-server/crates/tip-protocol/src/messages.rs.
 
@@ -32,7 +32,7 @@ Bumped on any breaking change to a request/response shape, an enum
 variant rename, or a removed/renamed field.  Additive changes (new
 optional field, new method) keep the version stable.  Pre-1.0 the
 protocol is in flux and either component may bump on breaking
-changes.  See doc/protocol.md for the full spec.")
+changes.  See devdoc/protocol.md for the full spec.")
 
 (defun tip--handle-init-response (result)
   "Handle the server's response to the `init' handshake.

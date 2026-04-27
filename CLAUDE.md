@@ -16,6 +16,8 @@ tip-improve/
 │   ├── ert/                    # Headless ERT (`emacs --batch -l <file>`)
 │   ├── integration/            # Daemon-driven specs (`tests/integration/run.sh`)
 │   └── manual/                 # Interactive + perf, run by hand
+├── doc/                    # Public docs — kodama trees → CI-built static site
+├── devdoc/                 # Internal dev notes (architecture, baselines, surveys)
 ├── tip-server/         # Active development — Rust-native server
 │   ├── crates/
 │   │   ├── tip-protocol/       # Message types + stdio transport (serde, newline-delimited JSON) — shared across backends
@@ -330,9 +332,9 @@ We tried using rayon to compile fragments in parallel. Result: only 10% speedup 
 
 **What Typst actually parallelizes**: Typst's 2-3x speedup (from the 0.12 blog post) comes from parallelizing **layout within a single `compile()` call** — different pages of the same document are laid out on different threads. They share the same comemo cache because they're the same document. Our per-fragment approach calls `compile()` 2000 times on 2000 different documents — Typst's internal parallelism has nothing to parallelize within each tiny single-page compilation.
 
-**The real path to parallelism**: the full-document approach (`doc/full-document-approach.md`). Compile the real document once (one `compile()` call where Typst's parallelism kicks in), then extract per-fragment SVGs from the frame tree. This would give both exact baselines AND the parallelism benefit — for free, because Typst already does it internally.
+**The real path to parallelism**: the full-document approach (`devdoc/full-document-approach.md`). Compile the real document once (one `compile()` call where Typst's parallelism kicks in), then extract per-fragment SVGs from the frame tree. This would give both exact baselines AND the parallelism benefit — for free, because Typst already does it internally.
 
-**Lesson for future agents**: don't try to parallelize the per-fragment compilation loop. The architecture needs to change from "N compilations of N synthetic documents" to "1 compilation of the real document + N frame extractions". See `doc/full-document-approach.md` for the design.
+**Lesson for future agents**: don't try to parallelize the per-fragment compilation loop. The architecture needs to change from "N compilations of N synthetic documents" to "1 compilation of the real document + N frame extractions". See `devdoc/full-document-approach.md` for the design.
 
 ## Known Typst Limitations
 

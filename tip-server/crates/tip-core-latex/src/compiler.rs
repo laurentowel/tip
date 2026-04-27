@@ -30,7 +30,7 @@
 //!
 //! No mylatexformat precompile; no persistent cache; no streaming
 //! output.  Batch compile, return whole result set, done.  Optimizations
-//! are follow-ups (see doc/digestif-extraction.md § "Proposed build
+//! are follow-ups (see devdoc/digestif-extraction.md § "Proposed build
 //! order").
 
 use std::fs;
@@ -514,7 +514,7 @@ fn parse_preview_output(stdout: &str, n_fragments: usize) -> Vec<Option<Fragment
             if n == 0 || n > n_fragments {
                 continue;
             }
-            // org-latex-preview conventions (see doc/latex-preview-survey.md):
+            // org-latex-preview conventions (see devdoc/latex-preview-survey.md):
             //   above_baseline = H + T   (H is height above; T is tightpage top)
             //   below_baseline = D - B   (D is depth; B is tightpage bottom; B < 0)
             //   total_height   = above + below

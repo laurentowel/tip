@@ -94,7 +94,7 @@ pub fn extract_fragment_svg(
         // preceded the first InRange in the run) or wait for one.
         //
         // No spatial tolerance, no magic distance.  This is the
-        // heuristic-elimination pass [H1] in `doc/full-document-approach.md`.
+        // heuristic-elimination pass [H1] in `devdoc/full-document-approach.md`.
         let mut keep: Vec<(Point, FrameItem)> = Vec::new();
         let mut bounds = ItemBounds::empty();
         let mut max_text_size = Abs::zero();

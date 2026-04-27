@@ -1,0 +1,9 @@
+1. move tip-edit away from tip.el
+2. =(define-minor-mode tip-mode ...)= is too long, should offload init to backend specific-modules
+3. =tip-ensure= should be renamed to =tip-server-ensure=?
+4. rethink typst support for html targetting, especially after top-down
+5. rethink why error level classification was introduced.
+6. improve =tip-error= display logic.  Example: =C-e= out of a fragment an see error, then will need to move cursor inside to see the error (awkward).  Possible solution: show error of proximal fragment(s).
+7. for long .el add outli sections. #src_elisp{;; * This is a heading}
+8. rethink design of tip-verbose tip-debug.  Have centralized hub for the messages. (math errors, internal errors, logs, etc)
+9. interactive command cleanup

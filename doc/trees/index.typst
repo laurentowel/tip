@@ -1,0 +1,12 @@
+#import "_lib/kodama.typ": *
+
+#show: kodama
+
+#metadata((
+  "title": "TIP — Typst Inline Preview",
+  "taxon": "collection",
+  "collect": "true",
+))
+
+TIP is an Emacs minor mode that renders Typst math fragments as inline SVG previews. This forest documents its architecture, design decisions, and benchmarks.
+

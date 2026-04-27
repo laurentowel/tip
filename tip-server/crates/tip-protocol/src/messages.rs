@@ -5,7 +5,7 @@
 //! human-readable spec — including URI semantics (empty-string for
 //! unsaved buffers, `tip-edit-virtual://` scheme for indirect-edit
 //! synthetic compiles), backend dispatch rules, and protocol
-//! versioning notes — lives at `doc/protocol.md` (relative to the
+//! versioning notes — lives at `devdoc/protocol.md` (relative to the
 //! repository root).  Keep them aligned: any wire-visible change
 //! here needs a paragraph there.
 

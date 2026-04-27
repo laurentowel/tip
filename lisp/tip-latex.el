@@ -10,7 +10,7 @@
 ;; Scope: single-file for v1.  If the preamble contains `\\input',
 ;; `\\include', or `\\subimport' a one-time warning is emitted; we
 ;; still preview but the compile may fail (soft-refuse).  See
-;; doc/latex-preview-survey.md and doc/digestif-extraction.md for
+;; devdoc/latex-preview-survey.md and devdoc/digestif-extraction.md for
 ;; rationale.
 ;;
 ;; No AUCTeX dependency.  When AUCTeX is loaded, `texmathp' could be
