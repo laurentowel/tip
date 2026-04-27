@@ -247,6 +247,71 @@ cargo test -p tip-core-typst --test scope_check --test scope_insane --test scope
 # add new comparison documents and consume the SVGs from test-output/.
 ```
 
+### Known issues (in flight)
+
+#### `nix run .#test` — test-server.el times out only inside the nix wrapper
+
+`tests/ert/test-server.el` (3 tests: server-spawn-and-shutdown,
+protocol-version-handshake-{match,mismatch}) all PASS when invoked
+directly:
+
+```bash
+emacs --batch -l tests/ert/test-server.el                  # 3/3 pass
+nix-shell -p '(emacsPackagesFor emacs-pgtk)…' --run …      # 3/3 pass
+```
+
+but FAIL with 5-second timeouts on every assertion when run via
+`nix run .#test` (which goes through the same demoEmacs in the same
+PATH).  The subprocess DOES start (`tip[info/server]: tip-server
+started (pid …)` shows in the log), but the response callback never
+fires — looks like a buffering / `accept-process-output` quirk in
+the shell-script wrapper, not a real test break.
+
+Workaround: when adding cli flags or rearranging test order in the
+nix wrapper, run the suite both ways and treat a clean local pass +
+nix-wrapper timeout as evidence of this issue rather than the new
+change.  When fixing for real: instrument the test with
+`(set-process-filter tip--server-process (lambda (p s) (princ s)))`
+to confirm whether the response bytes ever arrive.
+
+#### Packaging: tip.el → tip-server resolution under package managers
+
+Tests currently load tip via `(load (expand-file-name "tip.el"
+tip-test-lisp-dir))` — convenient but it bypasses package.el's
+`Package-Requires` resolution and skips autoloads.  An end user
+installing tip won't go through that path; they'll use MELPA / Elpaca
+/ `package-vc-install-from-checkout`.
+
+The pattern to mirror is pdf-tools:
+
+- Entry point = the `.el` matching the package name (`tip.el`),
+  found by package.el via the `Package-Requires:` header.  No special
+  declaration needed.
+- Native-binary discovery = walk up from `(locate-library "tip")`'s
+  directory, look for the bundled native source / pre-built binary.
+  pdf-tools' `pdf-tools-install` runs `make` inside the bundled
+  `server/` dir; ours would run `cargo build` against
+  `tip-server/`.
+
+Pieces that need to land for parity:
+
+1. `tests/setup.el` should call
+   `(package-vc-install-from-checkout tip-test-repo-root "tip")`
+   instead of bare `load` so test-time loading exercises the same
+   path real users hit.
+2. Add a `tip-build-server` interactive command (analog of
+   `pdf-tools-install`) that finds `tip--repo-root`'s `tip-server/`,
+   shells out to `cargo build --release`, and installs the resulting
+   binary under `~/.local/bin/tip-server` (or wherever
+   `tip-server-executable` points).
+3. (Optional) ship a `Cask` file at the repo root as a thin bridge
+   for users who already use Cask in their dev toolchain — Cask reads
+   `Package-Requires:` from `lisp/tip.el` so the file is small.
+
+Until these land, packaged-install is "build tip-server with cargo,
+put it on PATH, install the elisp via your package manager of choice"
+— manageable for early adopters, awkward for MELPA distribution.
+
 ## Performance
 
 | Fragments | Batch per-frag | Single edit latency |
