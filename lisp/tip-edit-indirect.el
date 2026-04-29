@@ -49,15 +49,6 @@ Re-prepended to every non-first non-blank line on commit so the source
 buffer's original indentation is restored exactly.  See
 `tip-edit-indirect--compute-strip' for the dedent rule.")
 
-(defvar-local tip-edit-indirect--source-hash nil
-  "SHA-256 of the source-region text at entry.
-Compared against the current source-region content on commit; a
-mismatch aborts the commit.  Belt-and-suspenders against the source
-fragment being modified out from under us — the overlay's
-modification-hooks already block direct edits to the region, but
-indirect changes (revert-buffer, font-lock injection bugs, batch
-replace-string in the source) can still slip through.")
-
 (defvar-local tip-edit-indirect--source-prev-read-only nil
   "Saved value of `buffer-read-only' from the source buffer at entry.
 The source buffer is forced read-only while the edit is active so
@@ -345,8 +336,6 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
         (setq-local tip-edit-indirect--source-overlay ov)
         (setq-local tip-edit-indirect--content-cache "")
         (setq-local tip-edit-indirect--strip-amount strip)
-        (setq-local tip-edit-indirect--source-hash
-                    (secure-hash 'sha256 raw-text))
         (setq-local tip-edit-indirect--source-prev-read-only
                     (buffer-local-value 'buffer-read-only src-buf))
         (setq-local tip-edit-indirect--virtual-uri
@@ -383,37 +372,16 @@ preserved verbatim — see `tip-edit-indirect--compute-strip'."
 
 ;;; * commit / abort
 
-(defun tip-edit-indirect--stash-failed-merge (edit-text)
-  "Save EDIT-TEXT (the in-progress edit) into a uniquely named buffer.
-Returns the new buffer.  Used when commit is aborted by a hash
-mismatch — the user shouldn't lose typed changes when the source
-region has shifted under them."
-  (let ((stash (generate-new-buffer "*tip-edit-failed-merge*")))
-    (with-current-buffer stash
-      (insert edit-text)
-      (goto-char (point-min))
-      (when (fboundp 'typst-ts-mode)
-        (condition-case nil (typst-ts-mode) (error nil))))
-    stash))
-
 (defun tip-edit-indirect-commit ()
   "Write edit buffer contents back to source and close the edit UI.
 Reapplies the leading-whitespace prefix recorded at entry to every
 non-first non-blank line, so the source buffer's original indentation
 is restored — see `tip-edit-indirect--reindent'.
 
-Aborts the commit if the source-region content has changed since
-entry (SHA-256 mismatch).  This guards against changes that bypass
-the overlay's `modification-hooks' — e.g., `revert-buffer',
-out-of-band buffer updates, or a global replace-string that altered
-our fragment along with everything else.  On mismatch:
-
-  - the edit buffer's current content is stashed into a fresh
-    `*tip-edit-failed-merge*' buffer (uniquified by
-    `generate-new-buffer' if multiple mismatches accumulate),
-  - the edit UI is torn down and window configuration restored,
-  - the user is told where the stash went so they can compare it
-    against the changed source by hand."
+The source buffer is locked read-only while the edit UI is open, so
+out-of-band changes shouldn't happen during a session.  If the source
+region truly went away (overlay was deleted or buffer killed), the
+commit reports the failure rather than corrupting state."
   (interactive)
   (unless (and tip-edit-indirect--source-buffer tip-edit-indirect--source-overlay)
     (user-error "Not in a tip edit buffer"))
@@ -422,51 +390,28 @@ our fragment along with everything else.  On mismatch:
          (new-text (tip-edit-indirect--reindent edit-text n))
          (src-buf tip-edit-indirect--source-buffer)
          (ov tip-edit-indirect--source-overlay)
-         (expected-hash tip-edit-indirect--source-hash)
          (beg (overlay-start ov))
          (end (overlay-end ov)))
     (unless (and beg end (buffer-live-p src-buf))
       (user-error "Source region or buffer no longer exists"))
-    (let ((current-hash (with-current-buffer src-buf
-                          (secure-hash 'sha256
-                                       (buffer-substring-no-properties beg end)))))
-      (cond
-       ((not (equal current-hash expected-hash))
-        ;; Hash mismatch — rescue the edit text into a stash buffer,
-        ;; then tear down so the user gets their window back.
-        (let ((stash (tip-edit-indirect--stash-failed-merge edit-text)))
-          (with-current-buffer src-buf
-            (delete-overlay ov))
-          (tip-edit-indirect--cleanup)
-          (message
-           "Original buffer content in the edit region changed, giving up commit.
-*tip-edit* buffer saved to %s"
-           (buffer-name stash))))
-       (t
-        (with-current-buffer src-buf
-          (let ((current (buffer-substring-no-properties beg end))
-                ;; Source buffer is read-only while edit is alive
-                ;; (see entry).  Commit needs to bypass that, but
-                ;; only for the actual write-back below.
-                (inhibit-read-only t))
-            (delete-overlay ov)
-            (cond
-             ;; No-op commit: text identical to source.  Skip the
-             ;; delete+insert so the source buffer's modified flag
-             ;; isn't flipped for nothing.
-             ((string-equal new-text current)
-              nil)
-             (t
-              ;; `save-excursion' is enough: `delete-region' +
-              ;; `insert' at BEG leaves point at BEG + (length
-              ;; new-text), but the marker semantics restore the
-              ;; original source-buffer point on exit.
-              (save-excursion
-                (goto-char beg)
-                (delete-region beg end)
-                (insert new-text))))))
-        (tip-edit-indirect--cleanup)
-        (message "Fragment updated."))))))
+    (with-current-buffer src-buf
+      (let ((current (buffer-substring-no-properties beg end))
+            ;; Source buffer is read-only while edit is alive
+            ;; (see entry).  Commit needs to bypass that, but
+            ;; only for the actual write-back below.
+            (inhibit-read-only t))
+        (delete-overlay ov)
+        (unless (string-equal new-text current)
+          ;; `save-excursion' is enough: `delete-region' + `insert'
+          ;; at BEG leaves point at BEG + (length new-text), but the
+          ;; marker semantics restore the original source-buffer
+          ;; point on exit.
+          (save-excursion
+            (goto-char beg)
+            (delete-region beg end)
+            (insert new-text)))))
+    (tip-edit-indirect--cleanup)
+    (message "Fragment updated.")))
 
 (defun tip-edit-indirect-abort ()
   "Cancel editing and discard changes."

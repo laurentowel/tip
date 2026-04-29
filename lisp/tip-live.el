@@ -59,17 +59,11 @@
               (content (buffer-substring-no-properties (car bound) (cdr bound))))
         (unless (string-equal tip-echo--content-cache content)
           (setq tip-echo--content-cache content)
-          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-                (byte-start (1- (position-bytes (car bound))))
+          (let ((byte-start (1- (position-bytes (car bound))))
                 (byte-end (1- (position-bytes (cdr bound)))))
             (tip--sync-buffer)
-            (tip--send-request
-             "compile_fragments"
-             `(("uri" . ,(tip--current-uri))
-               ("fragments" . ,(vector `(("start" . ,byte-start)
-                                         ("end" . ,byte-end))))
-               ("color" . ,fg)
-               ("preamble" . ,(tip-build-preamble)))
+            (tip--send-compile-fragments
+             (list (cons byte-start byte-end))
              #'tip-echo--handle-result)))
       (setq tip-echo--content-cache ""))))
 
@@ -114,19 +108,12 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
               (content (buffer-substring-no-properties (car bound) (cdr bound))))
         (unless (string-equal tip-live--content-cache content)
           (setq tip-live--content-cache content)
-          (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-                (byte-start (1- (position-bytes (car bound))))
+          (let ((byte-start (1- (position-bytes (car bound))))
                 (byte-end (1- (position-bytes (cdr bound)))))
             (tip--sync-buffer)
-            (tip--send-request
-             "compile_fragments"
-             `(("uri" . ,(tip--current-uri))
-               ("fragments" . ,(vector `(("start" . ,byte-start)
-                                         ("end" . ,byte-end))))
-               ("color" . ,fg)
-               ("preamble" . ,(tip-build-preamble)))
-             (lambda (result)
-               (tip-live--handle-result result)))))
+            (tip--send-compile-fragments
+             (list (cons byte-start byte-end))
+             #'tip-live--handle-result)))
       (tip-childframe-hide)
       (setq tip-live--content-cache "")))))
 

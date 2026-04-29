@@ -3,11 +3,13 @@ use typst::layout::PagedDocument;
 use typst::syntax::SyntaxKind;
 use typst_svg::svg;
 
-use crate::baseline::{
-    collect_text_items, find_font_ascent, find_ink_extent,
+use crate::world::TipWorld;
+use baseline::{
+    collect_text_items, find_font_ascent, find_ink_extent, find_math_axis_em,
     find_outermost_group_baseline, pick_baseline_y,
 };
-use crate::world::TipWorld;
+
+mod baseline;
 
 /// Detect display math. In Typst, display math has whitespace after opening `$`.
 fn is_display_math(content: &str) -> bool {
@@ -20,15 +22,6 @@ fn is_display_math(content: &str) -> bool {
 fn is_multiline_math(content: &str) -> bool {
     is_display_math(content) && content[1..content.len() - 1].contains('\n')
 }
-
-/// Default rendering preamble.
-///
-/// Does NOT use bounded() — bounded distorts the frame coordinates
-/// differently per expression, breaking baseline consistency.
-/// Instead, relies on generous bottom margin to fit subscripts,
-/// and the natural page layout which keeps the baseline at a
-/// constant position from the page top.
-const DEFAULT_RENDERING_PREAMBLE: &str = "";
 
 /// Result of compiling a single math fragment.
 #[derive(Debug, Clone)]
@@ -263,27 +256,37 @@ fn find_baseline_depth(
             .map(|&(_, y)| y)
             .collect();
 
-        let y = pick_baseline_y(&ys, page_mid);
-
         if max_size >= 9.0 {
-            return Some(y);
+            // Body-sized text in fragment: pick directly.
+            return Some(pick_baseline_y(&ys, page_mid));
         }
-        let size = max_size;
-        // Strategy 3: all text at reduced size (bare fraction).
-        // Derive baseline from font metrics instead of hardcoded 27.5.
+
+        // Strategy 3: all text at reduced size (sub/super/fraction
+        // glyphs).  The most common case is a bare fraction `$a/b$`
+        // where Typst inlines numerator + denominator at script size
+        // straddling the math axis.  The visual baseline for the
+        // surrounding paragraph is at `math_axis_y + axis_em *
+        // body_size_pt` — not at either row's individual baseline.
+        if ys.len() >= 2 {
+            // 2+ rows at the same reduced size → fraction-shaped.
+            // Midpoint approximates the math axis (where the bar
+            // sits); body baseline is one axis-height below.
+            if let Some(axis_em) = find_math_axis_em(frame) {
+                let mid_y = ys.iter().copied().sum::<f64>() / ys.len() as f64;
+                // 11pt is the body size we set via the `#show
+                // math.equation: set text(size: 11pt)' rule in
+                // build_scoped_source.
+                return Some(mid_y + axis_em * 11.0);
+            }
+        }
+
+        // Single reduced item: fall back to the older ascent-ratio
+        // formula.  This case is rare (a standalone subscript or
+        // accent at script size with no companion glyph) and the
+        // formula is approximate, but it's better than nothing.
+        let y = pick_baseline_y(&ys, page_mid);
         if let Some(ascent) = find_font_ascent(frame) {
-            // margin is page_top position of the content area.
-            // For our layout: baseline = margin_top + font_ascent.
-            // margin_top is the y-offset of the first content, which is
-            // page_height - margin_bottom - content_height... but simpler:
-            // the baseline for full-size text WOULD be at the same y as
-            // other expressions. We know the text size (reduced) and the
-            // font ascent ratio. The full-size baseline position is:
-            // first_text_y - (reduced_ascent) + (full_ascent)
-            // where reduced_ascent ≈ font_ascent_ratio * reduced_size
-            // and full_ascent ≈ font_ascent_ratio * 11pt
-            let font_ascent_ratio = ascent; // ascent as fraction of em
-            let full_baseline = y - (font_ascent_ratio * size) + (font_ascent_ratio * 11.0);
+            let full_baseline = y - (ascent * max_size) + (ascent * 11.0);
             return Some(full_baseline);
         }
     }
@@ -344,7 +347,6 @@ fn build_scoped_source(
     // Join non-empty sections with single newlines to avoid blank lines
     // (Typst renders \n\n as paragraph breaks, causing spurious empty space).
     let sections: Vec<&str> = [
-        DEFAULT_RENDERING_PREAMBLE,
         skeleton.trim(),
         preamble_override.unwrap_or("").trim(),
         page_setup.trim(),
@@ -487,7 +489,6 @@ fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
         // Multi-line display: wide page
         format!(
             "{color_setup}\
-             {DEFAULT_RENDERING_PREAMBLE}\
              {preamble}\n\
              #set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm))\n\
              {content}\n"
@@ -497,7 +498,6 @@ fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
         let inner = content.trim_matches('$').trim();
         format!(
             "{color_setup}\
-             {DEFAULT_RENDERING_PREAMBLE}\
              #set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none)\n\
              {preamble}\n\
              $ {inner} $\n"
@@ -506,7 +506,6 @@ fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
         // Single-line display: auto width, normal margins
         format!(
             "{color_setup}\
-             {DEFAULT_RENDERING_PREAMBLE}\
              {preamble}\n\
              #set page(height: auto, width: auto, margin: 0.2cm, fill: none)\n\
              {content}\n"

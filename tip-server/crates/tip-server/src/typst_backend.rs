@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use tip_core_typst::bottom_up::BottomUpCompiler;
-use tip_core_typst::document::DocumentStore;
+use tip_protocol::DocumentStore;
 use tip_core_typst::top_down::TopDownCompiler;
 use tip_core_typst::world::TipWorld;
 use tip_core_typst::CompileStrategy;
@@ -189,54 +189,6 @@ impl TypstBackend {
         ResponseResult::Fragments { fragments: results }
     }
 
-    pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
-        let content = match self.documents.get(&params.uri) {
-            Some(c) => c.to_string(),
-            None => {
-                return ResponseResult::Error {
-                    error: format!("document not synced: {}", params.uri),
-                }
-            }
-        };
-
-        // ALWAYS synth for live preview, regardless of strategy.
-        // The benchmarks (bench_edit_append_new, bench_edit_middle in
-        // full_doc.rs) showed that on a 5000-line doc full-doc has
-        // p99 keystroke latency of ~5.7 SECONDS due to comemo cache
-        // misses on mid-edit syntax errors.  Synth's per-fragment
-        // compile is stable at ~30 ms even at 5k lines.  Visual
-        // consistency between live and batch matters less than not
-        // freezing the editor.
-
-        match BottomUpCompiler::compile_fragment_scoped(
-            &mut self.world,
-            &content,
-            params.start,
-            params.end,
-            tip_protocol::svg_color::STANDIN_HEX,
-            params.page_setup.as_deref(),
-            params.preamble.as_deref(),
-        ) {
-            Ok(output) => ResponseResult::Live {
-                fragment: FragmentResult {
-                    start: params.start,
-                    end: params.end,
-                    svg: tip_protocol::svg_color::fills_to_current_color(
-                        &output.svg,
-                        tip_protocol::svg_color::STANDIN_HEX,
-                    ),
-                    height_pt: output.height_pt,
-                    depth_pt: output.depth_pt,
-                    width_pt: output.width_pt,
-                            font_size_pt: Some(11.0),
-                    error: None,
-                            error_detail: None,
-                },
-            },
-            Err(err) => ResponseResult::Error { error: err },
-        }
-    }
-
     /// Typst has no dependency graph yet — return the URI alone.
     /// Clients pack just this file; if the user needs more, they re-run
     /// from a root file that imports everything.  Root dir is picked by
@@ -249,10 +201,7 @@ impl TypstBackend {
             .and_then(Self::find_project_root)
             .or_else(|| path.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| path.clone());
-        ResponseResult::ProjectFiles {
-            root: root.display().to_string(),
-            files: vec![params.uri],
-        }
+        crate::handler::single_file_project(root, params.uri)
     }
 
     pub fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
@@ -379,25 +328,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compile_live_returns_svg() {
-        let mut b = TypstBackend::new();
-        b.handle_sync(sync_params("/test.typ", "$x^2$"));
-        let resp = b.handle_compile_live(CompileLiveParams {
-            backend: BackendId::Typst,
-            uri: "/test.typ".into(),
-            start: 0,
-            end: 5,
-            color: "#000000".into(),
-            page_setup: None,
-            preamble: None,
-        });
-        match resp {
-            ResponseResult::Live { fragment } => {
-                assert!(fragment.svg.contains("<svg"));
-                assert!(fragment.height_pt > 0.0);
-            }
-            other => panic!("expected live, got {:?}", other),
-        }
-    }
 }

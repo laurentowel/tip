@@ -65,8 +65,6 @@ the user know they may see schema-shape errors until they upgrade."
 ;; knows they'll exist at runtime.
 (defvar tip-font-dirs)
 (defvar tip-server-executable)
-(defvar tip-use-docker)
-(defvar tip-docker-image)
 
 ;;; * font directory resolution
 
@@ -132,11 +130,9 @@ Called with one argument: the result alist.")
 
 (defun tip--find-server ()
   "Find the backend's server executable, or prompt user to install.
-Returns the path, or nil if Docker mode (handled separately).
+Returns the path on success.
 Uses `tip-server-executable-name' from the active backend; falls back
 to the Typst default when no backend is active (e.g. bare test buffers)."
-  (when tip-use-docker
-    (cl-return-from tip--find-server nil))
   (let* ((name (or (tip-server-executable-name) "tip-server"))
          ;; When the backend resolved to an absolute path already, use it.
          (absolute (and name (file-name-absolute-p name) (file-executable-p name))))
@@ -165,16 +161,12 @@ to the Typst default when no backend is active (e.g. bare test buffers)."
                  (concat
                   "tip-server not found. Choose:\n"
                   "  [c] Compile from source (needs Rust toolchain)\n"
-                  "  [d] Use Docker (needs Docker installed)\n"
                   "  [p] Set path manually\n"
                   "  [q] Cancel\n"
                   "Choice: ")
-                 '(?c ?d ?p ?q))))
+                 '(?c ?p ?q))))
     (pcase choice
       (?c (tip--compile-from-source))
-      (?d (setq tip-use-docker t)
-          (tip--build-docker-image)
-          "docker")
       (?p (let ((path (read-file-name "Path to tip-server: ")))
             (setq tip-server-executable path)
             path))
@@ -201,32 +193,6 @@ field (defaulting to tip-server-typst)."
                      (setq tip-server-executable target)
                      (tip-log 'info 'server "tip-server compiled: %s" target))))))
       (compile "cargo build --release"))))
-
-(defun tip--build-docker-image ()
-  "Build the tip-server Docker image if not already available."
-  (interactive)
-  (unless (executable-find "docker")
-    (user-error "Docker not found. Install from https://docs.docker.com/get-docker/"))
-  (let* ((pkg-dir (tip--package-dir))
-         (dockerfile (expand-file-name "tip-server/Dockerfile" pkg-dir)))
-    (unless (file-exists-p dockerfile)
-      (user-error "Dockerfile not found at %s" dockerfile))
-    (if (= 0 (call-process "docker" nil nil nil "image" "inspect" tip-docker-image))
-        (tip-log 'info 'server "Docker image %s already exists" tip-docker-image)
-      (let ((buf (get-buffer-create "*tip-server-docker-build*")))
-        (pop-to-buffer buf)
-        (let ((inhibit-read-only t)) (erase-buffer))
-        (insert (format "Building Docker image %s...\n\n" tip-docker-image))
-        (let* ((default-directory (expand-file-name "tip-server" pkg-dir))
-               (proc (start-process "tip-docker-build" buf
-                                    "docker" "build" "-t" tip-docker-image ".")))
-          (set-process-sentinel
-           proc
-           (lambda (_proc event)
-             (if (string-match-p "finished" event)
-                 (tip-log 'info 'server "Docker image %s built successfully" tip-docker-image)
-               (tip-log 'error 'server "Docker build failed. See *tip-server-docker-build*"))))
-          (tip-log 'info 'server "Building Docker image... (see *tip-server-docker-build*)"))))))
 
 ;;; * process spawn
 
@@ -262,31 +228,6 @@ RUST_BACKTRACE is only consulted when the process actually panics."
        :stderr (tip--server-stderr-buffer)
        :noquery t))))
 
-(defun tip--start-docker-process ()
-  "Start tip-server via Docker with stdio."
-  (let* ((project-dir (or (and buffer-file-name
-                               (file-name-directory buffer-file-name))
-                          default-directory))
-         (local-pkgs (expand-file-name "~/.local/share/typst/packages"))
-         (cache-pkgs (expand-file-name "~/.cache/typst/packages"))
-         (cmd (append (list "docker" "run" "--rm" "-i")
-                      (list "-v" (concat project-dir ":/project"))
-                      (when (file-directory-p local-pkgs)
-                        (list "-v" (concat local-pkgs
-                                           ":/root/.local/share/typst/packages:ro")))
-                      (when (file-directory-p cache-pkgs)
-                        (list "-v" (concat cache-pkgs
-                                           ":/root/.cache/typst/packages:ro")))
-                      (list tip-docker-image))))
-    (make-process
-     :name "tip-server"
-     :command (seq-remove #'null cmd)
-     :connection-type 'pipe
-     :filter #'tip--process-filter
-     :sentinel #'tip--process-sentinel
-     :stderr (tip--server-stderr-buffer)
-     :noquery t)))
-
 ;;;###autoload
 (defun tip-ensure (&optional force)
   "Ensure tip-server is running.  With FORCE, restart it."
@@ -300,9 +241,7 @@ RUST_BACKTRACE is only consulted when the process actually panics."
     (setq tip--response-buffer "")
     (setq tip--server-process
           (condition-case err
-              (if tip-use-docker
-                  (tip--start-docker-process)
-                (tip--start-server-process))
+              (tip--start-server-process)
             (error
              (tip-log 'error 'server "tip-server: %s" (error-message-string err))
              nil)))
@@ -420,7 +359,7 @@ RUST_BACKTRACE=1 is set at process spawn so panics include frames."
 ;;; * request/response
 
 (defvar tip--backend-carrying-methods
-  '("sync" "compile_fragments" "compile_live" "debug_skeleton" "list_project_files")
+  '("sync" "compile_fragments" "debug_skeleton" "list_project_files")
   "Request methods that carry a `backend' field.
 `init', `health_check', and `shutdown' do not — they are backend-agnostic.")
 
@@ -501,6 +440,33 @@ when the server process changed (e.g. after restart) — see
                               (tip--resolve-project-root))))
           (push (cons "project_root" root) params))
         (tip--send-request "sync" params)))))
+
+;;; * compile-fragments helper
+
+(declare-function tip--color-to-hex "tip" (color))
+(declare-function tip-build-preamble "tip" ())
+
+(defun tip--send-compile-fragments (byte-ranges callback &optional uri-override)
+  "Send `compile_fragments' for BYTE-RANGES, call CALLBACK with the result.
+BYTE-RANGES is a list of `(START . END)' byte pairs.  Color and
+preamble are pulled from the current buffer.  URI defaults to
+`tip--current-uri' but can be overridden (e.g. by tip-edit-indirect's
+virtual scheme).  Caller is responsible for `tip--sync-buffer' if it
+needs the buffer state shipped first."
+  (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+        (preamble (tip-build-preamble))
+        (frag-vec (apply #'vector
+                         (mapcar (lambda (r)
+                                   `(("start" . ,(car r))
+                                     ("end" . ,(cdr r))))
+                                 byte-ranges))))
+    (tip--send-request
+     "compile_fragments"
+     `(("uri" . ,(or uri-override (tip--current-uri)))
+       ("fragments" . ,frag-vec)
+       ("color" . ,fg)
+       ("preamble" . ,preamble))
+     callback)))
 
 (provide 'tip-server-proc)
 

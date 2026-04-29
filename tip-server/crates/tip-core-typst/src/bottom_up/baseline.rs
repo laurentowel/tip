@@ -9,8 +9,10 @@
 //! top-down side has its own, structurally different versions in
 //! `top_down/extract.rs`.
 
-use typst::layout::{Frame, FrameItem};
+use typst::layout::{Frame, FrameItem, Point};
 use typst::visualize::Geometry;
+
+use crate::geometry::text_item_frame_bbox;
 
 /// Ink bounds in page-frame coordinates (points, y-down).
 #[derive(Debug, Clone, Copy)]
@@ -62,13 +64,13 @@ fn walk_ink(frame: &Frame, x_off: f64, y_off: f64, bounds: &mut InkBounds) {
         let item_y = y_off + pos.y.to_pt();
         match item {
             FrameItem::Text(text) => {
-                // bbox() returns glyph-coord y; flip: max.y is top
-                // (negative), min.y is bottom (positive).
-                let bbox = text.bbox();
-                bounds.min_x = bounds.min_x.min(item_x + bbox.min.x.to_pt());
-                bounds.max_x = bounds.max_x.max(item_x + bbox.max.x.to_pt());
-                bounds.min_y = bounds.min_y.min(item_y + bbox.max.y.to_pt());
-                bounds.max_y = bounds.max_y.max(item_y + bbox.min.y.to_pt());
+                let (lx, ly, hx, hy) =
+                    text_item_frame_bbox(text, Point::new(typst::layout::Abs::pt(item_x),
+                                                          typst::layout::Abs::pt(item_y)));
+                bounds.min_x = bounds.min_x.min(lx.to_pt());
+                bounds.max_x = bounds.max_x.max(hx.to_pt());
+                bounds.min_y = bounds.min_y.min(ly.to_pt());
+                bounds.max_y = bounds.max_y.max(hy.to_pt());
             }
             FrameItem::Group(group) => {
                 walk_ink(&group.frame, item_x, item_y, bounds);
@@ -147,6 +149,32 @@ pub fn find_font_ascent(frame: &Frame) -> Option<f64> {
             }
             FrameItem::Group(g) => {
                 if let Some(r) = find_font_ascent(&g.frame) {
+                    return Some(r);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract the math-axis height as a fraction of em from the first
+/// text item with an OpenType MATH table.  Used by the bare-fraction
+/// baseline path in `find_baseline_depth`: the math axis is where the
+/// fraction bar sits, and the body baseline is one axis-height below
+/// (in y-down coords, i.e. `math_axis_y + axis_em * body_size_pt`).
+pub fn find_math_axis_em(frame: &Frame) -> Option<f64> {
+    for (_pos, item) in frame.items() {
+        match item {
+            FrameItem::Text(t) => {
+                let ttf = t.font.ttf();
+                let math = ttf.tables().math?;
+                let constants = math.constants?;
+                let em = ttf.units_per_em() as f64;
+                return Some(constants.axis_height().value as f64 / em);
+            }
+            FrameItem::Group(g) => {
+                if let Some(r) = find_math_axis_em(&g.frame) {
                     return Some(r);
                 }
             }

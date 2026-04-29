@@ -190,7 +190,6 @@ it before invoking `tip-show-log'."
 
 ;;; * core API
 
-;;;###autoload
 (defun tip-log (level category fmt &rest args)
   "Record a log entry at LEVEL in CATEGORY with formatted message.
 LEVEL is `debug', `info', `warning', or `error'.  CATEGORY is a
@@ -218,7 +217,6 @@ in *Warnings*.  See `tip-log--display-warning-categories'."
         (tip-log--echo level category msg))
       (tip-log--maybe-warn level category msg))))
 
-;;;###autoload
 (defun tip-log-with-detail (level category fmt detail &rest args)
   "Like `tip-log', but with a multi-line DETAIL string viewable via
 `RET' in the *tip-log* buffer."
@@ -346,37 +344,17 @@ scrubbed summary so the table stays readable and recording stays cheap."
 (defvar tip-log--filter-category nil
   "Buffer-local: only show entries with this category (nil = all).")
 
-(defvar tip-log--filter-file nil
-  "Buffer-local: only show entries whose `file' equals this full path
-(nil = all).")
-
-(defvar tip-log--filter-backend nil
-  "Buffer-local: only show entries with this backend symbol (nil = all).")
-
 (defun tip-log--format-time (epoch)
   (format-time-string "%H:%M:%S.%3N" (seconds-to-time epoch)))
 
 (defun tip-log--filtered-entries ()
   "Return the entry list filtered by the current buffer's filters."
   (let ((lv tip-log--filter-level)
-        (cat tip-log--filter-category)
-        (file tip-log--filter-file)
-        (backend tip-log--filter-backend))
+        (cat tip-log--filter-category))
     (cl-remove-if-not
      (lambda (e)
        (and (or (null lv) (tip-log--passes-p (tip-log-entry-level e) lv))
-            (or (null cat) (eq (tip-log-entry-category e) cat))
-            (or (null file)
-                (let ((ef (tip-log-entry-file e)))
-                  (and ef (string= ef file))))
-            (or (null backend)
-                (let ((eb (tip-log-entry-backend e)))
-                  ;; Tolerate string-form backends from older entries
-                  ;; that pre-date symbol coercion in
-                  ;; `tip-log--current-backend'.
-                  (or (eq eb backend)
-                      (and (stringp eb)
-                           (string= eb (symbol-name backend))))))))
+            (or (null cat) (eq (tip-log-entry-category e) cat))))
      tip-log--entries)))
 
 (defun tip-log--tabulated-entries ()
@@ -416,8 +394,6 @@ scrubbed summary so the table stays readable and recording stays cheap."
     (set-keymap-parent map tabulated-list-mode-map)
     (define-key map (kbd "L") #'tip-log-filter-level)
     (define-key map (kbd "C") #'tip-log-filter-category)
-    (define-key map (kbd "f") #'tip-log-filter-file)
-    (define-key map (kbd "B") #'tip-log-filter-backend)
     (define-key map (kbd "F") #'tip-log-clear-filters)
     (define-key map (kbd "k") #'tip-log-clear)
     (define-key map (kbd "RET") #'tip-log-show-detail)
@@ -468,20 +444,7 @@ Bindings:
            (format " | level≥%s" tip-log--filter-level))
          (when tip-log--filter-category
            (format " | cat=%s" tip-log--filter-category))
-         (when tip-log--filter-backend
-           (format " | be=%s" tip-log--filter-backend))
-         (when tip-log--filter-file
-           (format " | file=%s" tip-log--filter-file))
-         (format "  | %s lvl %s cat %s be %s file %s clr %s clr-flt %s rec %s echo %s detail"
-                 (propertize "L" 'face 'help-key-binding)
-                 (propertize "C" 'face 'help-key-binding)
-                 (propertize "B" 'face 'help-key-binding)
-                 (propertize "f" 'face 'help-key-binding)
-                 (propertize "k" 'face 'help-key-binding)
-                 (propertize "F" 'face 'help-key-binding)
-                 (propertize "m" 'face 'help-key-binding)
-                 (propertize "e" 'face 'help-key-binding)
-                 (propertize "RET" 'face 'help-key-binding)))))
+         (format "  |  L lvl  C cat  k clr  m rec  e echo  RET detail"))))
 
 (defun tip-log--refresh-buffer-if-visible ()
   "Refresh the *tip-log* buffer when it's already showing — keeps a
@@ -500,30 +463,6 @@ visible log live without paying the cost when it's hidden."
   "Return the next level after LEVEL, wrapping around."
   (let* ((rest (cdr (memq level tip-log--levels))))
     (or (car rest) (car tip-log--levels))))
-
-;;;###autoload
-(defun tip-log-set-echo-level (level)
-  "Set `tip-log-echo-level' to LEVEL interactively.
-LEVEL is one of `debug', `info', `warning', or `error'."
-  (interactive
-   (list (intern (completing-read
-                  (format "Echo level (currently %s): " tip-log-echo-level)
-                  '("debug" "info" "warning" "error") nil t))))
-  (setq tip-log-echo-level level)
-  (message "tip-log echo level: %s" level))
-
-;;;###autoload
-(defun tip-log-set-min-level (level)
-  "Set `tip-log-min-level' to LEVEL interactively.
-LEVEL is one of `debug', `info', `warning', or `error'.  Entries
-below this severity are dropped at the source — changing this
-won't surface earlier entries, but it caps the cost going forward."
-  (interactive
-   (list (intern (completing-read
-                  (format "Min recording level (currently %s): " tip-log-min-level)
-                  '("debug" "info" "warning" "error") nil t))))
-  (setq tip-log-min-level level)
-  (message "tip-log min recording level: %s" level))
 
 ;;;###autoload
 (defun tip-log-cycle-echo-level ()
@@ -588,49 +527,11 @@ silences the chatter again."
   (setq-local tip-log--filter-category category)
   (tip-log--refresh))
 
-(defun tip-log-filter-file (file)
-  "Show only entries whose `file' equals FILE.
-Candidates are the full paths of file-associated entries already in
-the log; minibuffer completion (e.g. ido / vertico / fido) handles
-substring / basename matching.  With prefix arg, clear the filter."
-  (interactive
-   (list (if current-prefix-arg
-             nil
-           (completing-read
-            "File: "
-            (delete-dups
-             (cl-loop for e in tip-log--entries
-                      for f = (tip-log-entry-file e)
-                      when f collect f))
-            nil t))))
-  (setq-local tip-log--filter-file
-              (and file (not (string-empty-p file)) file))
-  (tip-log--refresh))
-
-(defun tip-log-filter-backend (backend)
-  "Show only entries whose `backend' is BACKEND.  With prefix arg, clear."
-  (interactive
-   (list (if current-prefix-arg
-             nil
-           (intern (completing-read
-                    "Backend: "
-                    (delete-dups
-                     (cl-loop for e in tip-log--entries
-                              for b = (tip-log-entry-backend e)
-                              when b
-                              collect (cond ((symbolp b) (symbol-name b))
-                                            (t (format "%s" b)))))
-                    nil t)))))
-  (setq-local tip-log--filter-backend backend)
-  (tip-log--refresh))
-
 (defun tip-log-clear-filters ()
   "Drop all active filters in the *tip-log* buffer."
   (interactive)
   (setq-local tip-log--filter-level nil)
   (setq-local tip-log--filter-category nil)
-  (setq-local tip-log--filter-file nil)
-  (setq-local tip-log--filter-backend nil)
   (tip-log--refresh))
 
 (defun tip-log-show-detail ()

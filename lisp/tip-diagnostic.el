@@ -8,9 +8,10 @@
 ;;   `tip-bug-report'   — collect project files + dump doctor output into a
 ;;                        tarball suitable for attaching to an issue.
 ;;
-;; Backend-specific file-enumeration lives in tip-diagnostic-latex.el and
-;; tip-diagnostic-typst.el; both ultimately ask the server (via the
-;; `list_project_files' request) for the connected component.
+;; File enumeration is uniform across backends: the elisp side just
+;; sends `list_project_files' to the server, which dispatches on the
+;; buffer's backend (TexProject for LaTeX, single-URI fallback for
+;; Typst/KaTeX).
 
 ;;; Code:
 
@@ -206,11 +207,18 @@ will still never appear in the buffer."
   :type 'directory
   :group 'tip)
 
-(defvar tip-diagnostic-collectors
-  '((typst . tip-diagnostic-typst-collect)
-    (latex . tip-diagnostic-latex-collect))
-  "Alist mapping backend name symbol → `(URI CALLBACK)' collector.
-The collector must call CALLBACK with `(root . files)'.")
+(defun tip-diagnostic--collect-files (uri callback)
+  "Ask the server for files reachable from URI.
+Calls CALLBACK with `(root . files)' on reply.  Backend-agnostic: the
+server's `list_project_files' handler dispatches on the buffer's
+backend (TexProject for LaTeX, single-URI fallback for Typst/KaTeX)."
+  (tip--send-request
+   "list_project_files"
+   `(("uri" . ,uri))
+   (lambda (result)
+     (let ((root (alist-get 'root result))
+           (files (append (alist-get 'files result) nil)))
+       (funcall callback (cons root files))))))
 
 ;;;###autoload
 (defun tip-bug-report ()
@@ -221,18 +229,13 @@ writes a tarball under `tip-bug-report-directory' along with the
 `tip-doctor' output."
   (interactive)
   (let* ((uri (buffer-file-name))
-         (backend (tip--current-backend-name))
-         (collector (cdr (assq backend tip-diagnostic-collectors))))
+         (backend (tip--current-backend-name)))
     (unless uri
       (user-error "Current buffer is not visiting a file"))
-    (unless collector
-      (user-error "No diagnostic collector registered for backend: %s" backend))
-    ;; Lazy-load the backend module.
-    (require (intern (format "tip-diagnostic-%s" backend)))
-    (funcall (symbol-function collector)
-             uri
-             (lambda (root-and-files)
-               (tip--bug-report-after-collect backend uri root-and-files)))))
+    (tip-diagnostic--collect-files
+     uri
+     (lambda (root-and-files)
+       (tip--bug-report-after-collect backend uri root-and-files)))))
 
 (defun tip--bug-report-after-collect (backend uri root-and-files)
   "Continue `tip-bug-report' with the collector's ROOT-AND-FILES for URI."

@@ -291,18 +291,6 @@ daemon's callback dispatched from a non-GUI context; guard with
           (if (and (numberp sz) (> sz 0)) sz 15))
       15)))
 
-(defun tip--font-metrics ()
-  "Return (ASCENT . DESCENT) in pixels for the default face font.
-Respects `face-remapping-alist'.  Falls back to 80/20 split of
-pixel-size when the face has no real font (daemon without GUI
-frame, batch mode, etc.)."
-  (let* ((font (face-attribute 'default :font))
-         (info (and (fontp font) (font-info (font-xlfd-name font)))))
-    (if (and info (> (length info) 9))
-        (cons (aref info 8) (aref info 9))
-      (let ((px (tip--font-pixel-size)))
-        (cons (round (* px 0.8)) (round (* px 0.2)))))))
-
 ;;; * image spec
 
 (defun tip--resolve-image-face (frag-beg frag-end)
@@ -442,23 +430,10 @@ the image displayed over now-mismatched source."
 FRAGMENT-RESULTS is a vector of alists with start, end, svg,
 height_pt, depth_pt, width_pt, optional error, and optional
 error_detail (severity, message, hint, line_in_fragment, detail).
-Handles narrowed buffers: `byte-to-position' needs full buffer access.
-
-Cascade-suspect errors are demoted to `tip-cascade-face' — see
-`tip--detect-cascade'.  When a cascade is detected, a one-line
-diagnostic is echoed and later errors get minimal visual weight."
-  (let* ((cascade-root (and (fboundp 'tip--detect-cascade)
-                            (tip--detect-cascade fragment-results)))
-         (frag-idx -1))
-    (when cascade-root
-      (let ((errs (seq-filter (lambda (f) (alist-get 'error_detail f))
-                              (append fragment-results nil))))
-        (message "tip: %d/%d errors look like a cascade — fix the first one"
-                 (length errs) (length (append fragment-results nil)))))
+Handles narrowed buffers: `byte-to-position' needs full buffer access."
   (save-restriction
     (widen)
     (seq-doseq (frag fragment-results)
-      (cl-incf frag-idx)
       (let* ((byte-start (alist-get 'start frag))
              (byte-end (alist-get 'end frag))
              (frag-beg (byte-to-position (1+ byte-start)))
@@ -522,14 +497,10 @@ diagnostic is echoed and later errors get minimal visual weight."
               (delete-overlay ov)))
           (let* ((hint-range (tip--locate-error-hint frag-beg frag-end
                                                      err-hint err-line))
-                 (is-cascade-victim
-                  (and cascade-root (/= frag-idx cascade-root)))
-                 (face (cond (is-cascade-victim 'tip-cascade-face)
-                             ((eq err-severity 'warning) 'tip-warning-face)
-                             (t 'tip-error-face)))
-                 (marker (cond (is-cascade-victim "")
-                               ((eq err-severity 'warning) "⚑ ")
-                               (t "⚠ ")))
+                 (face (if (eq err-severity 'warning)
+                           'tip-warning-face
+                         'tip-error-face))
+                 (marker (if (eq err-severity 'warning) "⚑ " "⚠ "))
                  ;; Underline overlay: whole fragment if hint can't be
                  ;; located, else just the hint region.
                  (under-beg (or (car hint-range) frag-beg))
@@ -537,12 +508,7 @@ diagnostic is echoed and later errors get minimal visual weight."
                  (ov (make-overlay under-beg under-end)))
             (overlay-put ov 'tip 'tip)
             (overlay-put ov 'face face)
-            (when is-cascade-victim
-              (overlay-put ov 'tip-cascade t))
-            (overlay-put ov 'before-string
-                         (if (string-empty-p marker)
-                             nil
-                           (propertize marker 'face face)))
+            (overlay-put ov 'before-string (propertize marker 'face face))
             (overlay-put ov 'help-echo
                          (if err-full
                              (format "%s\n\n%s"
@@ -624,7 +590,7 @@ diagnostic is echoed and later errors get minimal visual weight."
               (overlay-put ov 'tip-frag-end frag-end)
               (overlay-put ov 'help-echo (or err-message err)))
             (when (and is-single-line-display tip-display-indicator)
-              (overlay-put ov 'before-string tip-display-indicator)))))))))
+              (overlay-put ov 'before-string tip-display-indicator))))))))
 
 ;;; * font change: rescale image specs without recompile
 ;;
@@ -685,18 +651,11 @@ rebuilds the SVG image spec."
   "Re-resolve `tip-image-face' on every tip overlay in this buffer.
 Use after structural edits (e.g. removing a `\\fbox{...}' wrapper)
 that change the surrounding face but leave the math fragment
-itself intact.  No recompile.  Also runs as `:after' advice on
-`font-lock-update' (`C-x x f') for `tip-mode' buffers."
+itself intact.  No recompile."
   (interactive)
   (when tip-image-face
     (dolist (ov (overlays-in (point-min) (point-max)))
       (tip--refresh-overlay-face ov))))
-
-(defun tip--refresh-on-font-lock-update (&rest _)
-  (when (bound-and-true-p tip-mode)
-    (tip-refresh-overlay-faces)))
-
-(advice-add 'font-lock-update :after #'tip--refresh-on-font-lock-update)
 
 (defun tip--on-font-change (&rest _)
   "Update all tip buffers after a font change.

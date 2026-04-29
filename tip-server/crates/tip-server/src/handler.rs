@@ -23,6 +23,25 @@ use crate::latex_backend::LatexBackend;
 #[cfg(feature = "typst")]
 use crate::typst_backend::TypstBackend;
 
+/// Dispatch a method call to the backend named in `params.backend`.
+/// Each arm is gated by the corresponding feature flag; missing
+/// backends fall through to `not_compiled_in`.
+macro_rules! dispatch {
+    ($self:expr, $params:expr, $method:ident) => {{
+        let params = $params;
+        #[allow(unreachable_patterns)]
+        match params.backend {
+            #[cfg(feature = "typst")]
+            BackendId::Typst => $self.typst.$method(params),
+            #[cfg(feature = "latex")]
+            BackendId::Latex => $self.latex.$method(params),
+            #[cfg(feature = "katex")]
+            BackendId::Katex => $self.katex.$method(params),
+            other => not_compiled_in(other),
+        }
+    }};
+}
+
 pub struct Handler {
     #[cfg(feature = "typst")]
     typst: TypstBackend,
@@ -78,14 +97,17 @@ impl Handler {
                     }
                 }
             }
-            Request::Sync(params) => self.dispatch_sync(params),
-            Request::CompileFragments(params) => self.dispatch_compile_fragments(params),
-            Request::CompileLive(params) => self.dispatch_compile_live(params),
-            Request::DebugSkeleton(params) => self.dispatch_debug_skeleton(params),
+            Request::Sync(params) => dispatch!(self, params, handle_sync),
+            Request::CompileFragments(params) => {
+                dispatch!(self, params, handle_compile_fragments)
+            }
+            Request::DebugSkeleton(params) => dispatch!(self, params, handle_debug_skeleton),
             Request::HealthCheck => ResponseResult::Health {
                 report: diagnostics::collect_report(self.typst_health_input()),
             },
-            Request::ListProjectFiles(params) => self.dispatch_list_project_files(params),
+            Request::ListProjectFiles(params) => {
+                dispatch!(self, params, handle_list_project_files)
+            }
             Request::Shutdown => {
                 self.shutdown = true;
                 ResponseResult::Shutdown { ok: true }
@@ -107,85 +129,18 @@ impl Handler {
     }
 }
 
-// Per-method dispatchers.  Each is a small `match` over `BackendId`
-// where the arm exists only if the corresponding feature is enabled;
-// the catch-all returns `not compiled in`.
-
 fn not_compiled_in(b: BackendId) -> ResponseResult {
     ResponseResult::Error {
         error: format!("backend {:?} not compiled in this build", b),
     }
 }
 
-impl Handler {
-    fn dispatch_sync(&mut self, params: SyncParams) -> ResponseResult {
-        #[allow(unreachable_patterns)]
-        match params.backend {
-            #[cfg(feature = "typst")]
-            BackendId::Typst => self.typst.handle_sync(params),
-            #[cfg(feature = "latex")]
-            BackendId::Latex => self.latex.handle_sync(params),
-            #[cfg(feature = "katex")]
-            BackendId::Katex => self.katex.handle_sync(params),
-            other => not_compiled_in(other),
-        }
-    }
-
-    fn dispatch_compile_fragments(
-        &mut self,
-        params: CompileFragmentsParams,
-    ) -> ResponseResult {
-        #[allow(unreachable_patterns)]
-        match params.backend {
-            #[cfg(feature = "typst")]
-            BackendId::Typst => self.typst.handle_compile_fragments(params),
-            #[cfg(feature = "latex")]
-            BackendId::Latex => self.latex.handle_compile_fragments(params),
-            #[cfg(feature = "katex")]
-            BackendId::Katex => self.katex.handle_compile_fragments(params),
-            other => not_compiled_in(other),
-        }
-    }
-
-    fn dispatch_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
-        #[allow(unreachable_patterns)]
-        match params.backend {
-            #[cfg(feature = "typst")]
-            BackendId::Typst => self.typst.handle_compile_live(params),
-            #[cfg(feature = "latex")]
-            BackendId::Latex => self.latex.handle_compile_live(params),
-            #[cfg(feature = "katex")]
-            BackendId::Katex => self.katex.handle_compile_live(params),
-            other => not_compiled_in(other),
-        }
-    }
-
-    fn dispatch_debug_skeleton(&mut self, params: DebugSkeletonParams) -> ResponseResult {
-        #[allow(unreachable_patterns)]
-        match params.backend {
-            #[cfg(feature = "typst")]
-            BackendId::Typst => self.typst.handle_debug_skeleton(params),
-            #[cfg(feature = "latex")]
-            BackendId::Latex => self.latex.handle_debug_skeleton(params),
-            #[cfg(feature = "katex")]
-            BackendId::Katex => self.katex.handle_debug_skeleton(params),
-            other => not_compiled_in(other),
-        }
-    }
-
-    fn dispatch_list_project_files(
-        &mut self,
-        params: ListProjectFilesParams,
-    ) -> ResponseResult {
-        #[allow(unreachable_patterns)]
-        match params.backend {
-            #[cfg(feature = "typst")]
-            BackendId::Typst => self.typst.handle_list_project_files(params),
-            #[cfg(feature = "latex")]
-            BackendId::Latex => self.latex.handle_list_project_files(params),
-            #[cfg(feature = "katex")]
-            BackendId::Katex => self.katex.handle_list_project_files(params),
-            other => not_compiled_in(other),
-        }
+/// Build a `ProjectFiles` response for a backend with no dependency
+/// graph: the project consists of the URI alone, rooted at `root`.
+/// Used by Typst (after a marker walk) and KaTeX (parent dir).
+pub(crate) fn single_file_project(root: std::path::PathBuf, uri: String) -> ResponseResult {
+    ResponseResult::ProjectFiles {
+        root: root.display().to_string(),
+        files: vec![uri],
     }
 }

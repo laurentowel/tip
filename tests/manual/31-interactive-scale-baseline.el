@@ -34,7 +34,7 @@
 ;; Wait for initial render
 (run-with-timer 1.5 nil
   (lambda ()
-    (tip-send-all)
+    (tip-render-all)
     (message "TIP: rendered. Use C-c + / C-c - to adjust scale. Current: %.2f" tip-scale)))
 
 ;; Scale adjustment keybindings
@@ -43,7 +43,7 @@
   (interactive)
   (setq tip-scale (+ tip-scale 0.05))
   (tip-clear-buffer)
-  (tip-send-all)
+  (tip-render-all)
   (message "tip-scale: %.2f" tip-scale))
 
 (defun tip-scale-down ()
@@ -51,7 +51,7 @@
   (interactive)
   (setq tip-scale (max 0.1 (- tip-scale 0.05)))
   (tip-clear-buffer)
-  (tip-send-all)
+  (tip-render-all)
   (message "tip-scale: %.2f" tip-scale))
 
 (defun tip-scale-set (val)
@@ -59,7 +59,7 @@
   (interactive "nScale: ")
   (setq tip-scale val)
   (tip-clear-buffer)
-  (tip-send-all)
+  (tip-render-all)
   (message "tip-scale: %.2f" tip-scale))
 
 (defun tip-scale-report ()
@@ -73,7 +73,7 @@
   (interactive)
   (setq tip-baseline-offset (+ tip-baseline-offset 1))
   (tip-clear-buffer)
-  (tip-send-all)
+  (tip-render-all)
   (message "tip-baseline-offset: %d (scale: %.2f)" tip-baseline-offset tip-scale))
 
 (defun tip-baseline-down ()
@@ -81,7 +81,7 @@
   (interactive)
   (setq tip-baseline-offset (- tip-baseline-offset 1))
   (tip-clear-buffer)
-  (tip-send-all)
+  (tip-render-all)
   (message "tip-baseline-offset: %d (scale: %.2f)" tip-baseline-offset tip-scale))
 
 (define-key typst-ts-mode-map (kbd "C-c =") #'tip-scale-up)

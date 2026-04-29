@@ -7,9 +7,8 @@
 ;; Minimal childframe for displaying SVG/image previews near the cursor.
 ;; Inspired by eldoc-box, but specialized for image display.
 ;;
-;; Provides two display modes (customizable via `tip-childframe-position'):
-;;   - 'at-point: childframe follows cursor (like eldoc-box-hover-at-point-mode)
-;;   - 'corner: childframe stays at window corner (like eldoc-box-hover-mode)
+;; The childframe pins to a configurable corner of the parent frame
+;; (`tip-childframe-position').
 ;;
 ;; Usage:
 ;;   (tip-childframe-show svg-data)   ; show SVG
@@ -32,11 +31,8 @@
   "Face for the childframe body.")
 
 (defcustom tip-childframe-position 'top-right
-  "Where to display the childframe.
-`at-point' follows the cursor.
-`top-right', `top-left', `bottom-right', `bottom-left' pin to a corner."
-  :type '(choice (const :tag "Follow cursor" at-point)
-                 (const :tag "Top-right corner" top-right)
+  "Which corner of the parent frame to pin the childframe to."
+  :type '(choice (const :tag "Top-right corner" top-right)
                  (const :tag "Top-left corner" top-left)
                  (const :tag "Bottom-right corner" bottom-right)
                  (const :tag "Bottom-left corner" bottom-left))
@@ -68,13 +64,6 @@ so the preview grows with the buffer font."
   :type 'float
   :group 'tip-childframe)
 
-(defcustom tip-childframe-allow-overflow nil
-  "If non-nil, allow the childframe to extend outside the Emacs frame.
-Uses an undecorated top-level frame instead of a child frame.
-Useful for large equations that don't fit inside the Emacs window."
-  :type 'boolean
-  :group 'tip-childframe)
-
 (defvar tip-childframe--frame nil
   "The childframe for preview.")
 
@@ -103,63 +92,18 @@ Useful for large equations that don't fit inside the Emacs window."
 
 ;;; * positioning
 
-(defun tip-childframe--point-position ()
-  "Return (X . Y) pixel position of point relative to the native frame.
-Uses the same technique as eldoc-box for accurate positioning."
-  (let* ((pos (pos-visible-in-window-p (point) nil t))
-         (x (or (car pos) 0))
-         (y (or (cadr pos) 0))
-         (edges (window-edges nil nil nil t))
-         (en (frame-char-width)))
-    (cons (+ x (car edges) en)
-          (+ y (cadr edges)))))
-
-(defun tip-childframe--at-point-position (width height)
-  "Compute (X . Y) to place childframe at bottom-right of cursor.
-The upper-left of the childframe anchors to the bottom-right of the cursor.
-Clamps to keep the childframe inside the frame."
-  (let* ((pt (tip-childframe--point-position))
-         (x (car pt))
-         (y (cdr pt))
-         (em (frame-char-height))
-         (frame-w (frame-inner-width))
-         (frame-h (frame-inner-height))
-         ;; Anchor: bottom-right of cursor = (x, y + em)
-         (cx x)
-         (cy (+ y em)))
-    ;; Clamp: keep childframe inside frame
-    (cons (if (> (+ cx width) frame-w)
-              (max 0 (- frame-w width 16))
-            cx)
-          (if (> (+ cy height) frame-h)
-              ;; No room below: place above cursor
-              (max 0 (- y height))
-            cy))))
-
-(defun tip-childframe--corner-position (width height)
-  "Compute (X . Y) position at the configured corner.
-Respects `tip-childframe-offset' for padding from edges.
-In overflow mode, returns screen-absolute coordinates."
-  (pcase-let ((`(,off-l ,off-r ,off-t) tip-childframe-offset))
-    (let* ((frame-w (frame-outer-width))
-           (frame-h (frame-outer-height))
-           ;; In overflow mode, offset by parent frame's screen position
-           (frame-x (if tip-childframe-allow-overflow
-                        (car (frame-position)) 0))
-           (frame-y (if tip-childframe-allow-overflow
-                        (cdr (frame-position)) 0)))
-      (pcase tip-childframe-position
-        ('top-right    (cons (+ frame-x (- frame-w width off-r)) (+ frame-y off-t)))
-        ('top-left     (cons (+ frame-x off-l) (+ frame-y off-t)))
-        ('bottom-right (cons (+ frame-x (- frame-w width off-r)) (+ frame-y (- frame-h height off-t))))
-        ('bottom-left  (cons (+ frame-x off-l) (+ frame-y (- frame-h height off-t))))
-        (_             (cons (+ frame-x (- frame-w width off-r)) (+ frame-y off-t)))))))
-
 (defun tip-childframe--position (width height)
-  "Compute position based on `tip-childframe-position'."
-  (if (eq tip-childframe-position 'at-point)
-      (tip-childframe--at-point-position width height)
-    (tip-childframe--corner-position width height)))
+  "Compute (X . Y) at the configured corner.
+Respects `tip-childframe-offset' for padding from edges."
+  (pcase-let ((`(,off-l ,off-r ,off-t) tip-childframe-offset))
+    (let ((frame-w (frame-outer-width))
+          (frame-h (frame-outer-height)))
+      (pcase tip-childframe-position
+        ('top-right    (cons (- frame-w width off-r) off-t))
+        ('top-left     (cons off-l off-t))
+        ('bottom-right (cons (- frame-w width off-r) (- frame-h height off-t)))
+        ('bottom-left  (cons off-l (- frame-h height off-t)))
+        (_             (cons (- frame-w width off-r) off-t))))))
 
 ;;; * frame management
 
@@ -180,24 +124,16 @@ In overflow mode, returns screen-absolute coordinates."
 (defun tip-childframe--get-frame (buf)
   "Return the childframe displaying BUF, creating if needed."
   (let* ((params (append tip-childframe--frame-parameters
-                         (if tip-childframe-allow-overflow
-                             ;; Top-level undecorated frame — can overflow
-                             `((parent-frame . nil)
-                               (z-group . above)
-                               (default-minibuffer-frame . ,(selected-frame))
-                               (minibuffer . ,(minibuffer-window)))
-                           ;; Normal child frame — clipped to parent
-                           `((parent-frame . ,(selected-frame))
-                             (default-minibuffer-frame . ,(selected-frame))
-                             (minibuffer . ,(minibuffer-window))))))
+                         `((parent-frame . ,(selected-frame))
+                           (default-minibuffer-frame . ,(selected-frame))
+                           (minibuffer . ,(minibuffer-window)))))
          window frame)
     (if (and tip-childframe--frame
              (frame-live-p tip-childframe--frame))
         (progn
           (setq frame tip-childframe--frame)
           (setq window (frame-selected-window frame))
-          (unless tip-childframe-allow-overflow
-            (set-frame-parameter frame 'parent-frame (selected-frame))))
+          (set-frame-parameter frame 'parent-frame (selected-frame)))
       ;; Create new frame
       (setq window (display-buffer-in-child-frame
                     buf `((child-frame-parameters . ,params))))
@@ -243,12 +179,8 @@ preview scales with font size rather than the SVG's native 11pt."
                     :scale scale
                     :ascent 'center))
          (size (image-size img t))
-         (w (if tip-childframe-allow-overflow
-                 (+ (car size) 4)
-               (min scaled-max-w (+ (car size) 4))))
-         (h (if tip-childframe-allow-overflow
-                 (+ (cdr size) 4)
-               (min scaled-max-h (+ (cdr size) 4)))))
+         (w (min scaled-max-w (+ (car size) 4)))
+         (h (min scaled-max-h (+ (cdr size) 4))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)

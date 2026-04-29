@@ -93,40 +93,6 @@ fn compile_fragment_returns_svg() {
 }
 
 #[test]
-fn compile_live_returns_svg() {
-    let mut server = TestServer::spawn(&bin_path());
-
-    server.request(&RequestMessage {
-        id: 1,
-        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None,
-            uri: "/test.typ".into(),
-            content: "$x^2$".into(),
-        }),
-    });
-
-    let resp = server.request(&RequestMessage {
-        id: 2,
-        request: Request::CompileLive(CompileLiveParams { backend: BackendId::Typst,
-            uri: "/test.typ".into(),
-            start: 0,
-            end: 5,
-            color: "#000000".into(),
-            page_setup: None,
-            preamble: None,
-        }),
-    });
-    match &resp.result {
-        ResponseResult::Live { fragment } => {
-            assert!(fragment.svg.contains("<svg"), "should contain SVG");
-            assert!(fragment.height_pt > 0.0, "height should be positive");
-        }
-        other => panic!("expected live result, got {:?}", other),
-    }
-
-    server.shutdown();
-}
-
-#[test]
 fn multiple_fragments_in_one_batch() {
     let mut server = TestServer::spawn(&bin_path());
 

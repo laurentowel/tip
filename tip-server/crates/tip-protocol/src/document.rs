@@ -1,6 +1,15 @@
+//! In-memory document store keyed by URI.
+//!
+//! Every backend tracks an editor-synced copy of each open buffer, so
+//! `compile_fragments` calls can byte-index into the source.  All
+//! backends use the same `HashMap<String, String>` shape; this module
+//! is the single home so the typst, latex, and katex crates share one
+//! impl + one set of tests.
+
 use std::collections::HashMap;
 
-/// Manages document state synced from the editor.
+/// Editor-synced documents keyed by URI.  `sync(uri, content)` inserts
+/// or replaces; `get(uri)` returns a borrow of the current content.
 #[derive(Debug, Default)]
 pub struct DocumentStore {
     documents: HashMap<String, String>,
@@ -16,14 +25,9 @@ impl DocumentStore {
         self.documents.insert(uri, content);
     }
 
-    /// Get the content for a document URI.
+    /// Borrow the content for a document URI, or `None` if not synced.
     pub fn get(&self, uri: &str) -> Option<&str> {
-        self.documents.get(uri).map(|s| s.as_str())
-    }
-
-    /// Check if a document is tracked.
-    pub fn contains(&self, uri: &str) -> bool {
-        self.documents.contains_key(uri)
+        self.documents.get(uri).map(String::as_str)
     }
 }
 

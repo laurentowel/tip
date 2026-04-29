@@ -136,13 +136,58 @@ fn baseline_depth_ordering() {
     eprintln!("depth ordering: simple={:.2} sub={:.2} frac={:.2}",
               simple.depth_pt, sub.depth_pt, frac.depth_pt);
 
-    // Subscript should have more depth than simple
-    assert!(sub.depth_pt > simple.depth_pt,
-            "subscript depth ({:.2}) should exceed simple ({:.2})",
+    // Subscript should have noticeably more depth than simple — its
+    // glyph really descends below the baseline.
+    assert!(sub.depth_pt > simple.depth_pt + 0.5,
+            "subscript depth ({:.2}) should exceed simple ({:.2}) by >0.5pt",
             sub.depth_pt, simple.depth_pt);
 
-    // Fraction should have more depth than simple
-    assert!(frac.depth_pt > simple.depth_pt,
-            "fraction depth ({:.2}) should exceed simple ({:.2})",
+    // `compile_fragment` rewraps `$frac(a, b)$` as `$ frac(a, b) $`,
+    // i.e. display math.  Strategy 2 picks the lower row's baseline
+    // (denominator), so the visual baseline lands at the bottom of
+    // the ink and depth collapses to the crop pad — same magnitude
+    // as a single-letter fragment.  Assertion is "not significantly
+    // less than simple", reflecting that reality.
+    assert!(frac.depth_pt >= simple.depth_pt,
+            "fraction depth ({:.2}) should be >= simple ({:.2})",
             frac.depth_pt, simple.depth_pt);
+}
+
+#[test]
+fn baseline_bare_fraction_inline() {
+    // Regression: `$1/a$` (and `$a/b$` etc) used to use a font-ascent
+    // fallback that placed baseline_y too far below body-baseline,
+    // causing the rendered image to float visually above surrounding
+    // text.  Fix: use math-axis from the font's MATH table.
+    //
+    // What we assert: depth_pt is non-trivial.  If baseline_y is
+    // chosen too low, the rendered image's baseline ends up at the
+    // bottom of the ink and depth_pt collapses toward zero.
+    // Use scoped compilation so the fragment stays inline ($..$);
+    // compile_fragment adds spaces around the inner content, which
+    // would convert it to display math and the bug would not apply.
+    let doc = "Some text with $1/a$ inline.";
+    let start = doc.find('$').unwrap();
+    let end = doc.rfind('$').unwrap() + 1;
+    let mut world = TipWorld::new();
+    let frac = BottomUpCompiler::compile_fragment_scoped(
+        &mut world, doc, start, end, "#000000", None, None,
+    ).unwrap();
+    write_svg("bl_bare_fraction", &frac.svg);
+    eprintln!("$1/a$: h={:.2} d={:.2}", frac.height_pt, frac.depth_pt);
+    assert!(frac.depth_pt >= 1.5,
+            "$1/a$ depth too small ({:.2}pt); baseline_y likely chosen too low",
+            frac.depth_pt);
+
+    let doc = "Some text with $a/b$ inline.";
+    let start = doc.find('$').unwrap();
+    let end = doc.rfind('$').unwrap() + 1;
+    let mut world = TipWorld::new();
+    let ab = BottomUpCompiler::compile_fragment_scoped(
+        &mut world, doc, start, end, "#000000", None, None,
+    ).unwrap();
+    eprintln!("$a/b$: h={:.2} d={:.2}", ab.height_pt, ab.depth_pt);
+    assert!(ab.depth_pt >= 1.5,
+            "$a/b$ depth too small ({:.2}pt); baseline_y likely chosen too low",
+            ab.depth_pt);
 }

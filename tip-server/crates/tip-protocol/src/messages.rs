@@ -116,8 +116,6 @@ pub enum Request {
     Sync(SyncParams),
     #[serde(rename = "compile_fragments")]
     CompileFragments(CompileFragmentsParams),
-    #[serde(rename = "compile_live")]
-    CompileLive(CompileLiveParams),
     #[serde(rename = "debug_skeleton")]
     DebugSkeleton(DebugSkeletonParams),
     #[serde(rename = "health_check")]
@@ -202,20 +200,6 @@ pub struct CompileFragmentsParams {
     pub display_math_width: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CompileLiveParams {
-    #[serde(default)]
-    pub backend: BackendId,
-    pub uri: String,
-    pub start: usize,
-    pub end: usize,
-    pub color: String,
-    #[serde(default)]
-    pub page_setup: Option<String>,
-    #[serde(default)]
-    pub preamble: Option<String>,
-}
-
 /// Envelope wrapping a request with an ID.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RequestMessage {
@@ -248,11 +232,6 @@ pub enum ResponseResult {
     Sync { ok: bool },
     #[serde(rename = "fragments")]
     Fragments { fragments: Vec<FragmentResult> },
-    #[serde(rename = "live")]
-    Live {
-        #[serde(flatten)]
-        fragment: FragmentResult,
-    },
     #[serde(rename = "shutdown")]
     Shutdown { ok: bool },
     #[serde(rename = "debug_skeleton")]

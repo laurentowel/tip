@@ -1,6 +1,5 @@
-pub mod baseline;
 pub mod bottom_up;
-pub mod document;
+pub(crate) mod geometry;
 pub mod top_down;
 pub mod world;
 

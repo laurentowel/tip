@@ -12,3 +12,6 @@ tests/bench_*.typ
 tests/emacs-sandbox/
 tip-server/target/
 tip-server/test-output/
+
+# arxiv-sampler binary artefacts
+arxiv-sampler/regressions/*.tar.gz

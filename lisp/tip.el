@@ -41,17 +41,6 @@
 
 ;;; * custom settings
 
-(defcustom tip-enable-debug nil
-  "Obsolete.  Set `tip-log-min-level' to `debug' instead.
-Kept as a defvar so old user configs don't break; reading or setting
-it has no effect."
-  :type 'boolean
-  :group 'tip)
-(make-obsolete-variable
- 'tip-enable-debug
- "set `tip-log-min-level' to `debug' to see protocol traces in *tip-log*."
- "0.2")
-
 (defcustom tip-echo-errors nil
   "When non-nil, run an idle-timer that compiles the fragment at point
 and surfaces compilation errors via `tip-log'.  Behavioural toggle
@@ -106,16 +95,6 @@ Nil means \"let the server auto-discover\"."
   "Path to the tip-server binary.
 If nil, auto-detected from PATH, local build, or user prompted."
   :type '(choice (const :tag "Auto-detect" nil) string)
-  :group 'tip)
-
-(defcustom tip-use-docker nil
-  "If non-nil, run tip-server via Docker instead of a local binary."
-  :type 'boolean
-  :group 'tip)
-
-(defcustom tip-docker-image "tip-server-typst:latest"
-  "Docker image name for tip-server."
-  :type 'string
   :group 'tip)
 
 (defcustom tip-display-indicator
@@ -197,16 +176,6 @@ leaves any tip overlay.  Set to nil to disable this swap."
   :type '(choice (const :tag "Don't change cursor" nil)
                  (sexp :tag "Cursor type while inside overlay"))
   :group 'tip)
-
-(defcustom tip-verbose nil
-  "Obsolete.  Render progress is always logged; control echo
-visibility via `tip-log-echo-level' (default `info')."
-  :type 'boolean
-  :group 'tip)
-(make-obsolete-variable
- 'tip-verbose
- "render progress always logs; tune `tip-log-echo-level' for echo-area mirroring."
- "0.2")
 
 (defcustom tip-cache-max-entries 500
   "Maximum fragments kept in the buffer-local compile cache.
@@ -389,13 +358,6 @@ thin-bar cursor that never reveals source\" mis-state."
   (tip-send-region (window-start) (window-end) (point)))
 
 ;;;###autoload
-(defun tip-send-all ()
-  "Render the whole buffer."
-  (interactive)
-  (tip--ensure-mode)
-  (tip-send-region (point-min) (point-max)))
-
-;;;###autoload
 (defun tip-copy-svg-at-point ()
   "Copy the SVG data of the tip overlay at point to the kill ring.
 Works even when the overlay is open (display cleared)."
@@ -413,93 +375,6 @@ Works even when the overlay is open (display cleared)."
                 (message "SVG copied (%d bytes)" (length svg)))
             (message "Overlay has no SVG data (not yet compiled?)")))
       (message "No tip overlay at point"))))
-
-;;;###autoload
-(defun tip-dump-compile-inputs (&optional dest)
-  "Dump everything the server would compile for this buffer.
-DEST is the directory to write into (defaults to a timestamped
-subdir of `temporary-file-directory').  Useful for filing bug
-reports, building regression tests, and just seeing what's going
-into the sausage.
-
-LaTeX buffers:
-  preamble.tex      — preamble the server would use, including any
-                      multi-file project walk.
-  fragment-NNN.tex  — raw text of each collected fragment.
-
-Typst buffers:
-  skeleton-NNN.typ  — the per-fragment scoped skeleton (what
-                      `tip-show-skeleton-at-point' displays), one
-                      file per fragment.
-
-Prints the dump directory when done so you can copy-paste it."
-  (interactive
-   (list (read-directory-name
-          "Dump to: "
-          (expand-file-name
-           (format "tip-dump-%s-%s/"
-                   (or (and buffer-file-name
-                            (file-name-base buffer-file-name))
-                       "buffer")
-                   (format-time-string "%Y%m%d-%H%M%S"))
-           temporary-file-directory))))
-  (unless (tip-active-backend)
-    (user-error "tip-dump-compile-inputs: no tip backend active"))
-  (make-directory dest t)
-  (let* ((backend-name (tip-backend-name (tip-active-backend)))
-         (frags (tip-collect-fragments (point-min) (point-max)))
-         (pending (length frags))
-         (completed 0))
-    (when (zerop pending)
-      (user-error "No fragments detected"))
-    (tip--sync-buffer)
-    (cond
-     ((eq backend-name 'latex)
-      ;; One debug_skeleton call for the preamble (doc-wide).
-      (tip--send-request
-       "debug_skeleton"
-       `(("uri" . ,(tip--current-uri))
-         ("start" . 0) ("end" . 0))
-       (lambda (result)
-         (let ((src (or (alist-get 'source result) "")))
-           (with-temp-file (expand-file-name "preamble.tex" dest)
-             (insert src)))))
-      ;; Fragment text straight from the buffer — no server round-trip.
-      (let ((i 0))
-        (dolist (f frags)
-          (cl-incf i)
-          (let* ((bs (cdr (assoc "start" f)))
-                 (be (cdr (assoc "end" f)))
-                 (beg (byte-to-position (1+ bs)))
-                 (end (byte-to-position (1+ be)))
-                 (text (buffer-substring-no-properties beg end)))
-            (with-temp-file (expand-file-name
-                             (format "fragment-%03d.tex" i) dest)
-              (insert text)))))
-      (message "tip-dump: wrote preamble + %d fragments to %s"
-               (length frags) dest))
-     ((eq backend-name 'typst)
-      (let ((i 0))
-        (dolist (f frags)
-          (cl-incf i)
-          (let ((idx i)
-                (bs (cdr (assoc "start" f)))
-                (be (cdr (assoc "end" f))))
-            (tip--send-request
-             "debug_skeleton"
-             `(("uri" . ,(tip--current-uri))
-               ("start" . ,bs) ("end" . ,be))
-             (lambda (result)
-               (let ((src (or (alist-get 'source result) "")))
-                 (with-temp-file (expand-file-name
-                                  (format "skeleton-%03d.typ" idx) dest)
-                   (insert src))
-                 (cl-incf completed)
-                 (when (= completed pending)
-                   (message "tip-dump: wrote %d skeletons to %s"
-                            pending dest)))))))))
-     (t (user-error "tip-dump-compile-inputs: backend %S not supported"
-                    backend-name)))))
 
 (defun tip--show-debug-skeleton (byte-start byte-end buffer-name init-mode)
   "Send `debug_skeleton' for byte range and show the result.
@@ -694,103 +569,6 @@ keeping previews up to date as you scroll through a large file."
       (cancel-timer tip-auto--timer)
       (setq tip-auto--timer nil))))
 
-;;; * avy-style jump to fragment
-
-(defcustom tip-jump-keys "asdfjkl;ghqweruioptyzxcvbnm"
-  "Characters used for avy-style jump labels, in priority order.
-Home row first for qwerty ergonomics."
-  :type 'string
-  :group 'tip)
-
-;;;###autoload
-(defun tip-jump ()
-  "Jump to a math/figure fragment using avy-style tree selection.
-Shows labels on visible fragments. Press a key to narrow candidates;
-if one remains, jump. Otherwise show next level and read again."
-  (interactive)
-  (let* ((ovs (seq-filter
-               (lambda (ov)
-                 (and (eq (overlay-get ov 'tip) 'tip)
-                      (overlay-get ov 'display)
-                      (let ((start (overlay-start ov)))
-                        (and (>= start (window-start))
-                             (<= start (window-end))))))
-               (overlays-in (point-min) (point-max))))
-         (n (length ovs)))
-    (when (= n 0)
-      (user-error "No visible fragments to jump to"))
-    (when (= n 1)
-      (goto-char (overlay-start (car ovs)))
-      (preview-toggle-open-at-point)
-      (cl-return-from tip-jump))
-    ;; Build tree paths: assign each candidate a sequence of keys
-    (let* ((keys tip-jump-keys)
-           (nkeys (length keys))
-           (paths (tip-jump--build-paths n nkeys))
-           (candidates (cl-mapcar #'cons paths ovs)))
-      (tip-jump--select candidates keys))))
-
-(defun tip-jump--build-paths (n nkeys)
-  "Build N tree paths using NKEYS branching factor.
-Returns a list of strings, each a sequence of key indices."
-  (let ((depth (max 1 (ceiling (log n nkeys))))
-        (paths nil))
-    ;; Generate paths breadth-first
-    (dotimes (i n)
-      (let ((path "")
-            (idx i))
-        (dotimes (_ depth)
-          (setq path (concat (string (% idx nkeys)) path))
-          (setq idx (/ idx nkeys)))
-        (push path paths)))
-    (nreverse paths)))
-
-(defun tip-jump--select (candidates keys)
-  "Interactively narrow CANDIDATES by reading keys.
-Each candidate is (PATH . OVERLAY) where PATH is a string of key indices."
-  (let ((label-ovs nil))
-    (unwind-protect
-        (catch 'done
-          (while (> (length candidates) 1)
-            ;; Show current labels
-            (dolist (lov label-ovs) (delete-overlay lov))
-            (setq label-ovs nil)
-            (dolist (cand candidates)
-              (let* ((path (car cand))
-                     (ov (cdr cand))
-                     ;; Show the first unconsumed key as the label
-                     (key-idx (aref path 0))
-                     (label (string (aref keys key-idx)))
-                     (label-ov (make-overlay (overlay-start ov)
-                                             (1+ (overlay-start ov)))))
-                (overlay-put label-ov 'display
-                             (propertize (format " %s " label)
-                                         'face '(:background "#ff6600"
-                                                 :foreground "white"
-                                                 :weight bold)))
-                (overlay-put label-ov 'priority 100)
-                (push label-ov label-ovs)))
-            (redisplay t)
-            ;; Read one key
-            (let* ((char (read-char "tip-jump:"))
-                   (key-pos (cl-position char keys)))
-              (unless key-pos
-                (throw 'done nil)) ;; invalid key, cancel
-              ;; Filter candidates matching this key at position 0
-              (setq candidates
-                    (cl-loop for cand in candidates
-                             when (= (aref (car cand) 0) key-pos)
-                             collect (cons (substring (car cand) 1)
-                                          (cdr cand))))))
-          ;; One candidate left
-          (when (= (length candidates) 1)
-            (let ((target-ov (cdar candidates)))
-              (goto-char (overlay-start target-ov))
-              (preview-toggle-open-at-point))))
-      ;; Cleanup
-      (dolist (lov label-ovs)
-        (delete-overlay lov)))))
-
 ;;; * stale overlay cleanup
 
 (defun tip--cleanup-stale-overlays (beg end _len)
@@ -893,28 +671,26 @@ compile cycle replaces them in place."
 (defun tip-server-info ()
   "Show tip-server status: binary path, modification time, PID."
   (interactive)
-  (let ((exe (unless tip-use-docker (tip--find-server)))
+  (let ((exe (tip--find-server))
         (alive (and tip--server-process (process-live-p tip--server-process))))
     (message "tip-server: %s | binary: %s | %s"
              (if alive
                  (format "running (pid %d)" (process-id tip--server-process))
                "not running")
-             (if tip-use-docker
-                 (format "docker:%s" tip-docker-image)
-               (if exe
-                   (let* ((mtime (file-attribute-modification-time
-                                  (file-attributes exe)))
-                          (ago (- (float-time) (float-time mtime)))
-                          (ago-str (cond
-                                    ((< ago 60) (format "%ds ago" (round ago)))
-                                    ((< ago 3600) (format "%dm ago" (round (/ ago 60))))
-                                    ((< ago 86400) (format "%dh ago" (round (/ ago 3600))))
-                                    (t (format "%dd ago" (round (/ ago 86400)))))))
-                     (format "%s (built %s, %s)"
-                             (abbreviate-file-name exe)
-                             (format-time-string "%Y-%m-%d %H:%M" mtime)
-                             ago-str))
-                 "not found"))
+             (if exe
+                 (let* ((mtime (file-attribute-modification-time
+                                (file-attributes exe)))
+                        (ago (- (float-time) (float-time mtime)))
+                        (ago-str (cond
+                                  ((< ago 60) (format "%ds ago" (round ago)))
+                                  ((< ago 3600) (format "%dm ago" (round (/ ago 60))))
+                                  ((< ago 86400) (format "%dh ago" (round (/ ago 3600))))
+                                  (t (format "%dd ago" (round (/ ago 86400)))))))
+                   (format "%s (built %s, %s)"
+                           (abbreviate-file-name exe)
+                           (format-time-string "%Y-%m-%d %H:%M" mtime)
+                           ago-str))
+               "not found")
              (if (and alive tip--request-id)
                  (format "%d requests sent" tip--request-id)
                ""))))

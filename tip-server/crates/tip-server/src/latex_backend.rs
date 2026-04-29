@@ -248,29 +248,6 @@ impl LatexBackend {
         }
     }
 
-    pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
-        // Map live → batch-of-one.
-        let fragments_params = CompileFragmentsParams {
-            backend: BackendId::Latex,
-            uri: params.uri,
-            fragments: vec![FragmentLocation {
-                start: params.start,
-                end: params.end,
-            }],
-            color: params.color,
-            page_setup: params.page_setup,
-            preamble: params.preamble,
-            display_math_width: None,
-        };
-        match self.handle_compile_fragments(fragments_params) {
-            ResponseResult::Fragments { mut fragments } if !fragments.is_empty() => {
-                ResponseResult::Live {
-                    fragment: fragments.remove(0),
-                }
-            }
-            other => other,
-        }
-    }
 }
 
 /// Re-map a `FragmentError`'s line/hint so they reflect the user's original

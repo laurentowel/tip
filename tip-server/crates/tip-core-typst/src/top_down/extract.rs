@@ -6,6 +6,7 @@ use typst::layout::{Abs, Frame, FrameItem, Point, Size};
 use typst_svg::svg_frame;
 
 use super::flatten::{FlatLeaf, GroupRecord, LeafCategory};
+use crate::geometry::text_item_frame_bbox;
 
 #[cfg(test)]
 use {
@@ -329,13 +330,8 @@ fn push_leaf(
 ) {
     match &leaf.item {
         FrameItem::Text(t) => {
-            let bbox = t.bbox();
-            bounds.extend(
-                leaf.pos.x + bbox.min.x,
-                leaf.pos.y + bbox.max.y,
-                leaf.pos.x + bbox.max.x,
-                leaf.pos.y + bbox.min.y,
-            );
+            let (lx, ly, hx, hy) = text_item_frame_bbox(t, leaf.pos);
+            bounds.extend(lx, ly, hx, hy);
             if let Some(s) = leaf.text_size {
                 if s > *max_text_size {
                     *max_text_size = s;

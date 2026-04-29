@@ -23,7 +23,6 @@
 (ert-deftest tip-test-server-spawn-and-shutdown ()
   "Should spawn tip-server, communicate, and shut down cleanly."
   (let* ((tip-server-executable tip-test-server-binary)
-         (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
          (tip--response-buffer "")
@@ -73,7 +72,6 @@
 (ert-deftest tip-test-protocol-version-handshake-match ()
   "Init with the actual `tip-protocol-version' should report no mismatch."
   (let* ((tip-server-executable tip-test-server-binary)
-         (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
          (tip--response-buffer "")
@@ -107,7 +105,6 @@
   "Init with a fake client_version should come back with a non-empty
 `version_mismatch' field naming both sides."
   (let* ((tip-server-executable tip-test-server-binary)
-         (tip-use-docker nil)
          (tip--server-process nil)
          (tip--request-id 0)
          (tip--response-buffer "")

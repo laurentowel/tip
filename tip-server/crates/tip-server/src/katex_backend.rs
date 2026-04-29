@@ -9,29 +9,16 @@
 use std::path::{Path, PathBuf};
 
 use tip_protocol::messages::*;
+use tip_protocol::DocumentStore;
 
 pub struct KatexBackend {
-    docs: DocStore,
-}
-
-#[derive(Default)]
-struct DocStore {
-    current: std::collections::HashMap<String, String>,
-}
-
-impl DocStore {
-    fn sync(&mut self, uri: String, content: String) {
-        self.current.insert(uri, content);
-    }
-    fn get(&self, uri: &str) -> Option<&str> {
-        self.current.get(uri).map(String::as_str)
-    }
+    docs: DocumentStore,
 }
 
 impl KatexBackend {
     pub fn new() -> Self {
         Self {
-            docs: DocStore::default(),
+            docs: DocumentStore::default(),
         }
     }
 
@@ -78,29 +65,6 @@ impl KatexBackend {
         ResponseResult::Fragments { fragments: results }
     }
 
-    pub fn handle_compile_live(&mut self, params: CompileLiveParams) -> ResponseResult {
-        let fp = CompileFragmentsParams {
-            backend: BackendId::Katex,
-            uri: params.uri,
-            fragments: vec![FragmentLocation {
-                start: params.start,
-                end: params.end,
-            }],
-            color: params.color,
-            page_setup: params.page_setup,
-            preamble: params.preamble,
-            display_math_width: None,
-        };
-        match self.handle_compile_fragments(fp) {
-            ResponseResult::Fragments { mut fragments } if !fragments.is_empty() => {
-                ResponseResult::Live {
-                    fragment: fragments.remove(0),
-                }
-            }
-            other => other,
-        }
-    }
-
     /// `debug_skeleton` is not meaningful for KaTeX (no scope, no
     /// preamble) — return an empty source.
     pub fn handle_debug_skeleton(&self, _params: DebugSkeletonParams) -> ResponseResult {
@@ -116,10 +80,7 @@ impl KatexBackend {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| path.clone());
-        ResponseResult::ProjectFiles {
-            root: root.display().to_string(),
-            files: vec![params.uri],
-        }
+        crate::handler::single_file_project(root, params.uri)
     }
 }
 
