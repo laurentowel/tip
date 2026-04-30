@@ -158,17 +158,23 @@ impl LatexCompiler {
             })?;
 
         let stdout = String::from_utf8_lossy(&latex_output.stdout).into_owned();
-        // Treat exit codes 0 and 1 as success; preview.sty always raises
-        // a fake error → exit 1 is the expected case.
-        let exit_ok = matches!(latex_output.status.code(), Some(0) | Some(1));
-        if !exit_ok {
-            return Err(LatexError::CompileFailed {
-                log_tail: tail(&stdout, 40),
-                per_fragment: vec![None; fragments.len()],
-            });
-        }
-
-        let dvi_path = tmp.path().join("batch.dvi");
+        // Trust the output file, not the exit code.
+        //
+        // pdflatex's `latex' returns 0 on a clean compile and 1 when
+        // preview.sty's `\errmessage' fakes fire (the per-snippet
+        // marker that drives our parsing).  But xelatex with `-no-pdf'
+        // returns higher codes when many `\errmessage's pile up, even
+        // though the .xdv lands fine.  `dvilualatex' has its own
+        // quirks too.  Engine-specific exit-code rules are fragile —
+        // the file system is the honest signal.
+        //
+        // Engines emit different DVI flavors: pdflatex → `.dvi',
+        // xelatex → `.xdv', lualatex → `.dvi'.  dvisvgm reads both.
+        let dvi_name = match engine {
+            LatexEngine::XeLatex => "batch.xdv",
+            LatexEngine::PdfLatex | LatexEngine::LuaLatex => "batch.dvi",
+        };
+        let dvi_path = tmp.path().join(dvi_name);
         if !dvi_path.exists() {
             return Err(LatexError::CompileFailed {
                 log_tail: tail(&stdout, 40),
