@@ -231,6 +231,7 @@ mod tests {
     fn sync_params(uri: &str, content: &str) -> SyncParams {
         SyncParams {
             backend: BackendId::Typst,
+            latex_engine: None,
             project_root: None,
             uri: uri.into(),
             content: content.into(),

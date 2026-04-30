@@ -46,6 +46,64 @@
   :type 'string
   :group 'tip-latex)
 
+(defcustom tip-latex-compiler 'pdflatex
+  "Default TeX engine for the LaTeX backend.
+Overridden per-buffer by a `% !TEX program = ENGINE' magic comment in
+the master file (the de facto cross-editor convention used by TeXShop,
+texlab, AucTeX, VS Code LaTeX Workshop, etc.).
+
+The server still runs everything through the DVI/XDV → SVG pipeline;
+only the upstream binary differs:
+  pdflatex → `latex'        (DVI)
+  xelatex  → `xelatex -no-pdf' (XDV)
+  lualatex → `dvilualatex'  (DVI)"
+  :type '(choice (const :tag "pdflatex (default)" pdflatex)
+                 (const :tag "xelatex"            xelatex)
+                 (const :tag "lualatex"           lualatex))
+  :safe (lambda (v) (memq v '(pdflatex xelatex lualatex)))
+  :group 'tip-latex)
+
+(defconst tip-latex--magic-program-re
+  "^[[:blank:]]*%[[:blank:]]*!TE[Xx]\\(?:[[:blank:]]+TS-?\\)?[[:blank:]]*program[[:blank:]]*=[[:blank:]]*\\([a-zA-Z]+\\)"
+  "Regex matching a `% !TEX program = ENGINE' magic comment.
+Group 1 is the engine name (case-insensitive on the `TEX' part,
+allowing the `TS-program' variant).  Cross-editor convention.")
+
+(defun tip-latex--magic-program-in-file (file)
+  "Return the engine named in a `% !TEX program' line near the start
+of FILE, or nil if no such line is present.  Scans the first 1024
+bytes only — magic comments are conventionally placed at the top."
+  (when (and file (file-readable-p file))
+    (with-temp-buffer
+      (insert-file-contents file nil 0 1024)
+      (goto-char (point-min))
+      (when (re-search-forward tip-latex--magic-program-re nil t)
+        (pcase (downcase (match-string 1))
+          ((or "pdflatex" "latex")  'pdflatex)
+          ("xelatex"                'xelatex)
+          ((or "lualatex" "luatex") 'lualatex)
+          (_                        nil))))))
+
+(defun tip-latex--master-file ()
+  "Return the absolute path to the master file for this LaTeX buffer.
+Order: `tip-project-root-path' (if it's an existing file path) →
+`% !TEX root' magic comment → `buffer-file-name'.  Used by
+`tip-latex--resolve-engine' to look up `% !TEX program' on the
+master rather than on every included child file."
+  (or (and (boundp 'tip-project-root-path)
+           tip-project-root-path
+           (stringp tip-project-root-path)
+           (file-readable-p tip-project-root-path)
+           tip-project-root-path)
+      (tip-latex--magic-comment-root)
+      buffer-file-name))
+
+(defun tip-latex--resolve-engine ()
+  "Resolve the TeX engine for the current LaTeX buffer.
+Order: `% !TEX program' on the master > `tip-latex-compiler'."
+  (or (tip-latex--magic-program-in-file (tip-latex--master-file))
+      tip-latex-compiler))
+
 ;;; * fragment detection — delegates to tree-sitter
 ;;
 ;; Tree-sitter (alex-pinkus/tree-sitter-latex) is the only fragment

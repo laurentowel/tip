@@ -38,6 +38,37 @@ impl Default for BackendId {
     }
 }
 
+/// Which TeX engine to use for the LaTeX backend.  Resolved
+/// client-side from a `% !TEX program = ...' magic comment in the
+/// master file (the de facto cross-editor convention) with fallback
+/// to the user's `tip-latex-compiler' defcustom.
+///
+/// All three engines compile through the same DVI/XDV → SVG pipeline
+/// — only the binary differs.  See `dvi_command` for the per-engine
+/// invocation.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LatexEngine {
+    #[default]
+    PdfLatex,
+    XeLatex,
+    LuaLatex,
+}
+
+impl LatexEngine {
+    /// Binary name + extra args needed to make this engine emit
+    /// DVI/XDV (which `dvisvgm` consumes).  pdflatex's `latex' is
+    /// already DVI-mode; xelatex needs `-no-pdf' to switch to XDV;
+    /// lualatex's separate `dvilualatex' binary is the DVI variant.
+    pub fn dvi_command(self) -> (&'static str, &'static [&'static str]) {
+        match self {
+            LatexEngine::PdfLatex => ("latex", &[]),
+            LatexEngine::XeLatex => ("xelatex", &["-no-pdf"]),
+            LatexEngine::LuaLatex => ("dvilualatex", &[]),
+        }
+    }
+}
+
 /// A fragment location in the source buffer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentLocation {
@@ -171,6 +202,13 @@ pub struct SyncParams {
     /// and (future) to anchor multi-file LaTeX projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    /// Which TeX engine to use for the LaTeX backend on subsequent
+    /// `compile_fragments' calls.  Resolved client-side from a
+    /// `% !TEX program' magic comment in the master file or
+    /// `tip-latex-compiler'.  Ignored by non-LaTeX backends.  `None'
+    /// is treated as `LatexEngine::PdfLatex'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latex_engine: Option<LatexEngine>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -284,7 +322,7 @@ pub struct TypstHealth {
 }
 
 /// A probed external binary (path + version string + ok-flag).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BinaryProbe {
     pub found: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,11 +336,23 @@ pub struct BinaryProbe {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LatexHealth {
-    /// Overall: all mandatory deps found and meet version floors.
+    /// Overall: pdflatex pipeline is fully usable (latex + dvisvgm +
+    /// preview.sty all present).  xelatex / dvilualatex are reported
+    /// separately but don't affect `ok` — they're only needed when
+    /// the user opts in via `% !TEX program = xelatex' (or lualatex).
     pub ok: bool,
-    /// `latex` command (pdflatex/xelatex/lualatex probed separately
-    /// in the future if we add an engine picker).
+    /// `latex` command (the DVI-producing pdflatex variant).
     pub latex: BinaryProbe,
+    /// `xelatex`.  Required only when a file specifies
+    /// `% !TEX program = xelatex'; we invoke it with `-no-pdf' so it
+    /// emits XDV that dvisvgm can read.
+    #[serde(default)]
+    pub xelatex: BinaryProbe,
+    /// `dvilualatex`.  Required only when a file specifies
+    /// `% !TEX program = lualatex'.  Separate binary in TeX Live; the
+    /// DVI-emitting cousin of `lualatex'.
+    #[serde(default)]
+    pub dvilualatex: BinaryProbe,
     /// `dvisvgm`; we require >= 2.14 for stable `--bbox=preview`.
     pub dvisvgm: BinaryProbe,
     /// `preview.sty`; probed via `kpsewhich preview.sty`.
@@ -350,6 +400,7 @@ mod tests {
             request: Request::Sync(SyncParams {
                 backend: BackendId::Typst,
             project_root: None,
+            latex_engine: None,
                 uri: "/tmp/test.typ".into(),
                 content: "$a + b$".into(),
             }),
@@ -422,6 +473,7 @@ mod tests {
             Request::Sync(SyncParams {
                 backend: BackendId::Typst,
             project_root: None,
+            latex_engine: None,
                 uri: "/test.typ".into(),
                 content: "hello".into(),
             })

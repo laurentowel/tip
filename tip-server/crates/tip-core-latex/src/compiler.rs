@@ -38,6 +38,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+use tip_protocol::messages::LatexEngine;
+
 /// Compiled output for a single fragment.
 #[derive(Debug, Clone)]
 pub struct FragmentOutput {
@@ -98,6 +100,7 @@ impl LatexCompiler {
         fragments: &[&str],
         working_dir: Option<&Path>,
         display_math_width: Option<&str>,
+        engine: LatexEngine,
     ) -> Result<Vec<Result<FragmentOutput, String>>, LatexError> {
         if fragments.is_empty() {
             return Ok(vec![]);
@@ -136,7 +139,9 @@ impl LatexCompiler {
                 None => format!("{prefix}:"),
             }
         };
-        let latex_output = Command::new("latex")
+        let (engine_cmd, engine_args) = engine.dvi_command();
+        let latex_output = Command::new(engine_cmd)
+            .args(engine_args)
             .args([
                 "-interaction=nonstopmode",
                 "-file-line-error",
@@ -148,8 +153,8 @@ impl LatexCompiler {
             .env("TEXINPUTS", &texinputs)
             .output()
             .map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => LatexError::ToolMissing("latex".into()),
-                _ => LatexError::Io(format!("spawn latex: {e}")),
+                std::io::ErrorKind::NotFound => LatexError::ToolMissing(engine_cmd.into()),
+                _ => LatexError::Io(format!("spawn {engine_cmd}: {e}")),
             })?;
 
         let stdout = String::from_utf8_lossy(&latex_output.stdout).into_owned();
@@ -963,8 +968,10 @@ l.9 $\undefinedcommand
         }
         let preamble = "\\documentclass{article}\n\\usepackage{amsmath}\n";
         let fragments = ["$a + b$", "$$ x^2 + y^2 $$"];
-        let results = LatexCompiler::compile_batch(preamble, &fragments, None, None)
-            .expect("compile");
+        let results = LatexCompiler::compile_batch(
+            preamble, &fragments, None, None, LatexEngine::PdfLatex,
+        )
+        .expect("compile");
         assert_eq!(results.len(), 2);
         for r in &results {
             let out = r.as_ref().expect("fragment ok");

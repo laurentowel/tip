@@ -439,6 +439,12 @@ when the server process changed (e.g. after restart) — see
         (when-let ((root (and (fboundp 'tip--resolve-project-root)
                               (tip--resolve-project-root))))
           (push (cons "project_root" root) params))
+        (when-let ((engine (and (fboundp 'tip-latex--resolve-engine)
+                                (eq (and (fboundp 'tip--current-backend-name)
+                                         (tip--current-backend-name))
+                                    'latex)
+                                (tip-latex--resolve-engine))))
+          (push (cons "latex_engine" (symbol-name engine)) params))
         (tip--send-request "sync" params)))))
 
 ;;; * compile-fragments helper

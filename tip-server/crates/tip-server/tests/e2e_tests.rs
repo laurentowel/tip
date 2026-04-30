@@ -19,7 +19,7 @@ fn sync_and_shutdown() {
 
     let resp = server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None,
+        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None, latex_engine: None,
             uri: "/test.typ".into(),
             content: "$a + b$".into(),
         }),
@@ -62,7 +62,7 @@ fn compile_fragment_returns_svg() {
 
     server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None,
+        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None, latex_engine: None,
             uri: "/test.typ".into(),
             content: "$a + b$".into(),
         }),
@@ -99,7 +99,7 @@ fn multiple_fragments_in_one_batch() {
     let content = "some text $a+b$ more text $x^2$ end";
     server.request(&RequestMessage {
         id: 1,
-        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None,
+        request: Request::Sync(SyncParams { backend: BackendId::Typst, project_root: None, latex_engine: None,
             uri: "/test.typ".into(),
             content: content.into(),
         }),

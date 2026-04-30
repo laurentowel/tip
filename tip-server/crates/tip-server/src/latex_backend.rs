@@ -20,6 +20,11 @@ pub struct LatexBackend {
     /// a given root; kept alive across compiles so the include graph
     /// walk only happens once per editing session.
     projects: HashMap<PathBuf, TexProject>,
+    /// Per-uri TeX engine, set by `handle_sync` from
+    /// `SyncParams::latex_engine'.  Missing entries fall back to
+    /// `LatexEngine::default()' (pdflatex).  Resolved client-side
+    /// from `% !TEX program' magic comments + the user's defcustom.
+    engines: HashMap<String, LatexEngine>,
 }
 
 impl LatexBackend {
@@ -28,6 +33,7 @@ impl LatexBackend {
             documents: DocumentStore::new(),
             roots: HashMap::new(),
             projects: HashMap::new(),
+            engines: HashMap::new(),
         }
     }
 
@@ -48,6 +54,11 @@ impl LatexBackend {
             }
         } else {
             self.roots.remove(&params.uri);
+        }
+        if let Some(eng) = params.latex_engine {
+            self.engines.insert(params.uri.clone(), eng);
+        } else {
+            self.engines.remove(&params.uri);
         }
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
@@ -122,11 +133,13 @@ impl LatexBackend {
             .and_then(|root| root.parent().map(Path::to_path_buf))
             .or_else(|| Path::new(&params.uri).parent().map(Path::to_path_buf));
 
+        let engine = self.engines.get(&params.uri).copied().unwrap_or_default();
         match LatexCompiler::compile_batch(
             preamble,
             &wrapped_refs,
             cwd.as_deref(),
             params.display_math_width.as_deref(),
+            engine,
         ) {
             Ok(batch) => {
                 let mut results = Vec::with_capacity(batch.len());

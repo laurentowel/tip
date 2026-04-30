@@ -179,6 +179,7 @@ mod tests {
         b.handle_sync(SyncParams {
             backend: BackendId::Katex,
             project_root: None,
+            latex_engine: None,
             uri: "/test.md".into(),
             content: "text $a+b$ more".into(),
         });

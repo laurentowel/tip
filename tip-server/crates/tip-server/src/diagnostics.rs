@@ -61,23 +61,38 @@ pub fn collect_report(_typst_input: Option<&()>) -> HealthReport {
 
 fn probe_latex_deps(warnings: &mut Vec<String>) -> LatexHealth {
     let latex = probe_binary("latex", &["--version"], None);
+    let xelatex = probe_binary("xelatex", &["--version"], None);
+    let dvilualatex = probe_binary("dvilualatex", &["--version"], None);
     let dvisvgm = probe_binary("dvisvgm", &["--version"], None);
     let preview_sty = probe_kpsewhich("preview.sty");
 
     if !latex.found {
-        warnings.push("`latex` not found in PATH — LaTeX fragments will fail".into());
+        warnings.push("`latex` not found in PATH — pdflatex previews will fail".into());
     }
     if !dvisvgm.found {
-        warnings.push("`dvisvgm` not found in PATH — LaTeX fragments will fail".into());
+        warnings.push("`dvisvgm` not found in PATH — all LaTeX previews will fail".into());
     }
     if !preview_sty.found {
         warnings.push(
             "`preview.sty` not found (kpsewhich); install texlive-latex-extra or similar".into(),
         );
     }
+    // xelatex / dvilualatex are nice-to-have: only required when a
+    // file specifies `% !TEX program = xelatex' (or lualatex).  Warn
+    // so users know upfront, but don't gate `ok' on them.
+    if !xelatex.found {
+        warnings.push(
+            "`xelatex` not in PATH — files with `% !TEX program = xelatex' will fail".into(),
+        );
+    }
+    if !dvilualatex.found {
+        warnings.push(
+            "`dvilualatex` not in PATH — files with `% !TEX program = lualatex' will fail".into(),
+        );
+    }
 
     let ok = latex.found && dvisvgm.found && preview_sty.found;
-    LatexHealth { ok, latex, dvisvgm, preview_sty }
+    LatexHealth { ok, latex, xelatex, dvilualatex, dvisvgm, preview_sty }
 }
 
 /// Run `cmd args...`, parse the first line of stdout as the version.

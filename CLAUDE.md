@@ -386,6 +386,39 @@ needs the AST for preamble walking in child files (TexProject).  The
 protocol already sends full buffer content on `sync`, so the Rust side
 can parse independently if it grows a reason to.
 
+## TeX Engine Selection (LaTeX backend)
+
+pdflatex / xelatex / lualatex are all supported.  The pipeline is
+unchanged in every case: TeX → DVI/XDV → SVG via `dvisvgm`.  Only the
+upstream binary differs:
+
+| Engine    | Command invocation        |
+|-----------|---------------------------|
+| pdflatex  | `latex`                   |
+| xelatex   | `xelatex -no-pdf` (→ XDV) |
+| lualatex  | `dvilualatex`             |
+
+xelatex defaults to PDF; `-no-pdf` switches it to XDV which dvisvgm
+reads identically to DVI.  `dvilualatex` is the separate DVI-emitting
+LuaTeX binary (TeX Live ships it alongside `lualatex`).
+
+**How a buffer's engine is picked** (`tip-latex--resolve-engine`):
+
+1. `% !TEX program = ENGINE` in the master file (cross-editor magic
+   comment recognized by TeXShop, texlab, AucTeX, VS Code LaTeX
+   Workshop, etc.).  Variants `% !TeX TS-program = ...` accepted.
+2. `tip-latex-compiler` defcustom (default `pdflatex`).
+
+Resolved client-side; passed to the server via the optional
+`latex_engine` field on `Sync`.  Server stores per-URI in
+`LatexBackend::engines`; missing entry falls back to pdflatex.
+
+**Health check** probes all three binaries (`latex`, `xelatex`,
+`dvilualatex`).  `LatexHealth::ok` is gated on `latex + dvisvgm +
+preview.sty` only — xelatex / dvilualatex are nice-to-have and emit
+warnings when absent, since they're only required for buffers that
+opt in via the magic comment.
+
 ## Plain TeX and ConTeXt — Not Supported, Workaround
 
 The LaTeX backend depends on `preview.sty`, which is LaTeX-only (~900 lines, shipout hooks + `! Preview: Snippet N ended.(h+dxw)` stdout markers + tightpage cropping). Plain TeX and ConTeXt have no equivalent; reimplementing preview.sty for plain is moderate work (~200–400 lines of plain TeX covering tightpage, color specials, error-mode snippet separators, env auto-wrap hacks).
