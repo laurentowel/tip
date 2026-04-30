@@ -353,8 +353,11 @@ fn write_batch_tex(
     }
     // Preview.sty options: active (enable snippets), tightpage (emit bbox
     // metadata for dvisvgm to crop to), auctex (emit per-snippet size
-    // messages we can parse from stdout).
-    writeln!(f, "\\usepackage[active,tightpage,auctex]{{preview}}")?;
+    // messages we can parse from stdout), dvips (emit specials in a form
+    // that survives into XDV — required for xelatex; harmless for
+    // pdflatex/lualatex).  See org-latex-preview.el's docstring for the
+    // dvips option's role in xelatex preview geometry.
+    writeln!(f, "\\usepackage[active,tightpage,auctex,dvips]{{preview}}")?;
     writeln!(f, "\\begin{{document}}")?;
     for frag in fragments {
         writeln!(f, "\\begin{{preview}}")?;
