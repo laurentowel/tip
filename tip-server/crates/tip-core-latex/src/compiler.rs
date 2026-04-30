@@ -158,18 +158,24 @@ impl LatexCompiler {
             })?;
 
         let stdout = String::from_utf8_lossy(&latex_output.stdout).into_owned();
-        // Trust the output file, not the exit code.
-        //
-        // pdflatex's `latex' returns 0 on a clean compile and 1 when
-        // preview.sty's `\errmessage' fakes fire (the per-snippet
-        // marker that drives our parsing).  But xelatex with `-no-pdf'
-        // returns higher codes when many `\errmessage's pile up, even
-        // though the .xdv lands fine.  `dvilualatex' has its own
-        // quirks too.  Engine-specific exit-code rules are fragile —
-        // the file system is the honest signal.
-        //
+        // Treat exit codes 0 and 1 as success; preview.sty's per-snippet
+        // `\errmessage' fakes always fire → exit 1 is the expected case.
+        // Verified empirically: xelatex (-no-pdf) and dvilualatex behave
+        // the same as pdflatex's `latex' here, *provided* preview.sty
+        // is loaded with the `dvips' option above.  Without that option,
+        // xelatex bumps to higher exit codes and the corresponding
+        // .xdv lacks tightpage geometry — see `write_batch_tex'.
+        let exit_ok = matches!(latex_output.status.code(), Some(0) | Some(1));
+        if !exit_ok {
+            return Err(LatexError::CompileFailed {
+                log_tail: tail(&stdout, 40),
+                per_fragment: vec![None; fragments.len()],
+            });
+        }
+
         // Engines emit different DVI flavors: pdflatex → `.dvi',
-        // xelatex → `.xdv', lualatex → `.dvi'.  dvisvgm reads both.
+        // xelatex → `.xdv', lualatex (dvilualatex) → `.dvi'.  dvisvgm
+        // reads both formats.
         let dvi_name = match engine {
             LatexEngine::XeLatex => "batch.xdv",
             LatexEngine::PdfLatex | LatexEngine::LuaLatex => "batch.dvi",
