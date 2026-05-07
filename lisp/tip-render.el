@@ -14,6 +14,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 (require 'tip-backend)
@@ -351,11 +352,18 @@ context (e.g. Typst headings) contributes its scaled `:height'."
       ;; resolve sanely.  When filtered is nil, just use default.
       ;; Layer EXTRA (e.g. heading face for Typst) at the FRONT so its
       ;; :height takes priority during attribute merging.
-      (let ((base (cond
-                   ((null filtered) (list 'default))
-                   ((symbolp filtered) (list filtered 'default))
-                   ((listp filtered) (append filtered '(default))))))
-        (if extra (cons extra base) base))))))
+      ;;
+      ;; Dedupe: when EXTRA is also present in `filtered' (e.g. the
+      ;; surrounding `(text)' inside a heading already carries
+      ;; `typst-ts-markup-header-face-1'), Emacs face-merge would apply
+      ;; the relative `:height 2.0' twice and the image renders at 4×
+      ;; instead of 2×.  Strip duplicates so each face contributes once.
+      (let* ((base (cond
+                    ((null filtered) (list 'default))
+                    ((symbolp filtered) (list filtered 'default))
+                    ((listp filtered) (append filtered '(default)))))
+             (final (if extra (cons extra base) base)))
+        (cl-delete-duplicates final :test #'eq))))))
 
 (defun tip--make-image-spec (svg-data height-pt depth-pt
                                       &optional display-p rendered-pt
