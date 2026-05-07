@@ -119,14 +119,53 @@ Order: `% !TEX program' on the master > `tip-latex-compiler'."
 ;; tree-sitter-latex, runs `tree-sitter generate', compiles into
 ;; ~/.emacs.d/tree-sitter/).
 
+(defconst tip-latex--empty-fragment-re
+  (concat
+   "\\`"
+   "\\(?:"
+   "\\\\begin{[^}]+}\\(\\(?:.\\|\n\\)*?\\)\\\\end{[^}]+}"  ; \begin{X}...\end{X}
+   "\\|\\\\\\[\\(\\(?:.\\|\n\\)*?\\)\\\\\\]"               ; \[...\]
+   "\\|\\\\(\\(\\(?:.\\|\n\\)*?\\)\\\\)"                   ; \(...\)
+   "\\|\\$\\$\\(\\(?:.\\|\n\\)*?\\)\\$\\$"                 ; $$...$$
+   "\\|\\$\\(\\(?:.\\|\n\\)*?\\)\\$"                       ; $...$
+   "\\)"
+   "\\'")
+  "Regex matching any LaTeX math fragment with the inner body in groups 1-5.
+Used by `tip-latex--fragment-blank-p' to skip whitespace-only fragments.")
+
+(defun tip-latex--fragment-blank-p (start end)
+  "Return non-nil if buffer text [START, END) is a math fragment with
+whitespace-only inner body — e.g. `\\=\\begin{displaymath} \\=\\end{displaymath}',
+`\\=\\[  \\=\\]', `$  $'.  Such fragments produce empty SVGs and waste a
+compile round-trip; filtered before send."
+  (let ((text (buffer-substring-no-properties start end)))
+    (and (string-match tip-latex--empty-fragment-re text)
+         (let ((inner (or (match-string 1 text)
+                          (match-string 2 text)
+                          (match-string 3 text)
+                          (match-string 4 text)
+                          (match-string 5 text)
+                          "")))
+           (string-match-p "\\`[ \t\n\r]*\\'" inner)))))
+
 (defun tip-latex-collect-fragments (beg end &optional avoid-pos)
   "Collect math fragments intersecting BEG..END.
 Returns alists with \"start\"/\"end\" byte offsets per the
 `tip-collect-fragments' contract.  Delegates to the treesit parser
 in `tip-latex-parse-treesit'; returns nil when the latex grammar
-isn't installed."
+isn't installed.  Whitespace-only fragments (e.g.
+`\\=\\begin{displaymath} \\=\\end{displaymath}') are dropped — they
+produce empty SVGs and don't deserve a server round-trip."
   (require 'tip-latex-parse-treesit)
-  (tip-latex-treesit-collect-fragments beg end avoid-pos))
+  (let ((frags (tip-latex-treesit-collect-fragments beg end avoid-pos)))
+    (seq-remove
+     (lambda (f)
+       (let* ((bs (cdr (assoc "start" f)))
+              (be (cdr (assoc "end" f)))
+              (cs (and bs (byte-to-position (1+ bs))))
+              (ce (and be (byte-to-position (1+ be)))))
+         (and cs ce (tip-latex--fragment-blank-p cs ce))))
+     frags)))
 
 (defun tip-latex-bounds-at-point (pos)
   "Return (BEG . END) of the math fragment at POS, or nil.
