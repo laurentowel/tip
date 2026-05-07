@@ -124,6 +124,20 @@ moved to a new range when the cursor enters a different fragment.")
                   (svg-data height-pt depth-pt
                             &optional display-p rendered-pt frag-beg frag-end))
 
+(defun tip-live--fragment-blank-p (text)
+  "Non-nil when math fragment TEXT has whitespace-only inner content.
+Strips one outer delimiter from each side (`$', `$$', `\\=\\(', `\\=\\[',
+`\\=\\begin{X}', `\\=\\end{X}') and asks whether the rest is purely
+blank.  Used by the live preview to skip empty fragments — they
+produce zero-content overlays that show up as a stray box in the
+buffer."
+  (let ((s text))
+    (when (string-match "\\`\\(\\\\begin{[^}]+}\\|\\\\\\[\\|\\\\(\\|\\$+\\)" s)
+      (setq s (substring s (match-end 0))))
+    (when (string-match "\\(\\\\end{[^}]+}\\|\\\\\\]\\|\\\\)\\|\\$+\\)\\'" s)
+      (setq s (substring s 0 (match-beginning 0))))
+    (string-match-p "\\`[ \t\n\r]*\\'" s)))
+
 (defun tip-live--cleanup-overlay ()
   "Delete the live `after-string' overlay if any."
   (when (overlayp tip-live--ov)
@@ -250,7 +264,17 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
           (when (eq tip-live-style 'after-string)
             (tip-live--cleanup-overlay)))
         (let ((content (buffer-substring-no-properties (car bound) (cdr bound))))
-          (unless (string-equal tip-live--content-cache content)
+          (cond
+           ;; Whitespace-only fragment — skip and clear any leftover
+           ;; preview from a previous non-empty state of this same
+           ;; fragment range.
+           ((tip-live--fragment-blank-p content)
+            (tip-live--hide)
+            (setq tip-live--content-cache content
+                  tip-live--anchor-pos (cdr bound)
+                  tip-live--bound bound))
+           ((string-equal tip-live--content-cache content) nil)
+           (t
             (setq tip-live--content-cache content)
             (setq tip-live--anchor-pos (cdr bound))
             (setq tip-live--bound bound)
@@ -259,7 +283,7 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
               (tip--sync-buffer)
               (tip--send-compile-fragments
                (list (cons byte-start byte-end))
-               #'tip-live--handle-result))))))))))
+               #'tip-live--handle-result)))))))))))
 
 (defun tip-live--post-command ()
   "Drop the live preview the moment point leaves its fragment.
