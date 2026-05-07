@@ -73,6 +73,18 @@
 
 ;;; * live preview
 
+(defface tip-live-image
+  '((((background light))
+     :box (:line-width (1 . 1) :color "#9aa0a6")
+     :background "#f1f3f4")
+    (t
+     :box (:line-width (1 . 1) :color "#5f6368")
+     :background "#2d2f31"))
+  "Face for the live preview image in `'after-string' style.
+Provides a 1px border and a tinted background so the live preview
+is visually distinct from the regular tip overlays."
+  :group 'tip)
+
 (defcustom tip-live-style 'after-string
   "How `tip-live-mode' displays the live preview.
 
@@ -145,6 +157,11 @@ the surrounding paragraph layout."
   (let ((s (if is-display "\n​ " " ")))
     (setq s (copy-sequence s))
     (put-text-property (1- (length s)) (length s) 'display img-spec s)
+    ;; Border + bg tinge on the image-bearing char so the live preview
+    ;; reads as distinct from the static tip overlays.  (olp uses
+    ;; `'(:box t)' here; we add a background and a softer color via
+    ;; `tip-live-image' so the live state is more visually obvious.)
+    (put-text-property (1- (length s)) (length s) 'face 'tip-live-image s)
     s))
 
 (defun tip-live--show-after-string (svg h d _w fs class beg end)
@@ -244,6 +261,20 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
                (list (cons byte-start byte-end))
                #'tip-live--handle-result))))))))))
 
+(defun tip-live--post-command ()
+  "Drop the live preview the moment point leaves its fragment.
+Without this, the live overlay only disappears on the next idle
+tick (>=0.3s), which feels sticky.  Cheap: one position-compare per
+command, no recompute."
+  (when (and tip-live--bound
+             (or (< (point) (car tip-live--bound))
+                 (>= (point) (cdr tip-live--bound))))
+    (tip-live--cleanup-overlay)
+    (when (eq tip-live-style 'childframe) (tip-childframe-hide))
+    (setq tip-live--content-cache ""
+          tip-live--anchor-pos nil
+          tip-live--bound nil)))
+
 (defun tip-live--on-buffer-change (&rest _)
   "Tear down the live preview when switching away from a tip-mode buffer."
   (unless (and (eq major-mode 'typst-ts-mode)
@@ -270,11 +301,13 @@ enable with M-x tip-live-mode."
       (progn
         (setq tip-live--timer
               (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
+        (add-hook 'post-command-hook #'tip-live--post-command nil t)
         (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
         (add-hook 'kill-buffer-hook #'tip-live--on-buffer-kill nil t))
     (when tip-live--timer
       (cancel-timer tip-live--timer)
       (setq tip-live--timer nil))
+    (remove-hook 'post-command-hook #'tip-live--post-command t)
     (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
     (remove-hook 'kill-buffer-hook #'tip-live--on-buffer-kill t)
     (tip-live--cleanup-overlay)
