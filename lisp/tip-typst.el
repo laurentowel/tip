@@ -45,6 +45,46 @@ or display math to opt in.  Buffer-local."
               (name (treesit-node-text first-child t)))
     (equal name "figure")))
 
+(defun tip-typst--heading-face-at (pos)
+  "Return `typst-ts-markup-header-face-N' if POS is inside a Typst heading.
+Walks the tree-sitter `typst' parser ancestors looking for a `heading'
+node.  Level is the count of `=' chars at the heading's start.  Returns
+nil when not in a heading or the parser isn't ready.
+
+Why this exists: typst-ts-mode's font-lock query (typst-ts-mode.el:80)
+fontifies only the heading's `(text)' children, leaving math fragments
+inside a heading without the header face.  `tip--resolve-image-face'
+then sees a plain face on chars adjacent to `$…$' and the image's `em'
+resolves against the default font — math stays small even on a `=='
+heading where surrounding text is rendered at 1.7×.  This helper
+short-circuits that gap by inspecting the parse tree directly."
+  (when (and (fboundp 'treesit-available-p)
+             (treesit-available-p)
+             (fboundp 'treesit-ready-p)
+             (treesit-ready-p 'typst t))
+    (let* ((node (treesit-node-at pos 'typst))
+           (h node))
+      (while (and h (not (equal "heading" (treesit-node-type h))))
+        (setq h (treesit-node-parent h)))
+      (when h
+        ;; Heading text starts with N `=' followed by space.  Read the
+        ;; first 6 chars of the heading and count leading `=' — robust
+        ;; to indentation since the heading node starts at the first `='.
+        (let* ((start (treesit-node-start h))
+               (end (min (+ start 6) (point-max)))
+               (text (buffer-substring-no-properties start end))
+               (level (or (and (string-match "\\`=+" text)
+                               (length (match-string 0 text)))
+                          1))
+               (level (max 1 (min 6 level))))
+          (intern (format "typst-ts-markup-header-face-%d" level)))))))
+
+(defun tip-typst--surrounding-extra-face (frag-beg _frag-end)
+  "Return a Typst-specific face to layer onto the resolved image face.
+Currently: header face for math sitting inside a heading.  Returns
+nil otherwise.  See `tip-typst--heading-face-at' for the why."
+  (tip-typst--heading-face-at frag-beg))
+
 (defun tip--inside-let-binding-p (node)
   "Return non-nil if NODE is inside a `#let' binding (definition, not invocation)."
   (let ((parent (treesit-node-parent node)))

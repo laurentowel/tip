@@ -293,6 +293,20 @@ daemon's callback dispatched from a non-GUI context; guard with
 
 ;;; * image spec
 
+(declare-function tip-typst--surrounding-extra-face "tip-typst" (frag-beg frag-end))
+
+(defun tip--surrounding-extra-face (frag-beg frag-end)
+  "Backend-specific face to layer onto the resolved surrounding face.
+Currently only Typst implements this — it walks the tree-sitter
+parse tree to detect when a math fragment lives inside a heading,
+since typst-ts-mode's font-lock query doesn't paint header faces
+on math (only on the heading's `(text)' children).  Returns nil
+when no extra face applies."
+  (cond
+   ((eq major-mode 'typst-ts-mode)
+    (tip-typst--surrounding-extra-face frag-beg frag-end))
+   (t nil)))
+
 (defun tip--resolve-image-face (frag-beg frag-end)
   "Return the face to attach to the overlay's image spec, or nil.
 Honors `tip-image-face':
@@ -301,12 +315,15 @@ Honors `tip-image-face':
   `auto' → `(get-text-property (1- frag-beg) \\='face)' (or just
            after frag-end if before is unhelpful), filtered through
            `tip-image-face-blocklist', wrapped to fall back to
-           `default'.  Mirrors org-latex-preview's --face-around."
+           `default'.  Mirrors org-latex-preview's --face-around.
+Also layers `tip--surrounding-extra-face' on top so backend-specific
+context (e.g. Typst headings) contributes its scaled `:height'."
   (cond
    ((null tip-image-face) nil)
    ((not (eq tip-image-face 'auto)) tip-image-face)
    (t
-    (let* ((raw
+    (let* ((extra (tip--surrounding-extra-face frag-beg frag-end))
+           (raw
             (or (and (> frag-beg (point-min))
                      (not (eq (char-before frag-beg) ?\n))
                      (get-text-property (1- frag-beg) 'face))
@@ -332,10 +349,13 @@ Honors `tip-image-face':
                  (t cleaned)))))))
       ;; Always include `default' as a fallback so attribute lookups
       ;; resolve sanely.  When filtered is nil, just use default.
-      (cond
-       ((null filtered) 'default)
-       ((symbolp filtered) (list filtered 'default))
-       ((listp filtered) (append filtered '(default))))))))
+      ;; Layer EXTRA (e.g. heading face for Typst) at the FRONT so its
+      ;; :height takes priority during attribute merging.
+      (let ((base (cond
+                   ((null filtered) (list 'default))
+                   ((symbolp filtered) (list filtered 'default))
+                   ((listp filtered) (append filtered '(default))))))
+        (if extra (cons extra base) base))))))
 
 (defun tip--make-image-spec (svg-data height-pt depth-pt
                                       &optional display-p rendered-pt
