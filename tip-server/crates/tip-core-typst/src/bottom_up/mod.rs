@@ -483,44 +483,24 @@ fn collect_scope_nodes(
 /// Append closing delimiters for any blocks that contain the fragment.
 
 /// Build a Typst source document for a standalone fragment (no scope context).
+///
+/// Thin wrapper over `build_scoped_source`: treat the fragment content
+/// as the entire document, with no scope-defining ancestors to extract.
+/// The shared builder handles inline/display/multiline classification,
+/// page setup, color override, and phantom injection identically to the
+/// production path — no need to duplicate that logic here.
 fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
-    let is_multiline = is_multiline_math(content);
-    let is_inline = !is_display_math(content);
-
-    let color_setup = format!("#show math.equation: set text(rgb(\"{color}\"))\n");
-
-    if is_multiline {
-        // Multi-line display: wide page
-        format!(
-            "{color_setup}\
-             {preamble}\n\
-             #set page(width: 16cm, height: auto, fill: none, margin: (x: 0cm, y: 0.2cm))\n\
-             {content}\n"
-        )
-    } else if is_inline {
-        // Inline: generous margins for baseline crop.  Render as
-        // genuine inline math (`${inner}\$' — NO whitespace adjacent
-        // to the delimiters; `\$ x \$' would be display math in Typst).
-        // The `#hide[#sym.zws]' phantom forces Typst to wrap the math
-        // in a Group with the body baseline (see `build_scoped_source'
-        // for the long-form rationale and `phantom_force_baseline.rs'
-        // for the empirical justification).
-        let inner = content.trim_matches('$').trim();
-        format!(
-            "{color_setup}\
-             #set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none)\n\
-             {preamble}\n\
-             ${inner} #hide[#sym.zws]$\n"
-        )
-    } else {
-        // Single-line display: auto width, normal margins
-        format!(
-            "{color_setup}\
-             {preamble}\n\
-             #set page(height: auto, width: auto, margin: 0.2cm, fill: none)\n\
-             {content}\n"
-        )
-    }
+    let preamble = if preamble.is_empty() { None } else { Some(preamble) };
+    build_scoped_source(
+        content,
+        0,
+        content.len(),
+        color,
+        is_multiline_math(content),
+        None,
+        preamble,
+    )
+    .expect("build_scoped_source: 0..len() is always a valid range")
 }
 
 #[cfg(test)]
