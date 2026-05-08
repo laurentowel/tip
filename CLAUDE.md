@@ -104,33 +104,24 @@ The solution combines three ideas:
 
 **Why this works**: The baseline_y is determined by the NON-bounded layout, so it's constant across all expressions. The cropping is post-render, so it doesn't affect the layout. The ascent percentage varies per expression (taller images have lower ascent %) but the ABSOLUTE baseline position (in pixels from the line top) is the same.
 
-### Baseline detection — Group frames vs heuristic
+### Baseline detection — phantom-forced Group baselines
 
-Complex math expressions (big operators, matrices, sized delimiters, cases) produce a `FrameItem::Group` with `frame.has_baseline() = true` — the exact baseline set by Typst's math layout. Simple expressions (plain text, subscripts, accents) get inlined into the page frame, losing their baseline.
+Every inline math fragment is rendered with `#hide[#sym.zws]` appended just inside the closing `$`. The zero-width space is invisible (zero ink, zero width) but forces Typst's math layout to wrap the equation in a `FrameItem::Group` with `has_baseline()=true` set to the body baseline of the rendered frame.
 
-**Strategy**: walk the frame tree looking for Groups with baselines first. If found, use the exact value. If not (inlined case), fall back to the text item heuristic:
-- Collect all text items as `(size, y)` pairs, find the **largest font size** (primary math content, not sub/superscripts)
-- Among items at that largest size, pick the y-value via `pick_baseline_y`:
-  - **1 item** → that y
-  - **2 items with y-spread > 2pt** → the **larger y** (base character of an accent pair like `$hat(G)$`/`$tilde(G)$`, where the accent sits above the base at the same font size)
-  - **Otherwise** (items clustered in y, or 3+ items across multiple rows) → **closest to page midpoint** (handles matrices centered on the math axis, and fractions where both numerator and denominator are at reduced size)
+**Strategy** (in `bottom_up::find_baseline_depth`):
+1. Page frame baseline (rare, if Typst ever sets it).
+2. Outermost descendant Group with `has_baseline()` — the phantom guarantees this for inline math.
+3. Single-text-item fallback for trivial math like `$phi$`, `$x$` that Typst flattens regardless of phantom — that single item's y *is* the baseline.
 
-**Which expressions produce Groups** (tested empirically):
-- `$sum_(i=0)^n$`, `$integral_0^1$` — big operators with limits
-- `$mat(1,0;0,1)$` — matrices
-- `$cases(...)$` — case expressions
-- `$lr([...])$` — sized delimiters
-- `$(a+b)/(c+d)$` — inline fractions with auto-sized parens
+The earlier text-item y-position heuristic (`pick_baseline_y`, `find_font_ascent`, `find_math_axis_em`, the largest-size + reduced-size fallbacks) was retired with the phantom approach because it mispicked among stacked accents — `$tilde(hat(phi))$` gave 3 same-size text items where the closest-to-midpoint y was the middle accent, not the base φ.
 
-**Which get inlined** (no Group, heuristic works): `$a+b$`, `$a_b$`, `$a^2$`, `$sqrt(x)$`, `$tilde(a)$`, `$hat(a)$`, `$abs(x)$`, bare `$frac(a,b)$`. Accents (`hat`, `tilde`, etc.) produce 2 same-size text items at different y — the "2 items with gap → larger y" rule picks the base character.
+To inspect the legacy heuristic code: `git show legacy-baseline-heuristics`. The empirical justification for retiring it lives in `tests/phantom_force_baseline.rs`.
+
+**Inline vs display math**: Typst treats `$x$` as inline and `$ x $` (whitespace adjacent to the delimiters) as display. The fragment builders render inline content as `${inner} #hide[#sym.zws]$` — no padding around delimiters — so the math is genuinely inline.
 
 ### `TextItem::bbox()` for ink bounds
 
 Uses `font.ttf().glyph_bounding_box()` per glyph — exact outlines, not estimates. Critical for tall delimiters like brackets. The bbox y-coordinates are flipped from glyph coords (y-up) to frame coords (y-down): after the flip, `bbox.max.y` is the **top** (negative) and `bbox.min.y` is the **bottom** (positive).
-
-### Font MATH table access
-
-The math axis height and other constants are available via `font.ttf().tables().math` (ttf-parser). Typst uses `constants.axis_height()` to position fraction bars. Currently we don't use this in `find_baseline_depth` but could for the bare-fraction fallback case.
 
 ### Baseline measurement diagram
 

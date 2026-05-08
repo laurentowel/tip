@@ -4,10 +4,7 @@ use typst::syntax::SyntaxKind;
 use typst_svg::svg;
 
 use crate::world::TipWorld;
-use baseline::{
-    collect_text_items, find_font_ascent, find_ink_extent, find_math_axis_em,
-    find_outermost_group_baseline, pick_baseline_y,
-};
+use baseline::{collect_text_items, find_ink_extent, find_outermost_group_baseline};
 
 mod baseline;
 
@@ -227,6 +224,31 @@ fn crop_svg_viewbox(
 ///    sub/superscripts). Its y-position is the math baseline.
 /// 3. For bare fractions (all text at reduced size), compute from font metrics:
 ///    margin_top + font_ascent (derived from the font's ascender value).
+/// Find the math baseline y (page-frame coords, y-down) for the
+/// rendered fragment.
+///
+/// Three paths, each exact:
+///
+/// 1. The page frame itself has a baseline (rare for math, but handled
+///    if Typst ever sets it).
+/// 2. A descendant Group has `has_baseline()=true' — Typst's math
+///    layout produces these for sized delimiters, fractions, big
+///    operators, matrices, AND for any inline math augmented with the
+///    `#hide[#sym.zws]' phantom we append in `build_scoped_source'.
+///    `find_outermost_group_baseline' returns the OUTERMOST one,
+///    which carries the body baseline (vs inner sub/sup Groups that
+///    carry math-axis baselines).
+/// 3. Single-glyph fallback.  Typst flattens trivial math (`\$phi\$',
+///    `\$x\$') to a single text item that bypasses Group wrapping
+///    even with the phantom.  The single text item's y-position IS
+///    the baseline by definition for a single glyph.
+///
+/// The pre-phantom heuristic that picked baselines from arrays of
+/// y-positions (and its reduced-size / math-axis fallbacks) lived
+/// here through commit `legacy-baseline-heuristics'.  It mispicked
+/// for stacked accents (`hat(tilde(phi))') because the closest-to-
+/// page-midpoint y was an accent, not the base.  See
+/// `tests/phantom_force_baseline.rs' for the empirical demonstration.
 fn find_baseline_depth(
     frame: &typst::layout::Frame,
     y_offset: f64,
@@ -234,61 +256,18 @@ fn find_baseline_depth(
     if frame.has_baseline() {
         return Some(y_offset + frame.baseline().to_pt());
     }
-
-    // Strategy 1: walk Groups for explicit baselines.
     if let Some(bl) = find_outermost_group_baseline(frame, y_offset) {
         return Some(bl);
     }
-
-    // Strategy 2: largest text item heuristic.
-    let page_mid = y_offset + frame.height().to_pt() / 2.0;
+    // Single-glyph fallback ($phi$, $a$, etc.): one text item → its y
+    // IS the baseline.  Multi-text fragments without a Group baseline
+    // shouldn't occur in production (the phantom guarantees a Group
+    // for inline math), but if one does we'd rather return None and
+    // let the caller fall back than guess.
     let mut items = Vec::new();
     collect_text_items(frame, y_offset, &mut items);
-
-    // Find the largest font size (at or above threshold).
-    let max_size = items.iter().map(|&(s, _)| s).fold(0.0_f64, f64::max);
-
-    if max_size > 0.0 {
-        // Collect y-values of items at that largest size.
-        let ys: Vec<f64> = items
-            .iter()
-            .filter(|&&(s, _)| (s - max_size).abs() < 0.1)
-            .map(|&(_, y)| y)
-            .collect();
-
-        if max_size >= 9.0 {
-            // Body-sized text in fragment: pick directly.
-            return Some(pick_baseline_y(&ys, page_mid));
-        }
-
-        // Strategy 3: all text at reduced size (sub/super/fraction
-        // glyphs).  The most common case is a bare fraction `$a/b$`
-        // where Typst inlines numerator + denominator at script size
-        // straddling the math axis.  The visual baseline for the
-        // surrounding paragraph is at `math_axis_y + axis_em *
-        // body_size_pt` — not at either row's individual baseline.
-        if ys.len() >= 2 {
-            // 2+ rows at the same reduced size → fraction-shaped.
-            // Midpoint approximates the math axis (where the bar
-            // sits); body baseline is one axis-height below.
-            if let Some(axis_em) = find_math_axis_em(frame) {
-                let mid_y = ys.iter().copied().sum::<f64>() / ys.len() as f64;
-                // 11pt is the body size we set via the `#show
-                // math.equation: set text(size: 11pt)' rule in
-                // build_scoped_source.
-                return Some(mid_y + axis_em * 11.0);
-            }
-        }
-
-        // Single reduced item: fall back to the older ascent-ratio
-        // formula.  This case is rare (a standalone subscript or
-        // accent at script size with no companion glyph) and the
-        // formula is approximate, but it's better than nothing.
-        let y = pick_baseline_y(&ys, page_mid);
-        if let Some(ascent) = find_font_ascent(frame) {
-            let full_baseline = y - (ascent * max_size) + (ascent * 11.0);
-            return Some(full_baseline);
-        }
+    if items.len() == 1 {
+        return Some(items[0].1);
     }
     None
 }
@@ -519,13 +498,19 @@ fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
              {content}\n"
         )
     } else if is_inline {
-        // Inline: generous margins for baseline crop
+        // Inline: generous margins for baseline crop.  Render as
+        // genuine inline math (`${inner}\$' — NO whitespace adjacent
+        // to the delimiters; `\$ x \$' would be display math in Typst).
+        // The `#hide[#sym.zws]' phantom forces Typst to wrap the math
+        // in a Group with the body baseline (see `build_scoped_source'
+        // for the long-form rationale and `phantom_force_baseline.rs'
+        // for the empirical justification).
         let inner = content.trim_matches('$').trim();
         format!(
             "{color_setup}\
              #set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none)\n\
              {preamble}\n\
-             $ {inner} $\n"
+             ${inner} #hide[#sym.zws]$\n"
         )
     } else {
         // Single-line display: auto width, normal margins
@@ -548,7 +533,10 @@ mod tests {
     fn build_inline_source() {
         let src = build_fragment_source("$a + b$", "#000000", "");
         assert!(src.contains("width: auto"));
-        assert!(src.contains("$ a + b $"));
+        assert!(
+            src.contains("$a + b #hide[#sym.zws]$"),
+            "expected phantom-augmented inline math (no padding around delimiters), got:\n{src}"
+        );
     }
 
     #[test]

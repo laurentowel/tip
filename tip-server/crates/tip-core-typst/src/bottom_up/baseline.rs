@@ -135,56 +135,10 @@ pub fn find_outermost_group_baseline(frame: &Frame, y_offset: f64) -> Option<f64
     None
 }
 
-/// Extract the font's ascent as a fraction of em from the first text
-/// item encountered.  Used by the bottom-up baseline fallback when no
-/// Group baseline is available and the only text is at reduced size
-/// (bare fractions).
-pub fn find_font_ascent(frame: &Frame) -> Option<f64> {
-    for (_pos, item) in frame.items() {
-        match item {
-            FrameItem::Text(t) => {
-                let ttf = t.font.ttf();
-                let em = ttf.units_per_em() as f64;
-                return Some(ttf.ascender() as f64 / em);
-            }
-            FrameItem::Group(g) => {
-                if let Some(r) = find_font_ascent(&g.frame) {
-                    return Some(r);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Extract the math-axis height as a fraction of em from the first
-/// text item with an OpenType MATH table.  Used by the bare-fraction
-/// baseline path in `find_baseline_depth`: the math axis is where the
-/// fraction bar sits, and the body baseline is one axis-height below
-/// (in y-down coords, i.e. `math_axis_y + axis_em * body_size_pt`).
-pub fn find_math_axis_em(frame: &Frame) -> Option<f64> {
-    for (_pos, item) in frame.items() {
-        match item {
-            FrameItem::Text(t) => {
-                let ttf = t.font.ttf();
-                let math = ttf.tables().math?;
-                let constants = math.constants?;
-                let em = ttf.units_per_em() as f64;
-                return Some(constants.axis_height().value as f64 / em);
-            }
-            FrameItem::Group(g) => {
-                if let Some(r) = find_math_axis_em(&g.frame) {
-                    return Some(r);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 /// Recursively collect text items as `(font_size_pt, y_from_page_top)`.
+/// Used only by the single-glyph fallback in `find_baseline_depth';
+/// see `legacy-baseline-heuristics' tag for the older multi-text-item
+/// heuristic that this replaced.
 pub fn collect_text_items(frame: &Frame, y_offset: f64, out: &mut Vec<(f64, f64)>) {
     for (pos, item) in frame.items() {
         match item {
@@ -198,30 +152,4 @@ pub fn collect_text_items(frame: &Frame, y_offset: f64, out: &mut Vec<(f64, f64)
             _ => {}
         }
     }
-}
-
-/// Pick the math baseline y from same-size candidates.  Used by the
-/// bottom-up strategy when no Group baseline is available — the math
-/// content is inlined into the page frame and we're left with text
-/// items only.
-///
-/// - 1 item: that y.
-/// - 2 items spread > 2pt: largest y (base char of an accent pair
-///   like `hat(G)`, where the accent sits above the base at the same
-///   font size).
-/// - Otherwise (clustered, or 3+ rows): closest to `page_mid`
-///   (handles matrices on the math axis, fractions where both rows
-///   are at reduced size).
-pub fn pick_baseline_y(ys: &[f64], page_mid: f64) -> f64 {
-    if ys.len() == 2 && (ys[0] - ys[1]).abs() > 2.0 {
-        return ys[0].max(ys[1]);
-    }
-    *ys.iter()
-        .min_by(|a, b| {
-            (*a - page_mid)
-                .abs()
-                .partial_cmp(&(*b - page_mid).abs())
-                .unwrap()
-        })
-        .unwrap_or(&page_mid)
 }
