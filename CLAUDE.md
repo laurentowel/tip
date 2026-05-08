@@ -113,9 +113,15 @@ Every inline math fragment is rendered with `#hide[#sym.zws]` appended just insi
 2. Outermost descendant Group with `has_baseline()` — the phantom guarantees this for inline math.
 3. Single-text-item fallback for trivial math like `$phi$`, `$x$` that Typst flattens regardless of phantom — that single item's y *is* the baseline.
 
-The earlier text-item y-position heuristic (`pick_baseline_y`, `find_font_ascent`, `find_math_axis_em`, the largest-size + reduced-size fallbacks) was retired with the phantom approach because it mispicked among stacked accents — `$tilde(hat(phi))$` gave 3 same-size text items where the closest-to-midpoint y was the middle accent, not the base φ.
+**Note for future readers**: there used to be a multi-strategy text-item heuristic here (`pick_baseline_y`, `find_font_ascent`, `find_math_axis_em` + largest-size / reduced-size fallbacks) that picked baselines from y-position arrays when no Group with `has_baseline()` was available. It was retired in favor of the phantom approach because it mispicked among stacked accents — `$tilde(hat(phi))$` gave 3 same-size text items where the closest-to-midpoint y was the middle accent, not the base φ.
 
-To inspect the legacy heuristic code: `git show legacy-baseline-heuristics`. The empirical justification for retiring it lives in `tests/phantom_force_baseline.rs`.
+To time-travel to the heuristic implementation:
+```
+git show legacy-baseline-heuristics                                         # tag annotation
+git checkout legacy-baseline-heuristics -- tip-server/crates/tip-core-typst/src/bottom_up/
+git diff legacy-baseline-heuristics HEAD -- tip-server/crates/tip-core-typst/src/bottom_up/
+```
+The empirical justification for the retirement (and a regression test for the phantom property) lives in `tip-server/crates/tip-core-typst/tests/phantom_force_baseline.rs`. Run it with `cargo test -p tip-core-typst --test phantom_force_baseline -- --nocapture` to see per-fragment frame structure dumps.
 
 **Inline vs display math**: Typst treats `$x$` as inline and `$ x $` (whitespace adjacent to the delimiters) as display. The fragment builders render inline content as `${inner} #hide[#sym.zws]$` — no padding around delimiters — so the math is genuinely inline.
 
