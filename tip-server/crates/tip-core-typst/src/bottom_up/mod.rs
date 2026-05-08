@@ -333,7 +333,32 @@ fn build_scoped_source(
         }
     };
 
-    let fragment = &document_source[frag_start..frag_end];
+    // Inline math: append a `#hide[#sym.zws]' phantom inside the
+    // closing `$' to force Typst to wrap the math in a Group with the
+    // body baseline.  Without it, simple inline math (a + b, sub/sup,
+    // accents, accent stacks) gets inlined into the page frame as
+    // bare text items and we have to guess the baseline from y
+    // positions — a heuristic that mispicks among stacked accents
+    // (`hat(tilde(phi))', `tilde(hat(phi))') because the closest-to-
+    // page-midpoint y is an accent, not the base glyph.  See
+    // `tests/phantom_force_baseline.rs' for the empirical
+    // justification (and the `legacy-baseline-heuristics' git tag for
+    // the heuristic this replaced).
+    //
+    // ZWS (zero-width space) carries zero ink AND zero width, so it
+    // doesn't inflate the SVG or interfere with our ink-extent crop.
+    // `#hide[..]' makes the contents layout-only (invisible).
+    let fragment_owned;
+    let fragment: &str = if is_inline
+        && content.starts_with('$')
+        && content.ends_with('$')
+        && content.len() >= 2
+    {
+        fragment_owned = format!("{} #hide[#sym.zws]$", &content[..content.len() - 1]);
+        &fragment_owned
+    } else {
+        &document_source[frag_start..frag_end]
+    };
 
     // The color override goes LAST among the setup chunks so it wins
     // over any client-supplied `set text(rgb(...))' in preamble_override
