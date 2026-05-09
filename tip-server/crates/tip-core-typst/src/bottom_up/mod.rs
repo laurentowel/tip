@@ -147,8 +147,14 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
                 20.0 + 11.0 * 0.8
             });
 
-        let crop_top = (ink.min_y - pad).max(0.0);
-        let crop_bottom = (ink.max_y + pad).min(page_height);
+        // Always include the baseline in the crop region.  Without this,
+        // a fragment whose ink lives entirely above the baseline (e.g.
+        // `$#(sym.zws)^2$' — invisible base, visible superscript) would
+        // crop to just the superscript, leaving the baseline below the
+        // cropped image and breaking ascent computation.  Same for
+        // entirely-below-baseline ink.  Mirrors top_down/extract.rs.
+        let crop_top = (ink.min_y.min(baseline_y) - pad).max(0.0);
+        let crop_bottom = (ink.max_y.max(baseline_y) + pad).min(page_height);
         let cropped_height = crop_bottom - crop_top;
         let baseline_in_crop = baseline_y - crop_top;
         let depth_pt = (cropped_height - baseline_in_crop).max(0.0);

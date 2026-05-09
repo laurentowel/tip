@@ -72,6 +72,34 @@ fn baseline_superscript() {
 }
 
 #[test]
+fn baseline_superscript_with_invisible_base() {
+    // Edge case: `$#(sym.zws)^2$' has the superscript "2" as its only
+    // visible ink — the base is a zero-width space, so ink extent
+    // doesn't reach the baseline.  Without baseline-aware crop bounds,
+    // the cropped image would clip just the superscript, leaving the
+    // baseline below the visible region and rendering the "2" with
+    // ascent=100% (visually centered, not on the baseline).
+    //
+    // Asserted property: the crop must include the baseline, so the
+    // baseline_y < cropped_height invariant holds and the ascent
+    // computation gives "2" a sensible position above the line.
+    let mut world = TipWorld::new();
+    let out = BottomUpCompiler::compile_fragment(
+        &mut world, "$#sym.zws^2$", "#000000", "",
+    ).unwrap();
+    write_svg("bl_zws_super", &out.svg);
+    eprintln!("zws-base ^2: h={:.2} d={:.2} ascent={:.0}%",
+              out.height_pt, out.depth_pt,
+              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    // depth should be ~0 (nothing below baseline) but the height
+    // should extend at least from the superscript top down to the
+    // baseline — i.e. height > superscript_size, NOT just the ink of "2".
+    assert!(out.height_pt > 4.0,
+            "crop must extend down to baseline; got height={:.2}",
+            out.height_pt);
+}
+
+#[test]
 fn baseline_subscript() {
     let mut world = TipWorld::new();
     let out = BottomUpCompiler::compile_fragment(&mut world, "$x_i$", "#000000", "").unwrap();
