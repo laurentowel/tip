@@ -377,7 +377,40 @@ fn find_external_baseline_from_leaves(
     if frag_baselines.is_empty() {
         return None;
     }
-    let tol = line_tol(max_text_size);
+    // Phase 1: tight tol scaled to fragment's own text size.  Catches
+    // body-sized fragments in body-sized prose where surrounding text
+    // sits at the fragment's baseline.
+    if let Some(b) = pick_external_baseline(leaves, frag_baselines, line_tol(max_text_size), start, end) {
+        return Some(b);
+    }
+    // Phase 2: fragment is sub/super-only — its glyphs sit a script-
+    // baseline-shift above the line baseline, outside Phase 1's tol.
+    // Re-scan with tol scaled to the LARGEST external text size on the
+    // page.  Triggered only when Phase 1 failed, so adversarial mixed-
+    // small-size docs (every fragment finds its own body text in
+    // Phase 1) don't bleed neighbor lines.
+    let max_external_size = leaves
+        .iter()
+        .filter_map(|l| match &l.item {
+            FrameItem::Text(t) if !matches!(l.category_for(start, end), LeafCategory::InRange) => {
+                Some(t.size)
+            }
+            _ => None,
+        })
+        .fold(Abs::zero(), Abs::max);
+    if max_external_size <= max_text_size {
+        return None;
+    }
+    pick_external_baseline(leaves, frag_baselines, line_tol(max_external_size), start, end)
+}
+
+fn pick_external_baseline(
+    leaves: &[FlatLeaf],
+    frag_baselines: &[Abs],
+    tol: Abs,
+    start: usize,
+    end: usize,
+) -> Option<Abs> {
     let mut best: Option<Abs> = None;
     for l in leaves {
         if !matches!(l.item, FrameItem::Text(_)) {
