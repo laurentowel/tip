@@ -104,8 +104,26 @@ pub fn extract_fragment_svg(
         for (i, leaf) in leaves.iter().enumerate() {
             match leaf.category_for(start, end) {
                 LeafCategory::InRange => {
+                    // Flush only those buffered Detached leaves that are
+                    // spatially close to this InRange — real leading
+                    // math symbols (operators, auto-spacing, accents)
+                    // sit within an em or so of the math glyph; list
+                    // markers ("1.", "2.") sit at the line's left
+                    // margin, far from the math fragment on the same
+                    // line.  Without this filter, the marker glyphs
+                    // bleed into the extracted SVG.  Same-line dy slack
+                    // accommodates stacked accents above the base.
+                    let attach_threshold =
+                        leaf.text_size.unwrap_or(Abs::pt(11.0));
+                    let in_x = leaf.pos.x;
+                    let in_y = leaf.pos.y;
                     for j in detached_buffer.drain(..) {
-                        push_leaf(&leaves[j], &mut keep, &mut bounds, &mut max_text_size);
+                        let buf = &leaves[j];
+                        let dx = (buf.pos.x - in_x).abs();
+                        let dy = (buf.pos.y - in_y).abs();
+                        if dx <= attach_threshold && dy <= attach_threshold {
+                            push_leaf(buf, &mut keep, &mut bounds, &mut max_text_size);
+                        }
                     }
                     push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
                     in_fragment = true;
@@ -506,8 +524,26 @@ pub fn extract_from_index(
         for (i, leaf) in leaves.iter().enumerate() {
             match leaf.category_for(start, end) {
                 LeafCategory::InRange => {
+                    // Flush only those buffered Detached leaves that are
+                    // spatially close to this InRange — real leading
+                    // math symbols (operators, auto-spacing, accents)
+                    // sit within an em or so of the math glyph; list
+                    // markers ("1.", "2.") sit at the line's left
+                    // margin, far from the math fragment on the same
+                    // line.  Without this filter, the marker glyphs
+                    // bleed into the extracted SVG.  Same-line dy slack
+                    // accommodates stacked accents above the base.
+                    let attach_threshold =
+                        leaf.text_size.unwrap_or(Abs::pt(11.0));
+                    let in_x = leaf.pos.x;
+                    let in_y = leaf.pos.y;
                     for j in detached_buffer.drain(..) {
-                        push_leaf(&leaves[j], &mut keep, &mut bounds, &mut max_text_size);
+                        let buf = &leaves[j];
+                        let dx = (buf.pos.x - in_x).abs();
+                        let dy = (buf.pos.y - in_y).abs();
+                        if dx <= attach_threshold && dy <= attach_threshold {
+                            push_leaf(buf, &mut keep, &mut bounds, &mut max_text_size);
+                        }
                     }
                     push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
                     in_fragment = true;
