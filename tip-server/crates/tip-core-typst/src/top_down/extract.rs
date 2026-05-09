@@ -516,64 +516,139 @@ fn pick_external_line_size(
 /// `bottom_up::compile_source` gives via Typst's 16cm page layout —
 /// without it, top-down's tight ink-only crop would render display
 /// math flush-left while bottom-up renders it centered.
+/// One run of contiguous in-range leaves on a single page, bundled
+/// with its display bounds and max text size.  A page can produce
+/// multiple clusters when the user's source range maps to multiple
+/// rendered occurrences (e.g. a math glyph that appears both in a
+/// heading and in `#outline()' entries that reference that heading).
+struct Cluster {
+    keep: Vec<(Point, FrameItem)>,
+    bounds: ItemBounds,
+    max_text_size: Abs,
+}
+
+impl Default for Cluster {
+    fn default() -> Self {
+        Cluster {
+            keep: Vec::new(),
+            bounds: ItemBounds::empty(),
+            max_text_size: Abs::zero(),
+        }
+    }
+}
+
+/// Walk one page's leaves and return every cluster.  Same attachment
+/// logic as the original single-cluster pass: InRange opens a run;
+/// OutAttached closes it; Detached attaches when in-run, buffered
+/// otherwise (with a spatial proximity check on flush so list markers
+/// at the line's left margin don't merge into a math run on the same
+/// line).
+fn collect_clusters(leaves: &[FlatLeaf], start: usize, end: usize) -> Vec<Cluster> {
+    let mut clusters: Vec<Cluster> = Vec::new();
+    let mut current = Cluster::default();
+    let mut in_run = false;
+    let mut detached_buffer: Vec<usize> = Vec::new();
+
+    let finalize = |cluster: &mut Cluster, clusters: &mut Vec<Cluster>| {
+        if !cluster.keep.is_empty() {
+            clusters.push(std::mem::take(cluster));
+        }
+    };
+
+    for (i, leaf) in leaves.iter().enumerate() {
+        match leaf.category_for(start, end) {
+            LeafCategory::InRange => {
+                let attach_threshold = leaf.text_size.unwrap_or(Abs::pt(11.0));
+                let in_x = leaf.pos.x;
+                let in_y = leaf.pos.y;
+                for j in detached_buffer.drain(..) {
+                    let buf = &leaves[j];
+                    let dx = (buf.pos.x - in_x).abs();
+                    let dy = (buf.pos.y - in_y).abs();
+                    if dx <= attach_threshold && dy <= attach_threshold {
+                        push_leaf(
+                            buf,
+                            &mut current.keep,
+                            &mut current.bounds,
+                            &mut current.max_text_size,
+                        );
+                    }
+                }
+                push_leaf(
+                    leaf,
+                    &mut current.keep,
+                    &mut current.bounds,
+                    &mut current.max_text_size,
+                );
+                in_run = true;
+            }
+            LeafCategory::Detached => {
+                if in_run {
+                    push_leaf(
+                        leaf,
+                        &mut current.keep,
+                        &mut current.bounds,
+                        &mut current.max_text_size,
+                    );
+                } else {
+                    detached_buffer.push(i);
+                }
+            }
+            LeafCategory::OutAttached => {
+                if in_run {
+                    finalize(&mut current, &mut clusters);
+                    in_run = false;
+                }
+                detached_buffer.clear();
+            }
+        }
+    }
+    if in_run {
+        finalize(&mut current, &mut clusters);
+    }
+    clusters
+}
+
 pub fn extract_from_index(
     pages: &[(Vec<FlatLeaf>, Vec<GroupRecord>)],
     start: usize,
     end: usize,
     canvas_width: Option<Abs>,
 ) -> Option<FragmentRender> {
-    for (page_idx, (leaves, group_records)) in pages.iter().enumerate() {
-        // Linear run pass.
-        let mut keep: Vec<(Point, FrameItem)> = Vec::new();
-        let mut bounds = ItemBounds::empty();
-        let mut max_text_size = Abs::zero();
-        let mut detached_buffer: Vec<usize> = Vec::new();
-        let mut in_fragment = false;
-        for (i, leaf) in leaves.iter().enumerate() {
-            match leaf.category_for(start, end) {
-                LeafCategory::InRange => {
-                    // Flush only those buffered Detached leaves that are
-                    // spatially close to this InRange — real leading
-                    // math symbols (operators, auto-spacing, accents)
-                    // sit within an em or so of the math glyph; list
-                    // markers ("1.", "2.") sit at the line's left
-                    // margin, far from the math fragment on the same
-                    // line.  Without this filter, the marker glyphs
-                    // bleed into the extracted SVG.  Same-line dy slack
-                    // accommodates stacked accents above the base.
-                    let attach_threshold =
-                        leaf.text_size.unwrap_or(Abs::pt(11.0));
-                    let in_x = leaf.pos.x;
-                    let in_y = leaf.pos.y;
-                    for j in detached_buffer.drain(..) {
-                        let buf = &leaves[j];
-                        let dx = (buf.pos.x - in_x).abs();
-                        let dy = (buf.pos.y - in_y).abs();
-                        if dx <= attach_threshold && dy <= attach_threshold {
-                            push_leaf(buf, &mut keep, &mut bounds, &mut max_text_size);
-                        }
-                    }
-                    push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
-                    in_fragment = true;
-                }
-                LeafCategory::Detached => {
-                    if in_fragment {
-                        push_leaf(leaf, &mut keep, &mut bounds, &mut max_text_size);
-                    } else {
-                        detached_buffer.push(i);
-                    }
-                }
-                LeafCategory::OutAttached => {
-                    in_fragment = false;
-                    detached_buffer.clear();
-                }
-            }
+    // Collect every cluster (run of InRange + close-by Detached) across
+    // all pages, then pick the one whose max text size is largest.
+    // This handles `#outline()` and similar duplicators where the same
+    // source range maps to multiple frame leaves: the original heading
+    // glyph is rendered at heading size (bigger), the outline-rendered
+    // glyph at body size (smaller).  Without picking, we'd extract
+    // BOTH into one SVG and the preview would contain stray outline-
+    // entry artifacts.  Picking by largest text size also wins for the
+    // common case (single cluster) since the comparison is degenerate.
+    let mut all_clusters: Vec<(usize, Cluster)> = Vec::new();
+    for (page_idx, (leaves, _group_records)) in pages.iter().enumerate() {
+        for cluster in collect_clusters(leaves, start, end) {
+            all_clusters.push((page_idx, cluster));
         }
-        if keep.is_empty() || bounds.is_empty() {
-            continue;
-        }
+    }
+    let (page_idx, picked) = all_clusters
+        .into_iter()
+        .max_by(|a, b| {
+            a.1.max_text_size
+                .partial_cmp(&b.1.max_text_size)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+    if picked.keep.is_empty() || picked.bounds.is_empty() {
+        return None;
+    }
+    // Bind to the page's leaves/group_records.  Subsequent code reads
+    // these for baseline picking and font-size resolution; everything
+    // continues to operate on a single page.
+    let (leaves, group_records) = &pages[page_idx];
+    let keep = picked.keep;
+    let bounds = picked.bounds;
+    let max_text_size = picked.max_text_size;
 
-        let group_has_in_range = |g: &GroupRecord| {
+    let group_has_in_range = |g: &GroupRecord| {
             leaves[g.leaf_range.clone()]
                 .iter()
                 .any(|l| matches!(l.category_for(start, end), LeafCategory::InRange))
@@ -645,17 +720,15 @@ pub fn extract_from_index(
             .max();
         let font_size = derived.map(|a| a.to_pt()).unwrap_or(11.0);
 
-        return Some(FragmentRender {
-            svg: svg_frame(&out),
-            width_pt: final_width.to_pt(),
-            height_pt: height.to_pt(),
-            depth_pt: depth.to_pt(),
-            page: page_idx,
-            baseline_external: external,
-            font_size_pt: font_size,
-        });
-    }
-    None
+    Some(FragmentRender {
+        svg: svg_frame(&out),
+        width_pt: final_width.to_pt(),
+        height_pt: height.to_pt(),
+        depth_pt: depth.to_pt(),
+        page: page_idx,
+        baseline_external: external,
+        font_size_pt: font_size,
+    })
 }
 
 /// Find a surrounding-text baseline on `frame` (a page) for an
