@@ -1,7 +1,7 @@
 use typst::compile;
-use typst::layout::PagedDocument;
+use typst::layout::{Abs, Frame, PagedDocument, Point, Size};
 use typst::syntax::SyntaxKind;
-use typst_svg::svg;
+use typst_svg::svg_frame;
 
 use crate::world::TipWorld;
 use baseline::{collect_text_items, find_ink_extent, find_outermost_group_baseline};
@@ -118,8 +118,6 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
     }
 
     let page = &pages[0];
-    let svg_string = svg(page);
-    let page_height = page.frame.height().to_pt();
     let page_width = page.frame.width().to_pt();
 
     let ink = find_ink_extent(&page.frame, 0.0, 0.0);
@@ -136,9 +134,11 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
     }
 
     if is_inline {
-        // INLINE MATH: crop SVG to ink bounds, compute baseline for ascent.
-        // find_baseline_depth tries: Group baseline → text heuristic → font metrics.
-        // Final fallback (should rarely hit): 20pt margin + estimated ascent.
+        // INLINE MATH: crop the page Frame vertically to the ink+baseline
+        // region, then render the cropped Frame to SVG.  Same approach
+        // top_down uses (extract.rs:221).  Cleaner than rewriting an
+        // already-rendered SVG's `viewBox' string and gives us one
+        // mental model for cropping across both strategies.
         let baseline_y = find_baseline_depth(&page.frame, 0.0)
             .unwrap_or_else(|| {
                 // Last resort: derive from page height and margins.
@@ -149,40 +149,38 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
 
         // Always include the baseline in the crop region.  Without this,
         // a fragment whose ink lives entirely above the baseline (e.g.
-        // `$#(sym.zws)^2$' — invisible base, visible superscript) would
+        // `$#sym.zws^2$' — invisible base, visible superscript) would
         // crop to just the superscript, leaving the baseline below the
         // cropped image and breaking ascent computation.  Same for
-        // entirely-below-baseline ink.  Mirrors top_down/extract.rs.
+        // entirely-below-baseline ink.
         let crop_top = (ink.min_y.min(baseline_y) - pad).max(0.0);
-        let crop_bottom = (ink.max_y.max(baseline_y) + pad).min(page_height);
+        let crop_bottom = (ink.max_y.max(baseline_y) + pad).min(page.frame.height().to_pt());
         let cropped_height = crop_bottom - crop_top;
         let baseline_in_crop = baseline_y - crop_top;
         let depth_pt = (cropped_height - baseline_in_crop).max(0.0);
 
-        let cropped_svg = crop_svg_viewbox(
-            &svg_string, page_width, page_height, crop_top, cropped_height,
-        );
+        let cropped = crop_frame_y(&page.frame, crop_top, cropped_height, page_width);
+        let svg_string = svg_frame(&cropped);
 
         Ok(FragmentOutput {
-            svg: cropped_svg,
+            svg: svg_string,
             height_pt: cropped_height,
             depth_pt,
             width_pt: ink.width() + pad * 2.0,
         })
     } else {
-        // BLOCK/DISPLAY MATH: crop SVG to ink bounds (avoids clipping from
+        // BLOCK/DISPLAY MATH: crop Frame to ink bounds (avoids clipping from
         // Typst's height:auto not accounting for full glyph extents, typst#1028).
         // No baseline computation — display math uses :ascent center.
         let crop_top = (ink.min_y - pad).max(0.0);
-        let crop_bottom = (ink.max_y + pad).min(page_height);
+        let crop_bottom = (ink.max_y + pad).min(page.frame.height().to_pt());
         let cropped_height = crop_bottom - crop_top;
 
-        let cropped_svg = crop_svg_viewbox(
-            &svg_string, page_width, page_height, crop_top, cropped_height,
-        );
+        let cropped = crop_frame_y(&page.frame, crop_top, cropped_height, page_width);
+        let svg_string = svg_frame(&cropped);
 
         Ok(FragmentOutput {
-            svg: cropped_svg,
+            svg: svg_string,
             height_pt: cropped_height,
             depth_pt: 0.0,
             width_pt: ink.width() + pad * 2.0,
@@ -190,35 +188,22 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
     }
 }
 
-/// Crop the SVG by rewriting its viewBox and height attributes.
-fn crop_svg_viewbox(
-    svg: &str,
-    width: f64,
-    _page_height: f64,
-    crop_top: f64,
-    new_height: f64,
-) -> String {
-    let mut result = svg.to_string();
-
-    // Replace viewBox="0 0 W H" with "0 crop_top W new_height"
-    if let Some(vb_start) = result.find("viewBox=\"") {
-        let vb_val_start = vb_start + 9;
-        if let Some(vb_end) = result[vb_val_start..].find('"') {
-            let new_vb = format!("0 {} {} {}", crop_top, width, new_height);
-            result.replace_range(vb_val_start..vb_val_start + vb_end, &new_vb);
-        }
+/// Build a flat copy of `src' shifted up by `crop_top' and clipped to
+/// `cropped_height'.  Width is preserved (bottom-up only crops
+/// vertically; horizontal extent comes from `width: auto' page
+/// settings already tight on the math).  The output Frame, when
+/// rendered via `typst_svg::svg', produces an SVG whose viewBox
+/// already matches the cropped region — no string rewriting needed.
+///
+/// Same idiom top_down uses (extract.rs:221) — we share the mental
+/// model for cropping across both strategies.
+fn crop_frame_y(src: &Frame, crop_top: f64, cropped_height: f64, width: f64) -> Frame {
+    let mut out = Frame::soft(Size::new(Abs::pt(width), Abs::pt(cropped_height)));
+    let dy = Abs::pt(crop_top);
+    for (pos, item) in src.items() {
+        out.push(Point::new(pos.x, pos.y - dy), item.clone());
     }
-
-    // Replace height="Xpt" with new height
-    if let Some(h_start) = result.find("height=\"") {
-        let h_val_start = h_start + 8;
-        if let Some(h_end) = result[h_val_start..].find('"') {
-            let new_h = format!("{}pt", new_height);
-            result.replace_range(h_val_start..h_val_start + h_end, &new_h);
-        }
-    }
-
-    result
+    out
 }
 
 /// Find the math baseline y-position (from page top) by examining the frame tree.
