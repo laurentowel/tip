@@ -91,12 +91,20 @@ fn baseline_superscript_with_invisible_base() {
     eprintln!("zws-base ^2: h={:.2} d={:.2} ascent={:.0}%",
               out.height_pt, out.depth_pt,
               100.0 * (1.0 - out.depth_pt / out.height_pt));
-    // depth should be ~0 (nothing below baseline) but the height
-    // should extend at least from the superscript top down to the
-    // baseline — i.e. height > superscript_size, NOT just the ink of "2".
-    assert!(out.height_pt > 4.0,
-            "crop must extend down to baseline; got height={:.2}",
+    // The image must extend from the superscript top all the way down
+    // to the body baseline.  Ink alone (just `^2') is ~5pt; the full
+    // body line at 11pt is ~7.5pt; with our 0.5pt pad on each side and
+    // baseline-aware crop, height should be ~10pt.  Anything smaller
+    // means the crop stopped at the ink and the body baseline isn't
+    // anchored — `^2' would render at line center instead of as a
+    // superscript hovering above.
+    assert!(out.height_pt > 8.0,
+            "crop must extend from glyph top to body baseline; got h={:.2}",
             out.height_pt);
+    let ascent_pct = 100.0 * (1.0 - out.depth_pt / out.height_pt);
+    assert!(ascent_pct >= 90.0,
+            "ascent should be ≥ 90% (image mostly above baseline); got {:.0}%",
+            ascent_pct);
 }
 
 #[test]

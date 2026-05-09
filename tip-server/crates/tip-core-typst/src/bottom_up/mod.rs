@@ -141,10 +141,14 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
         // mental model for cropping across both strategies.
         let baseline_y = find_baseline_depth(&page.frame, 0.0)
             .unwrap_or_else(|| {
-                // Last resort: derive from page height and margins.
-                // For height:auto with 20pt top margin and 11pt text,
-                // baseline ≈ 20 + 11 * 0.8 = 28.8
-                20.0 + 11.0 * 0.8
+                // Last resort: page is auto-sized to content + margins,
+                // so the body baseline lives at `page_height -
+                // bottom_margin'.  Hit when the only text item is a
+                // sub/super-script glyph (e.g. `$#sym.zws^2$') and
+                // there's no Group baseline either — the page
+                // reserves a body-line height even if the body
+                // glyph is invisible (ZWS).
+                page.frame.height().to_pt() - 20.0
             });
 
         // Always include the baseline in the crop region.  Without this,
@@ -229,10 +233,18 @@ fn crop_frame_y(src: &Frame, crop_top: f64, cropped_height: f64, width: f64) -> 
 ///    `find_outermost_group_baseline' returns the OUTERMOST one,
 ///    which carries the body baseline (vs inner sub/sup Groups that
 ///    carry math-axis baselines).
-/// 3. Single-glyph fallback.  Typst flattens trivial math (`\$phi\$',
-///    `\$x\$') to a single text item that bypasses Group wrapping
-///    even with the phantom.  The single text item's y-position IS
-///    the baseline by definition for a single glyph.
+/// 3. Single body-glyph fallback.  Typst flattens trivial math
+///    (`\$phi\$', `\$x\$') to a single text item that bypasses Group
+///    wrapping even with the phantom.  The single text item's
+///    y-position IS the baseline by definition for a single glyph
+///    AT BODY SIZE.
+/// 4. Page-derived fallback.  When the only text items are
+///    REDUCED-size (sub/super-only fragments like `\$#sym.zws^2\$' —
+///    a superscript with an invisible base), the glyph y is the
+///    superscript's own baseline, NOT the body baseline.  Trusting it
+///    would mis-anchor the image.  Fall back to
+///    `page_height - 20pt' (the body baseline of the auto-sized
+///    page given our 20pt bottom margin).
 ///
 /// The pre-phantom heuristic that picked baselines from arrays of
 /// y-positions (and its reduced-size / math-axis fallbacks) lived
@@ -250,14 +262,21 @@ fn find_baseline_depth(
     if let Some(bl) = find_outermost_group_baseline(frame, y_offset) {
         return Some(bl);
     }
-    // Single-glyph fallback ($phi$, $a$, etc.): one text item → its y
-    // IS the baseline.  Multi-text fragments without a Group baseline
-    // shouldn't occur in production (the phantom guarantees a Group
-    // for inline math), but if one does we'd rather return None and
+    // Single body-glyph fallback ($phi$, $a$, etc.): one text item at
+    // body size → its y IS the baseline.  Reject reduced-size
+    // singletons (e.g. a lone superscript whose y is the SUPERSCRIPT
+    // baseline, not the body baseline).  Multi-text fragments without
+    // a Group baseline shouldn't occur in production (the phantom
+    // guarantees a Group for inline math), but if one does we'd
+    // rather return None and
     // let the caller fall back than guess.
     let mut items = Vec::new();
     collect_text_items(frame, y_offset, &mut items);
-    if items.len() == 1 {
+    // 11pt is the body size we set via `#show math.equation: set
+    // text(size: 11pt)' in build_scoped_source; reduced-size items
+    // are sub/super script glyphs at ~7-8pt.
+    const BODY_SIZE_THRESHOLD_PT: f64 = 9.0;
+    if items.len() == 1 && items[0].0 >= BODY_SIZE_THRESHOLD_PT {
         return Some(items[0].1);
     }
     None
