@@ -44,6 +44,7 @@ fn compile_without_sync_returns_error() {
             page_setup: None,
             preamble: None,
             display_math_width: None,
+            strategy: None,
         }),
     });
     match &resp.result {
@@ -77,6 +78,7 @@ fn compile_fragment_returns_svg() {
             page_setup: None,
             preamble: None,
             display_math_width: None,
+            strategy: None,
         }),
     });
     assert_eq!(resp.id, 2);
@@ -129,6 +131,7 @@ fn multiple_fragments_in_one_batch() {
             page_setup: None,
             preamble: None,
             display_math_width: None,
+            strategy: None,
         }),
     });
     match &resp.result {

@@ -452,27 +452,38 @@ when the server process changed (e.g. after restart) — see
 (declare-function tip--color-to-hex "tip" (color))
 (declare-function tip-build-preamble "tip" ())
 
+(declare-function tip-typst-resolve-strategy "tip-typst" (n-fragments))
+
 (defun tip--send-compile-fragments (byte-ranges callback &optional uri-override)
   "Send `compile_fragments' for BYTE-RANGES, call CALLBACK with the result.
 BYTE-RANGES is a list of `(START . END)' byte pairs.  Color and
 preamble are pulled from the current buffer.  URI defaults to
 `tip--current-uri' but can be overridden (e.g. by tip-edit-indirect's
 virtual scheme).  Caller is responsible for `tip--sync-buffer' if it
-needs the buffer state shipped first."
-  (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-        (preamble (tip-build-preamble))
-        (frag-vec (apply #'vector
-                         (mapcar (lambda (r)
-                                   `(("start" . ,(car r))
-                                     ("end" . ,(cdr r))))
-                                 byte-ranges))))
-    (tip--send-request
-     "compile_fragments"
-     `(("uri" . ,(or uri-override (tip--current-uri)))
-       ("fragments" . ,frag-vec)
-       ("color" . ,fg)
-       ("preamble" . ,preamble))
-     callback)))
+needs the buffer state shipped first.
+
+For Typst buffers, the per-call `strategy' field is filled from
+`tip-typst-resolve-strategy' so a single batch can request top-down
+when the fragment count justifies it (whole-buffer renders) while
+small batches stay on bottom-up (live preview, single-fragment
+recompiles).  Other backends ignore the field."
+  (let* ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+         (preamble (tip-build-preamble))
+         (frag-vec (apply #'vector
+                          (mapcar (lambda (r)
+                                    `(("start" . ,(car r))
+                                      ("end" . ,(cdr r))))
+                                  byte-ranges)))
+         (strategy (when (and (string= (tip--current-backend-id) "typst")
+                              (fboundp 'tip-typst-resolve-strategy))
+                     (tip-typst-resolve-strategy (length byte-ranges))))
+         (params `(("uri" . ,(or uri-override (tip--current-uri)))
+                   ("fragments" . ,frag-vec)
+                   ("color" . ,fg)
+                   ("preamble" . ,preamble))))
+    (when strategy
+      (setq params (append params `(("strategy" . ,strategy)))))
+    (tip--send-request "compile_fragments" params callback)))
 
 (provide 'tip-server-proc)
 

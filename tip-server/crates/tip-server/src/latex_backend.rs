@@ -409,6 +409,7 @@ mod tests {
             page_setup: None,
             preamble: None,
             display_math_width: None,
+            strategy: None,
         });
         match resp {
             ResponseResult::Error { error } => assert!(error.contains("not synced")),

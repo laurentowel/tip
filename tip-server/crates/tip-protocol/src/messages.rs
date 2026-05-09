@@ -236,6 +236,15 @@ pub struct CompileFragmentsParams {
     /// is unaffected.  Typst and other backends may ignore this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_math_width: Option<String>,
+    /// Optional per-call strategy hint, interpreted per-backend.  When
+    /// omitted, the backend uses its server-side default (TIP_COMPILE_STRATEGY
+    /// env var for Typst).  Typst recognizes "top-down" / "bottom-up";
+    /// other backends ignore it.  Lets a single client pick the
+    /// strategy per-batch — e.g. tip-render-all on a long doc can
+    /// request top-down for parallel layout, while live preview keeps
+    /// bottom-up for low per-call latency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
 }
 
 /// Envelope wrapping a request with an ID.
@@ -422,6 +431,7 @@ mod tests {
                 page_setup: None,
                 preamble: None,
                 display_math_width: None,
+            strategy: None,
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();

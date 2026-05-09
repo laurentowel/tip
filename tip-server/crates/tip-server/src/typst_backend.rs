@@ -106,15 +106,25 @@ impl TypstBackend {
             }
         };
 
-        // Strategy dispatch: try `FullDoc` when configured; on
-        // document-level compile failure (any error in the user's
-        // source — not necessarily in a math fragment), fall through
-        // to the synthetic per-fragment path.  Synthetic isolates
-        // each fragment in its own synthetic page, so a single bad
+        // Strategy dispatch: per-call hint wins over the server-side
+        // default.  Recognized values: `top-down', `topdown',
+        // `top_down', `bottom-up', `bottom_up', `bottomup'.  Unrecognized
+        // strings fall back to the server default rather than erroring,
+        // so a typo can't brick a render request.
+        //
+        // On TopDown failure (any error in the user's source — not
+        // necessarily in a math fragment), fall through to the
+        // synthetic per-fragment path.  Synthetic isolates each
+        // fragment in its own synthetic page, so a single bad
         // fragment doesn't poison the rest.  The user briefly loses
         // full-doc niceties (paragraph-context font size, external
         // baseline) until the document parses again.
-        if matches!(self.strategy, CompileStrategy::TopDown) {
+        let effective_strategy = match params.strategy.as_deref() {
+            Some("top-down") | Some("topdown") | Some("top_down") => CompileStrategy::TopDown,
+            Some("bottom-up") | Some("bottom_up") | Some("bottomup") => CompileStrategy::BottomUp,
+            _ => self.strategy,
+        };
+        if matches!(effective_strategy, CompileStrategy::TopDown) {
             if let Ok(results) =
                 TopDownCompiler::compile_all(&mut self.world, &content, &params.fragments)
             {
@@ -247,6 +257,7 @@ mod tests {
             page_setup: None,
             preamble: None,
             display_math_width: None,
+            strategy: None,
         }
     }
 

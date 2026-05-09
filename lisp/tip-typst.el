@@ -34,6 +34,36 @@ or display math to opt in.  Buffer-local."
   :group 'tip
   :local t)
 
+(defcustom tip-typst-strategy 'auto
+  "Compile strategy for the Typst backend.
+- `auto' (default): pick per-batch.  Single fragment → bottom-up
+  (lower latency, mid-edit-tolerant).  Many fragments
+  (≥ `tip-typst-top-down-threshold') → top-down (compile the whole
+  document once, extract per-fragment SVGs from the frame tree).
+- `bottom-up': force bottom-up for every batch.  Best for small
+  buffers and live editing.
+- `top-down': force top-down.  Best for whole-buffer renders on
+  long documents.
+
+The two interactive commands `tip-typst-top-down' and
+`tip-typst-bottom-up' set this buffer-locally and re-render."
+  :type '(choice (const :tag "Auto (heuristic)" auto)
+                 (const :tag "Bottom-up (per-fragment synthetic doc)" bottom-up)
+                 (const :tag "Top-down (single doc compile + extract)" top-down))
+  :safe (lambda (v) (memq v '(auto bottom-up top-down)))
+  :group 'tip
+  :local t)
+
+(defcustom tip-typst-top-down-threshold 50
+  "Fragment count at which `tip-typst-strategy' = `auto' switches to top-down.
+Top-down's payoff comes from amortizing one whole-document compile
+across N fragments — below ~50 fragments, the bottom-up
+per-fragment path is competitive and starts faster on the first
+result.  Tweak this if your typical document size + machine speed
+suggests a different break-even point."
+  :type 'integer
+  :group 'tip)
+
 ;;; * tree-sitter helpers
 
 (defun tip--figure-node-p (node)
@@ -250,6 +280,57 @@ Typst scope varies by position, so a fragment under point is required."
      (1- (position-bytes (cdr bounds)))
      "*tip-skeleton*"
      (and (fboundp 'typst-ts-mode) #'typst-ts-mode))))
+
+;;; * strategy resolution + sticky toggles
+
+(defun tip-typst-resolve-strategy (n-fragments)
+  "Return the protocol strategy string for an upcoming compile of N-FRAGMENTS.
+Reads `tip-typst-strategy'; in `auto' mode, returns \"top-down\" when
+N-FRAGMENTS is at least `tip-typst-top-down-threshold', otherwise
+\"bottom-up\".  Result is the wire-protocol value the server
+recognizes — `nil' is also acceptable (server falls back to its
+default), but we always send a value so the choice is explicit."
+  (pcase tip-typst-strategy
+    ('top-down "top-down")
+    ('bottom-up "bottom-up")
+    (_ (if (and tip-typst-top-down-threshold
+                (>= n-fragments tip-typst-top-down-threshold))
+           "top-down"
+         "bottom-up"))))
+
+(declare-function tip-render-all "tip-render")
+
+(defun tip-typst--rerender-buffer ()
+  "Re-render the current buffer, if `tip-render-all' is available."
+  (when (fboundp 'tip-render-all)
+    (call-interactively 'tip-render-all)))
+
+;;;###autoload
+(defun tip-typst-top-down ()
+  "Force this buffer to use the top-down strategy and re-render.
+Sets `tip-typst-strategy' buffer-locally; survives until you
+either call `tip-typst-bottom-up' or reset the variable."
+  (interactive)
+  (setq-local tip-typst-strategy 'top-down)
+  (message "tip-typst-strategy → top-down (buffer-local)")
+  (tip-typst--rerender-buffer))
+
+;;;###autoload
+(defun tip-typst-bottom-up ()
+  "Force this buffer to use the bottom-up strategy and re-render.
+Sets `tip-typst-strategy' buffer-locally."
+  (interactive)
+  (setq-local tip-typst-strategy 'bottom-up)
+  (message "tip-typst-strategy → bottom-up (buffer-local)")
+  (tip-typst--rerender-buffer))
+
+;;;###autoload
+(defun tip-typst-auto ()
+  "Restore auto strategy selection in this buffer."
+  (interactive)
+  (kill-local-variable 'tip-typst-strategy)
+  (message "tip-typst-strategy → auto (buffer default)")
+  (tip-typst--rerender-buffer))
 
 ;;; * backend registration
 
