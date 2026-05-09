@@ -371,13 +371,34 @@ treats it as Typst per `BackendId::default')."
   (let ((b (and (fboundp 'tip-active-backend) (tip-active-backend))))
     (if b (symbol-name (tip-backend-name b)) "typst")))
 
+(defun tip--inject-typst-strategy (method params)
+  "Add a `strategy' field to PARAMS for `compile_fragments' on Typst buffers.
+Idempotent: existing `strategy' value wins (callers may force a
+specific strategy by setting it themselves).  Reads
+`tip-typst-strategy' via `tip-typst-resolve-strategy' so a
+buffer-local override (e.g. set by `tip-typst-top-down') takes
+effect on the very next render."
+  (if (and (string= method "compile_fragments")
+           (string= (tip--current-backend-id) "typst")
+           (fboundp 'tip-typst-resolve-strategy)
+           (not (assoc "strategy" params)))
+      (let* ((frags (alist-get "fragments" params nil nil #'equal))
+             (n (cond ((vectorp frags) (length frags))
+                      ((listp   frags) (length frags))
+                      (t 0)))
+             (strategy (tip-typst-resolve-strategy n)))
+        (append params `(("strategy" . ,strategy))))
+    params))
+
 (defun tip--send-request (method params &optional callback)
   "Send a JSON-RPC request to tip-server.
 METHOD is the method name string.
 PARAMS is an alist of parameters.  For methods in
 `tip--backend-carrying-methods' a `backend' field is auto-injected
 from the current buffer's active backend so a single server process
-can serve multiple backends per Emacs session.
+can serve multiple backends per Emacs session.  For
+`compile_fragments' on Typst buffers a `strategy' field is also
+auto-injected from `tip-typst-strategy'.
 CALLBACK is called with the result alist when response arrives."
   (tip-ensure)
   (let* ((id (tip--next-id))
@@ -385,6 +406,7 @@ CALLBACK is called with the result alist when response arrives."
                           (not (assoc "backend" params)))
                      (cons `("backend" . ,(tip--current-backend-id)) params)
                    params))
+         (params (tip--inject-typst-strategy method params))
          (request `(("id" . ,id)
                     ("method" . ,method)
                     ("params" . ,params))))
@@ -452,8 +474,6 @@ when the server process changed (e.g. after restart) — see
 (declare-function tip--color-to-hex "tip" (color))
 (declare-function tip-build-preamble "tip" ())
 
-(declare-function tip-typst-resolve-strategy "tip-typst" (n-fragments))
-
 (defun tip--send-compile-fragments (byte-ranges callback &optional uri-override)
   "Send `compile_fragments' for BYTE-RANGES, call CALLBACK with the result.
 BYTE-RANGES is a list of `(START . END)' byte pairs.  Color and
@@ -462,28 +482,22 @@ preamble are pulled from the current buffer.  URI defaults to
 virtual scheme).  Caller is responsible for `tip--sync-buffer' if it
 needs the buffer state shipped first.
 
-For Typst buffers, the per-call `strategy' field is filled from
-`tip-typst-resolve-strategy' so a single batch can request top-down
-when the fragment count justifies it (whole-buffer renders) while
-small batches stay on bottom-up (live preview, single-fragment
-recompiles).  Other backends ignore the field."
-  (let* ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
-         (preamble (tip-build-preamble))
-         (frag-vec (apply #'vector
-                          (mapcar (lambda (r)
-                                    `(("start" . ,(car r))
-                                      ("end" . ,(cdr r))))
-                                  byte-ranges)))
-         (strategy (when (and (string= (tip--current-backend-id) "typst")
-                              (fboundp 'tip-typst-resolve-strategy))
-                     (tip-typst-resolve-strategy (length byte-ranges))))
-         (params `(("uri" . ,(or uri-override (tip--current-uri)))
-                   ("fragments" . ,frag-vec)
-                   ("color" . ,fg)
-                   ("preamble" . ,preamble))))
-    (when strategy
-      (setq params (append params `(("strategy" . ,strategy)))))
-    (tip--send-request "compile_fragments" params callback)))
+The Typst `strategy' field is auto-injected by `tip--send-request'
+based on `tip-typst-strategy' — no need to compute it here."
+  (let ((fg (tip--color-to-hex (face-attribute 'default :foreground)))
+        (preamble (tip-build-preamble))
+        (frag-vec (apply #'vector
+                         (mapcar (lambda (r)
+                                   `(("start" . ,(car r))
+                                     ("end" . ,(cdr r))))
+                                 byte-ranges))))
+    (tip--send-request
+     "compile_fragments"
+     `(("uri" . ,(or uri-override (tip--current-uri)))
+       ("fragments" . ,frag-vec)
+       ("color" . ,fg)
+       ("preamble" . ,preamble))
+     callback)))
 
 (provide 'tip-server-proc)
 
