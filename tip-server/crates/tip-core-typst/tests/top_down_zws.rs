@@ -34,4 +34,15 @@ fn top_down_zws_super_with_surrounding_prose() {
         "ascent should be ≥ 90% (image mostly above baseline); got {:.0}%",
         ascent_pct
     );
+    // font_size_pt must reflect the SURROUNDING line's body size,
+    // not the fragment's superscript glyph size.  Otherwise
+    // `tip-scale='auto'` on the client side would inflate the image
+    // by `body_size_pt / superscript_size_pt' ≈ 1.4× to compensate
+    // for what it thinks is small text.  Default Typst body is 11pt
+    // (the typst-ts paragraph default).
+    let fs = r.font_size_pt.unwrap_or(0.0);
+    assert!(
+        (fs - 11.0).abs() < 1.0,
+        "font_size_pt should be the body size (~11pt), not the superscript size; got {fs:.2}"
+    );
 }

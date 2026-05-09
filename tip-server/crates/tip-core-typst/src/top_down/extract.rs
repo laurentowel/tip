@@ -438,7 +438,39 @@ fn find_external_line_size_from_leaves(
     if line_anchors.is_empty() {
         return None;
     }
-    let tol = line_tol(max_text_size);
+    // Same two-pass shape as `find_external_baseline_from_leaves':
+    // tight fragment-scaled tol catches body-sized fragments in body-
+    // sized prose; if that finds nothing, retry with tol scaled to the
+    // page's largest external text size.  Without phase 2, sub/super-
+    // only fragments (e.g. `$#sym.zws^2$') would leave font_size_pt at
+    // ~7.7pt (the script size), causing tip-scale='auto' to inflate
+    // the displayed image by 11/7.7 ≈ 1.4×.
+    if let Some(s) = pick_external_line_size(leaves, line_anchors, line_tol(max_text_size), start, end) {
+        return Some(s);
+    }
+    let max_external_size = leaves
+        .iter()
+        .filter_map(|l| {
+            if matches!(l.category_for(start, end), LeafCategory::InRange) {
+                None
+            } else {
+                l.text_size
+            }
+        })
+        .fold(Abs::zero(), Abs::max);
+    if max_external_size <= max_text_size {
+        return None;
+    }
+    pick_external_line_size(leaves, line_anchors, line_tol(max_external_size), start, end)
+}
+
+fn pick_external_line_size(
+    leaves: &[FlatLeaf],
+    line_anchors: &[Abs],
+    tol: Abs,
+    start: usize,
+    end: usize,
+) -> Option<Abs> {
     let mut best: Option<Abs> = None;
     for l in leaves {
         let size = match l.text_size {
