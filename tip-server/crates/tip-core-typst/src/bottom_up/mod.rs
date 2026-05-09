@@ -9,14 +9,14 @@ use baseline::{collect_text_items, find_ink_extent, find_outermost_group_baselin
 mod baseline;
 
 /// Detect display math. In Typst, display math has whitespace after opening `$`.
-fn is_display_math(content: &str) -> bool {
+pub(crate) fn is_display_math(content: &str) -> bool {
     content.starts_with('$')
         && content.as_bytes().get(1).map_or(false, |b| b.is_ascii_whitespace())
 }
 
 /// Detect multi-line display math (has newlines between `$` delimiters).
 /// Multi-line gets wide page (16cm), single-line display gets width: auto.
-fn is_multiline_math(content: &str) -> bool {
+pub(crate) fn is_multiline_math(content: &str) -> bool {
     is_display_math(content) && content[1..content.len() - 1].contains('\n')
 }
 

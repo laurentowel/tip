@@ -21,7 +21,7 @@ fn top_down_zws_super_with_surrounding_prose() {
         start: frag_start,
         end: frag_end,
     }];
-    let results = TopDownCompiler::compile_all(&mut world, doc, &frags).unwrap();
+    let results = TopDownCompiler::compile_all(&mut world, doc, &frags, None).unwrap();
     let r = &results[0];
     assert!(
         r.height_pt > 8.0,

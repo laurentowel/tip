@@ -563,7 +563,7 @@ $x + y$ default size
         let mut hits = 0;
         for r in &fragments {
             let t = Instant::now();
-            let render = extract_from_index(&pages, r.start, r.end);
+            let render = extract_from_index(&pages, r.start, r.end, None);
             extract_ms += t.elapsed().as_secs_f64() * 1000.0;
             if render.is_some() {
                 hits += 1;
@@ -605,7 +605,7 @@ $x + y$ default size
         );
         let mut world = TipWorld::new();
         let t0 = Instant::now();
-        let res = TopDownCompiler::compile_all(&mut world, &src, &frag_locs).unwrap();
+        let res = TopDownCompiler::compile_all(&mut world, &src, &frag_locs, None).unwrap();
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let hits = res.iter().filter(|r| r.error.is_none() && !r.svg.is_empty()).count();
         eprintln!(

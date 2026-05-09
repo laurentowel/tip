@@ -53,6 +53,7 @@ impl TopDownCompiler {
         world: &mut TipWorld,
         content: &str,
         fragments: &[FragmentLocation],
+        display_math_width: Option<&str>,
     ) -> Result<Vec<FragmentResult>, String> {
         let doc = compile_real_document(world, content)?;
         // Pre-flatten all pages ONCE.  Per-fragment extraction then
@@ -76,10 +77,28 @@ impl TopDownCompiler {
                 page_index.push((leaves, groups));
             }
         }
+        // Display-math canvas: comes from the protocol's
+        // `display_math_width' field (Emacs's `tip-display-math-width'
+        // resolved per-backend, sent as a Typst-style length string
+        // like "28em" / "400pt" / "16cm").  Centering happens inside
+        // `extract_from_index': inner content shifts right to sit in
+        // the middle of the wider frame.  Inline / single-line display
+        // fragments keep their tight crop (None).  Default 16cm
+        // matches the prior bottom-up multi-line treatment when the
+        // client doesn't set a value.
+        let display_math_canvas_width = display_math_width
+            .and_then(parse_typst_length)
+            .unwrap_or_else(|| typst::layout::Abs::cm(16.0));
         let mut results = Vec::with_capacity(fragments.len());
         for f in fragments {
+            let frag_content = content.get(f.start..f.end).unwrap_or("");
+            let canvas_width = if super::bottom_up::is_multiline_math(frag_content) {
+                Some(display_math_canvas_width)
+            } else {
+                None
+            };
             let render = if main_src.is_some() {
-                extract_from_index(&page_index, f.start, f.end)
+                extract_from_index(&page_index, f.start, f.end, canvas_width)
             } else {
                 None
             };
@@ -113,6 +132,30 @@ impl TopDownCompiler {
             results.push(r);
         }
         Ok(results)
+    }
+}
+
+/// Parse a Typst-style length string ("28em", "400pt", "16cm", "180mm",
+/// "2in") into an `Abs`.  Returns `None` on parse failure.  Used to
+/// translate the protocol's `display_math_width' field (sent by Emacs
+/// as the resolved `tip-display-math-width' value) into a frame width.
+///
+/// `em' is resolved against the Typst body size (11pt) — the same body
+/// size `build_scoped_source' bakes into its `set text(size: 11pt)'
+/// rule, so this stays in sync with the rendered glyph size.
+fn parse_typst_length(s: &str) -> Option<typst::layout::Abs> {
+    use typst::layout::Abs;
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_alphabetic())?;
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num.trim().parse().ok()?;
+    match unit.trim() {
+        "pt" => Some(Abs::pt(n)),
+        "em" => Some(Abs::pt(n * 11.0)),
+        "cm" => Some(Abs::cm(n)),
+        "mm" => Some(Abs::mm(n)),
+        "in" => Some(Abs::inches(n)),
+        _ => None,
     }
 }
 

@@ -126,7 +126,12 @@ impl TypstBackend {
         };
         if matches!(effective_strategy, CompileStrategy::TopDown) {
             if let Ok(results) =
-                TopDownCompiler::compile_all(&mut self.world, &content, &params.fragments)
+                TopDownCompiler::compile_all(
+                    &mut self.world,
+                    &content,
+                    &params.fragments,
+                    params.display_math_width.as_deref(),
+                )
             {
                 return ResponseResult::Fragments { fragments: results };
             }

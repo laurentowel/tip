@@ -33,7 +33,7 @@ For groups acting on M, TFAE:
         .collect();
 
     let mut world = TipWorld::new();
-    let results = TopDownCompiler::compile_all(&mut world, doc, &frags).unwrap();
+    let results = TopDownCompiler::compile_all(&mut world, doc, &frags, None).unwrap();
     assert_eq!(results.len(), 2);
 
     for (i, r) in results.iter().enumerate() {

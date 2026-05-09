@@ -509,10 +509,18 @@ fn pick_external_line_size(
 
 /// Per-page extraction using a pre-flattened index.  No frame-tree
 /// walking inside this function.
+///
+/// `canvas_width`, when set, expands the output Frame's width to the
+/// given value with the math content centered inside it.  Used for
+/// multi-line display math to match the wide-canvas treatment
+/// `bottom_up::compile_source` gives via Typst's 16cm page layout —
+/// without it, top-down's tight ink-only crop would render display
+/// math flush-left while bottom-up renders it centered.
 pub fn extract_from_index(
     pages: &[(Vec<FlatLeaf>, Vec<GroupRecord>)],
     start: usize,
     end: usize,
+    canvas_width: Option<Abs>,
 ) -> Option<FragmentRender> {
     for (page_idx, (leaves, group_records)) in pages.iter().enumerate() {
         // Linear run pass.
@@ -604,13 +612,21 @@ pub fn extract_from_index(
         let crop_min_y = bounds.min_y.min(baseline_y);
         let min_x = bounds.min_x - pad;
         let min_y = crop_min_y - pad;
-        let width = bounds.max_x - bounds.min_x + pad * 2.0;
+        let ink_width = bounds.max_x - bounds.min_x + pad * 2.0;
         let height = crop_max_y - crop_min_y + pad * 2.0;
         let depth = ((crop_max_y - baseline_y) + pad).max(Abs::zero());
 
-        let mut out = Frame::soft(Size::new(width, height));
+        // Canvas widening for display math: Frame becomes `canvas_width'
+        // wide with the inner content centered.  When unset, output is
+        // tight (just ink + pad) — same as before.
+        let (final_width, x_offset) = match canvas_width {
+            Some(cw) if cw > ink_width => (cw, (cw - ink_width) / 2.0),
+            _ => (ink_width, Abs::zero()),
+        };
+
+        let mut out = Frame::soft(Size::new(final_width, height));
         for (pos, item) in keep {
-            out.push(Point::new(pos.x - min_x, pos.y - min_y), item);
+            out.push(Point::new(pos.x - min_x + x_offset, pos.y - min_y), item);
         }
 
         let line_anchors: Vec<Abs> = group_baselines
@@ -631,7 +647,7 @@ pub fn extract_from_index(
 
         return Some(FragmentRender {
             svg: svg_frame(&out),
-            width_pt: width.to_pt(),
+            width_pt: final_width.to_pt(),
             height_pt: height.to_pt(),
             depth_pt: depth.to_pt(),
             page: page_idx,
