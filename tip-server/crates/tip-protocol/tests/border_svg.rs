@@ -1,10 +1,13 @@
 //! Exhaustive tests for `tip_protocol::svg_color::add_viewbox_border`.
 //!
-//! The function is a general SVG transformer: take an SVG, expand its
-//! viewBox + width + height by an edge inset, and inject a `<rect
-//! stroke="currentColor">' that traces the new viewBox.  Tests
-//! exercise viewBox variants, attribute orderings, fallback behavior,
-//! and idempotency.
+//! The function is a general SVG transformer: insert a
+//! `<rect stroke="currentColor">' that traces the inside of the
+//! existing viewBox, half-stroke-inset so the visible line stays
+//! within bounds.  The SVG's outer dimensions and the inner content
+//! are otherwise untouched — Emacs renders the image at the same
+//! pixel size as before (no scaling artifacts from a grown
+//! viewBox).  Tests exercise viewBox variants, attribute orderings,
+//! fallback behavior, and content preservation.
 
 use tip_protocol::svg_color::add_viewbox_border;
 
@@ -22,61 +25,24 @@ fn attr<'a>(svg: &'a str, attr: &str) -> Option<&'a str> {
     Some(&tag[start..end])
 }
 
-// ---- shape: width/height/viewBox grow correctly ----
+// ---- dimensions preserved: SVG is rewritten in place ----
 
 #[test]
-fn dimensions_grow_by_2_edge() {
+fn dimensions_unchanged() {
     let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
     let out = add_viewbox_border(&svg, 10.0, 20.0, 0.5, 0.5);
-    let inner_pad = 2.0;
-    let edge = inner_pad + 0.25; // pad + sw/2
-    let expected_w = 10.0 + 2.0 * edge;
-    let expected_h = 20.0 + 2.0 * edge;
-    let w: f64 = attr(&out, "width")
-        .unwrap()
-        .trim_end_matches("pt")
-        .parse()
-        .unwrap();
-    let h: f64 = attr(&out, "height")
-        .unwrap()
-        .trim_end_matches("pt")
-        .parse()
-        .unwrap();
-    assert!((w - expected_w).abs() < 0.01, "width: got {w}, want {expected_w}");
-    assert!((h - expected_h).abs() < 0.01, "height: got {h}, want {expected_h}");
+    assert_eq!(attr(&out, "width"), Some("10pt"));
+    assert_eq!(attr(&out, "height"), Some("20pt"));
+    assert_eq!(attr(&out, "viewBox"), Some("0 0 10 20"));
 }
 
 #[test]
-fn viewbox_origin_shifts_negative_by_edge() {
-    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
-    let out = add_viewbox_border(&svg, 10.0, 20.0, 0.5, 0.5);
-    let vb: Vec<f64> = attr(&out, "viewBox")
-        .unwrap()
-        .split_ascii_whitespace()
-        .map(|s| s.parse().unwrap())
-        .collect();
-    let edge = 2.0 + 0.25;
-    assert!((vb[0] - (-edge)).abs() < 0.01, "vb x: {:?}", vb);
-    assert!((vb[1] - (-edge)).abs() < 0.01, "vb y: {:?}", vb);
-    assert!((vb[2] - (10.0 + 2.0 * edge)).abs() < 0.01, "vb w: {:?}", vb);
-    assert!((vb[3] - (20.0 + 2.0 * edge)).abs() < 0.01, "vb h: {:?}", vb);
-}
-
-#[test]
-fn nonzero_viewbox_origin_preserved_with_offset() {
-    // Inner viewBox starts at (50, 100) — Typst sometimes does this.
+fn nonzero_viewbox_origin_preserved() {
+    // Inner viewBox doesn't start at (0,0) — must stay unchanged.
     let svg = make_svg(r#"width="10pt" height="20pt" viewBox="50 100 10 20""#);
     let out = add_viewbox_border(&svg, 10.0, 20.0, 0.5, 0.5);
-    let vb: Vec<f64> = attr(&out, "viewBox")
-        .unwrap()
-        .split_ascii_whitespace()
-        .map(|s| s.parse().unwrap())
-        .collect();
-    let edge = 2.0 + 0.25;
-    assert!((vb[0] - (50.0 - edge)).abs() < 0.01, "vb: {:?}", vb);
-    assert!((vb[1] - (100.0 - edge)).abs() < 0.01, "vb: {:?}", vb);
-    assert!((vb[2] - (10.0 + 2.0 * edge)).abs() < 0.01);
-    assert!((vb[3] - (20.0 + 2.0 * edge)).abs() < 0.01);
+    assert_eq!(attr(&out, "viewBox"), Some("50 100 10 20"));
+    assert_eq!(attr(&out, "width"), Some("10pt"));
 }
 
 // ---- the rect itself ----
@@ -91,17 +57,28 @@ fn rect_uses_current_color_and_opacity() {
 }
 
 #[test]
-fn rect_sits_inside_new_viewbox_by_half_stroke() {
+fn rect_sits_inside_viewbox_by_half_stroke() {
     let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
     let out = add_viewbox_border(&svg, 10.0, 20.0, 0.5, 1.0);
-    // sw=1.0; edge = inner_pad(2) + sw/2(0.5) = 2.5
-    // viewBox: -2.5 -2.5 15 25
-    // rect: x=-2.5+0.5=-2.0, y=-2.0, w=15-1=14, h=25-1=24
+    // sw=1.0; rect inset by sw/2=0.5 on each side.
+    // viewBox stays "0 0 10 20".
+    // rect: x=0.5, y=0.5, w=10-1=9, h=20-1=19
     let rect = find_rect(&out);
-    assert_eq!(attr_in_tag(rect, "x"), Some("-2.000"));
-    assert_eq!(attr_in_tag(rect, "y"), Some("-2.000"));
-    assert_eq!(attr_in_tag(rect, "width"), Some("14.000"));
-    assert_eq!(attr_in_tag(rect, "height"), Some("24.000"));
+    assert_eq!(attr_in_tag(rect, "x"), Some("0.500"));
+    assert_eq!(attr_in_tag(rect, "y"), Some("0.500"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("9.000"));
+    assert_eq!(attr_in_tag(rect, "height"), Some("19.000"));
+}
+
+#[test]
+fn rect_offsets_from_nonzero_viewbox_origin() {
+    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="50 100 10 20""#);
+    let out = add_viewbox_border(&svg, 10.0, 20.0, 0.5, 1.0);
+    let rect = find_rect(&out);
+    assert_eq!(attr_in_tag(rect, "x"), Some("50.500"));
+    assert_eq!(attr_in_tag(rect, "y"), Some("100.500"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("9.000"));
+    assert_eq!(attr_in_tag(rect, "height"), Some("19.000"));
 }
 
 fn find_rect(svg: &str) -> &str {
@@ -142,11 +119,11 @@ fn other_svg_attrs_preserved() {
 
 #[test]
 fn attribute_order_does_not_matter() {
-    // width AFTER viewBox: should still work.
+    // width AFTER viewBox in source — both must still parse.
     let svg = make_svg(r#"viewBox="0 0 10 20" width="10pt" height="20pt""#);
     let out = add_viewbox_border(&svg, 10.0, 20.0, 0.3, 0.5);
-    let w: f64 = attr(&out, "width").unwrap().trim_end_matches("pt").parse().unwrap();
-    assert!((w - (10.0 + 4.5)).abs() < 0.01);
+    assert!(out.contains("<rect "), "rect should be inserted");
+    assert_eq!(attr(&out, "width"), Some("10pt"));
 }
 
 // ---- fallbacks + degenerate inputs ----
@@ -166,30 +143,18 @@ fn negative_opacity_returns_input_unchanged() {
 }
 
 #[test]
-fn falls_back_to_fallback_dims_when_width_missing() {
-    // No width/height attrs.  We pass fallback 100/50.
-    let svg = make_svg(r#"viewBox="0 0 100 50""#);
-    let out = add_viewbox_border(&svg, 100.0, 50.0, 0.3, 0.5);
-    let edge = 2.0 + 0.25;
-    let w: f64 = attr(&out, "width").unwrap().trim_end_matches("pt").parse().unwrap();
-    let h: f64 = attr(&out, "height").unwrap().trim_end_matches("pt").parse().unwrap();
-    assert!((w - (100.0 + 2.0 * edge)).abs() < 0.01);
-    assert!((h - (50.0 + 2.0 * edge)).abs() < 0.01);
-}
-
-#[test]
-fn falls_back_to_fallback_dims_when_viewbox_missing() {
+fn missing_viewbox_uses_fallback_dims_for_rect() {
+    // No viewBox.  We pass fallback width=100, height=50 — those
+    // define the rect's coordinate space.
     let svg = make_svg(r#"width="100pt" height="50pt""#);
     let out = add_viewbox_border(&svg, 100.0, 50.0, 0.3, 0.5);
-    // viewBox should now exist with the fallback dimensions.
-    let vb: Vec<f64> = attr(&out, "viewBox")
-        .unwrap()
-        .split_ascii_whitespace()
-        .map(|s| s.parse().unwrap())
-        .collect();
-    let edge = 2.0 + 0.25;
-    assert!((vb[0] + edge).abs() < 0.01);
-    assert!((vb[1] + edge).abs() < 0.01);
+    let rect = find_rect(&out);
+    assert_eq!(attr_in_tag(rect, "x"), Some("0.250"));
+    assert_eq!(attr_in_tag(rect, "y"), Some("0.250"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("99.500"));
+    assert_eq!(attr_in_tag(rect, "height"), Some("49.500"));
+    // SVG outer attrs untouched.
+    assert_eq!(attr(&out, "width"), Some("100pt"));
 }
 
 #[test]
@@ -202,18 +167,16 @@ fn zero_dims_returns_input_unchanged() {
 // ---- idempotency / stacking ----
 
 #[test]
-fn applying_twice_stacks_a_second_border() {
-    // Each call adds another rect + grows by 2*edge.  Not strictly
-    // useful in production but documents the behavior.
+fn applying_twice_inserts_a_second_rect_dimensions_unchanged() {
+    // Function is additive in `<rect>' count but does NOT resize.
+    // Two calls = two overlapping borders, same outer dimensions.
     let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
     let once = add_viewbox_border(&svg, 10.0, 20.0, 0.3, 0.5);
     let twice = add_viewbox_border(&once, 10.0, 20.0, 0.3, 0.5);
     let rect_count = twice.matches("<rect ").count();
-    assert_eq!(rect_count, 2, "expected 2 nested borders, got {rect_count}");
-
-    let edge = 2.0 + 0.25;
-    let w: f64 = attr(&twice, "width").unwrap().trim_end_matches("pt").parse().unwrap();
-    assert!((w - (10.0 + 4.0 * edge)).abs() < 0.01, "width should grow twice");
+    assert_eq!(rect_count, 2, "expected 2 overlapping borders, got {rect_count}");
+    assert_eq!(attr(&twice, "width"), Some("10pt"));
+    assert_eq!(attr(&twice, "viewBox"), Some("0 0 10 20"));
 }
 
 // ---- ill-formed input ----

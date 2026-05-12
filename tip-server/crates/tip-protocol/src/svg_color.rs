@@ -114,27 +114,23 @@ pub fn add_viewbox_border(
         return svg.to_string();
     }
     let (vx, vy, vw, vh) = parse_viewbox(svg).unwrap_or((0.0, 0.0, iw, ih));
+    if vw <= 0.0 || vh <= 0.0 {
+        return svg.to_string();
+    }
 
-    // Breathing room between content and border + half-stroke so the
-    // visible line sits inside the new viewBox.
-    let inner_pad = 2.0_f64;
-    let edge = inner_pad + stroke_width_pt / 2.0;
-
-    // Expand viewBox outward by `edge' on each side.  Origin shifts
-    // negatively so the original content stays put in viewBox-coords;
-    // width/height grow.
-    let new_vx = vx - edge;
-    let new_vy = vy - edge;
-    let new_vw = vw + 2.0 * edge;
-    let new_vh = vh + 2.0 * edge;
-    let new_w_pt = iw + 2.0 * edge;
-    let new_h_pt = ih + 2.0 * edge;
-
-    // Rect in NEW viewBox coords: just inside each edge by sw/2.
-    let rect_x = new_vx + stroke_width_pt / 2.0;
-    let rect_y = new_vy + stroke_width_pt / 2.0;
-    let rect_w = new_vw - stroke_width_pt;
-    let rect_h = new_vh - stroke_width_pt;
+    // The rect sits inside the existing viewBox, inset by half the
+    // stroke width so the visible line stays within bounds.  No
+    // resizing — the SVG's width/height/viewBox stay exactly as the
+    // caller produced them, so Emacs renders the image at the same
+    // pixel size as before.  The border eats a tiny strip of the
+    // viewBox; for canvas-wide display math this strip is well clear
+    // of the centered ink, and for tight crops it brushes the ink
+    // edges (the intended "subtle border on the math").
+    let half = stroke_width_pt / 2.0;
+    let rect_x = vx + half;
+    let rect_y = vy + half;
+    let rect_w = (vw - stroke_width_pt).max(0.0);
+    let rect_h = (vh - stroke_width_pt).max(0.0);
     let rect = format!(
         "<rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" \
          stroke=\"currentColor\" stroke-opacity=\"{:.3}\" \
@@ -142,27 +138,9 @@ pub fn add_viewbox_border(
         rect_x, rect_y, rect_w, rect_h, stroke_opacity, stroke_width_pt
     );
 
-    // Rewrite three attributes on the outer <svg ...> opening tag,
-    // then splice the rect immediately after.  Single-SVG output —
-    // no nested svg, no transform — so any renderer that handles
-    // basic SVG handles this.
     let mut out = svg.to_string();
     if let Some(tag_end) = find_tag_close(&out) {
-        let new_w_attr = format!("width=\"{:.3}pt\"", new_w_pt);
-        let new_h_attr = format!("height=\"{:.3}pt\"", new_h_pt);
-        let new_vb_attr = format!(
-            "viewBox=\"{:.3} {:.3} {:.3} {:.3}\"",
-            new_vx, new_vy, new_vw, new_vh
-        );
-        out = rewrite_attr(out, "width", &new_w_attr);
-        out = rewrite_attr(out, "height", &new_h_attr);
-        out = rewrite_attr(out, "viewBox", &new_vb_attr);
-
-        // Re-find the (now-rewritten) opening tag end and inject rect.
-        if let Some(new_tag_end) = find_tag_close(&out) {
-            let _ = tag_end; // suppress unused
-            out.insert_str(new_tag_end + 1, &rect);
-        }
+        out.insert_str(tag_end + 1, &rect);
     }
     out
 }
@@ -221,34 +199,6 @@ fn find_tag_close(svg: &str) -> Option<usize> {
         i += 1;
     }
     None
-}
-
-/// Replace `attr="..."` within the first `<svg>` opening tag with
-/// `new`, or insert `new` just before the closing `>` of the tag if
-/// the attribute is absent.
-fn rewrite_attr(svg: String, attr: &str, new: &str) -> String {
-    let tag_end = match find_tag_close(&svg) {
-        Some(p) => p,
-        None => return svg,
-    };
-    let needle = format!("{attr}=\"");
-    if let Some(attr_start) = svg[..tag_end].find(&needle) {
-        if let Some(val_end_rel) = svg[attr_start + needle.len()..tag_end].find('"') {
-            let attr_end = attr_start + needle.len() + val_end_rel + 1;
-            let mut out = String::with_capacity(svg.len() + new.len());
-            out.push_str(&svg[..attr_start]);
-            out.push_str(new);
-            out.push_str(&svg[attr_end..]);
-            return out;
-        }
-    }
-    // Attribute absent — insert just before the `>`.
-    let mut out = String::with_capacity(svg.len() + new.len() + 1);
-    out.push_str(&svg[..tag_end]);
-    out.push(' ');
-    out.push_str(new);
-    out.push_str(&svg[tag_end..]);
-    out
 }
 
 /// Apply a border to every `FragmentResult' whose source content is
