@@ -62,6 +62,26 @@ impl KatexBackend {
                 Err(e) => results.push(fragment_error(loc, e)),
             }
         }
+        // Canvas widening for multi-line display.  KaTeX/RaTeX have no
+        // native target-width knob, so we post-process the SVG: viewBox
+        // x-origin shifts negatively, width grows, content stays put —
+        // visually centered inside the wider viewport.  Done BEFORE the
+        // border so the border tracks the widened canvas, not the
+        // original ink-tight viewBox.
+        if let Some(width_str) = params.display_math_width.as_deref() {
+            let body_pt = results
+                .iter()
+                .find_map(|r| r.font_size_pt)
+                .unwrap_or(11.0);
+            if let Some(target_pt) = parse_length_pt(width_str, body_pt) {
+                tip_protocol::svg_color::apply_display_widen(
+                    &mut results,
+                    &content,
+                    Some(target_pt),
+                    is_multiline_display_katex,
+                );
+            }
+        }
         tip_protocol::svg_color::apply_display_border(
             &mut results,
             &content,
@@ -123,6 +143,26 @@ fn is_display_delims(s: &str) -> bool {
 /// the delimiters.  Used by the shared border post-processor.
 fn is_multiline_display_katex(s: &str) -> bool {
     is_display_delims(s) && s.contains('\n')
+}
+
+/// Parse a CSS-style length string (e.g. "20em", "400pt", "16cm",
+/// "180mm", "2in") into points.  `body_pt' resolves `em' units —
+/// for KaTeX we pass the fragment's reported `font_size_pt' so em
+/// reflects the actual rendered glyph size, matching the
+/// `tip-display-math-width' = NNem semantics on the Emacs side.
+fn parse_length_pt(s: &str, body_pt: f64) -> Option<f64> {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_alphabetic())?;
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num.trim().parse().ok()?;
+    match unit.trim() {
+        "pt" => Some(n),
+        "em" => Some(n * body_pt),
+        "cm" => Some(n * 28.346_456_692_913_385),
+        "mm" => Some(n * 2.834_645_669_291_339),
+        "in" => Some(n * 72.0),
+        _ => None,
+    }
 }
 
 /// `ratex-parser::parse` strips outer `$`/`$$` if present, but our

@@ -145,6 +145,66 @@ pub fn add_viewbox_border(
     out
 }
 
+/// Widen an SVG's canvas to `target_width_pt`, centering the original
+/// content horizontally inside the new viewport.  Used by backends
+/// that don't natively support a target-width knob (KaTeX) so display
+/// math still gets the wide-canvas-with-centered-math treatment that
+/// Typst and LaTeX produce.
+///
+/// Mechanics: the viewBox's x-origin shifts negatively by
+/// `(target_width - current_width) / 2`, its width grows by the
+/// matching amount, and the `width' attribute is replaced.  Content
+/// positions in the SVG body are untouched — they were at their
+/// original coords inside the original viewBox, which now sits in
+/// the middle of a wider viewport.  No-op when the target is `<=`
+/// the current width, or when width / viewBox can't be parsed.
+pub fn widen_canvas(svg: &str, target_width_pt: f64) -> String {
+    let iw = match parse_svg_dim(svg, "width") {
+        Some(v) if v > 0.0 => v,
+        _ => return svg.to_string(),
+    };
+    if target_width_pt <= iw {
+        return svg.to_string();
+    }
+    let (vx, vy, vw, vh) = match parse_viewbox(svg) {
+        Some(v) => v,
+        None => return svg.to_string(),
+    };
+    let shift = (target_width_pt - iw) / 2.0;
+    let new_vx = vx - shift;
+    let new_vw = vw + 2.0 * shift;
+    let new_viewbox = format!("{:.3} {:.3} {:.3} {:.3}", new_vx, vy, new_vw, vh);
+    let new_width = format!("{:.3}pt", target_width_pt);
+    let out = rewrite_quoted_attr(svg, "viewBox", &new_viewbox);
+    rewrite_quoted_attr(&out, "width", &new_width)
+}
+
+/// Replace the value of `attr` within the first `<svg>` opening tag,
+/// preserving the original quote style (`"` or `'`).  No-op if the
+/// attribute is missing.
+fn rewrite_quoted_attr(svg: &str, attr: &str, new_val: &str) -> String {
+    let tag_end = match find_tag_close(svg) {
+        Some(p) => p,
+        None => return svg.to_string(),
+    };
+    let tag = &svg[..tag_end];
+    for quote in ['"', '\''] {
+        let needle = format!("{attr}={quote}");
+        if let Some(start) = tag.find(&needle) {
+            let val_start = start + needle.len();
+            if let Some(rel_end) = tag[val_start..].find(quote) {
+                let val_end = val_start + rel_end;
+                let mut out = String::with_capacity(svg.len() + new_val.len());
+                out.push_str(&svg[..val_start]);
+                out.push_str(new_val);
+                out.push_str(&svg[val_end..]);
+                return out;
+            }
+        }
+    }
+    svg.to_string()
+}
+
 /// Parse `attr="VAL"` or `attr='VAL'` from the outer `<svg>` tag.
 /// Both quote styles are valid SVG; Typst emits double, dvisvgm
 /// (LaTeX backend) emits single.  Returns the value WITHOUT quotes.
@@ -204,6 +264,39 @@ fn find_tag_close(svg: &str) -> Option<usize> {
         i += 1;
     }
     None
+}
+
+/// Widen the canvas of every multi-line-display `FragmentResult' to
+/// `target_width_pt' via `widen_canvas'.  Updates the result's
+/// `width_pt' to match so downstream consumers (border post-process,
+/// client-side image scaling) see the new dimensions.
+pub fn apply_display_widen<F>(
+    results: &mut [crate::messages::FragmentResult],
+    document_content: &str,
+    target_width_pt: Option<f64>,
+    is_multiline_display: F,
+) where
+    F: Fn(&str) -> bool,
+{
+    let target = match target_width_pt {
+        Some(w) if w > 0.0 => w,
+        _ => return,
+    };
+    for r in results.iter_mut() {
+        if r.svg.is_empty() || r.error.is_some() {
+            continue;
+        }
+        let Some(text) = document_content.get(r.start..r.end) else {
+            continue;
+        };
+        if !is_multiline_display(text) {
+            continue;
+        }
+        r.svg = widen_canvas(&r.svg, target);
+        if r.width_pt < target {
+            r.width_pt = target;
+        }
+    }
 }
 
 /// Apply a border to every `FragmentResult' whose source content is

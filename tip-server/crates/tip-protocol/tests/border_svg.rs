@@ -9,7 +9,7 @@
 //! viewBox).  Tests exercise viewBox variants, attribute orderings,
 //! fallback behavior, and content preservation.
 
-use tip_protocol::svg_color::add_viewbox_border;
+use tip_protocol::svg_color::{add_viewbox_border, widen_canvas};
 
 fn make_svg(opening_attrs: &str) -> String {
     format!("<svg {opening_attrs}><circle cx=\"5\" cy=\"5\" r=\"3\"/></svg>")
@@ -223,4 +223,57 @@ fn non_svg_input_is_returned_verbatim() {
     // then rewrite_attr does nothing because no <svg> tag — string
     // unchanged.
     assert_eq!(out, s);
+}
+
+// ---- widen_canvas ----
+
+#[test]
+fn widen_canvas_shifts_viewbox_and_updates_width() {
+    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
+    let out = widen_canvas(&svg, 30.0);
+    // viewBox should now extend (30 - 10) / 2 = 10 to the left of 0
+    // and 10 to the right, total 30 wide.
+    assert_eq!(attr(&out, "viewBox"), Some("-10.000 0.000 30.000 20.000"));
+    assert_eq!(attr(&out, "width"), Some("30.000pt"));
+    assert_eq!(attr(&out, "height"), Some("20pt"));
+}
+
+#[test]
+fn widen_canvas_with_nonzero_origin() {
+    // Original content sat in viewBox starting at x=5.
+    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="5 -8 10 20""#);
+    let out = widen_canvas(&svg, 30.0);
+    // shift = 10; new origin x = 5 - 10 = -5; new width = 10 + 20 = 30.
+    assert_eq!(attr(&out, "viewBox"), Some("-5.000 -8.000 30.000 20.000"));
+}
+
+#[test]
+fn widen_canvas_target_le_current_is_noop() {
+    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
+    assert_eq!(widen_canvas(&svg, 10.0), svg);
+    assert_eq!(widen_canvas(&svg, 5.0), svg);
+}
+
+#[test]
+fn widen_canvas_preserves_single_quotes() {
+    // dvisvgm-style SVGs.  Output should keep the single-quote style.
+    let svg = "<svg width='10pt' height='20pt' viewBox='0 0 10 20'><circle r='3'/></svg>";
+    let out = widen_canvas(svg, 30.0);
+    assert!(out.contains("width='30.000pt'"), "got:\n{out}");
+    assert!(out.contains("viewBox='-10.000 0.000 30.000 20.000'"), "got:\n{out}");
+}
+
+#[test]
+fn widen_canvas_then_border_brackets_widened_canvas() {
+    // After widening, the border should trace the NEW viewBox edges,
+    // not the original ink region.
+    let svg = make_svg(r#"width="10pt" height="20pt" viewBox="0 0 10 20""#);
+    let widened = widen_canvas(&svg, 30.0);
+    let bordered = add_viewbox_border(&widened, 30.0, 20.0, 0.3, 1.0);
+    let rect = find_rect(&bordered);
+    // Border rect inset by sw/2 = 0.5 inside new viewBox "-10 0 30 20".
+    assert_eq!(attr_in_tag(rect, "x"), Some("-9.500"));
+    assert_eq!(attr_in_tag(rect, "y"), Some("0.500"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("29.000"));
+    assert_eq!(attr_in_tag(rect, "height"), Some("19.000"));
 }
