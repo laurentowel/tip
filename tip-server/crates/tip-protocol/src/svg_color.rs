@@ -113,44 +113,61 @@ pub fn add_viewbox_border(
     if iw <= 0.0 || ih <= 0.0 {
         return svg.to_string();
     }
+    let (vx, vy, vw, vh) = parse_viewbox(svg).unwrap_or((0.0, 0.0, iw, ih));
 
+    // Breathing room between content and border + half-stroke so the
+    // visible line sits inside the new viewBox.
     let inner_pad = 2.0_f64;
     let edge = inner_pad + stroke_width_pt / 2.0;
-    let outer_w = iw + 2.0 * edge;
-    let outer_h = ih + 2.0 * edge;
 
-    let rect_x = stroke_width_pt / 2.0;
-    let rect_y = stroke_width_pt / 2.0;
-    let rect_w = outer_w - stroke_width_pt;
-    let rect_h = outer_h - stroke_width_pt;
+    // Expand viewBox outward by `edge' on each side.  Origin shifts
+    // negatively so the original content stays put in viewBox-coords;
+    // width/height grow.
+    let new_vx = vx - edge;
+    let new_vy = vy - edge;
+    let new_vw = vw + 2.0 * edge;
+    let new_vh = vh + 2.0 * edge;
+    let new_w_pt = iw + 2.0 * edge;
+    let new_h_pt = ih + 2.0 * edge;
 
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" \
-         width=\"{ow:.3}pt\" height=\"{oh:.3}pt\" \
-         viewBox=\"0 0 {ow:.3} {oh:.3}\">\
-         <rect x=\"{rx:.3}\" y=\"{ry:.3}\" width=\"{rw:.3}\" height=\"{rh:.3}\" \
-         stroke=\"currentColor\" stroke-opacity=\"{op:.3}\" \
-         stroke-width=\"{sw:.3}\" fill=\"none\"/>\
-         <g transform=\"translate({tx:.3}, {ty:.3})\">{inner}</g>\
-         </svg>",
-        ow = outer_w,
-        oh = outer_h,
-        rx = rect_x,
-        ry = rect_y,
-        rw = rect_w,
-        rh = rect_h,
-        op = stroke_opacity,
-        sw = stroke_width_pt,
-        tx = edge,
-        ty = edge,
-        inner = svg.trim_start_matches(|c: char| c.is_whitespace()),
-    )
+    // Rect in NEW viewBox coords: just inside each edge by sw/2.
+    let rect_x = new_vx + stroke_width_pt / 2.0;
+    let rect_y = new_vy + stroke_width_pt / 2.0;
+    let rect_w = new_vw - stroke_width_pt;
+    let rect_h = new_vh - stroke_width_pt;
+    let rect = format!(
+        "<rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" \
+         stroke=\"currentColor\" stroke-opacity=\"{:.3}\" \
+         stroke-width=\"{:.3}\" fill=\"none\"/>",
+        rect_x, rect_y, rect_w, rect_h, stroke_opacity, stroke_width_pt
+    );
+
+    // Rewrite three attributes on the outer <svg ...> opening tag,
+    // then splice the rect immediately after.  Single-SVG output —
+    // no nested svg, no transform — so any renderer that handles
+    // basic SVG handles this.
+    let mut out = svg.to_string();
+    if let Some(tag_end) = find_tag_close(&out) {
+        let new_w_attr = format!("width=\"{:.3}pt\"", new_w_pt);
+        let new_h_attr = format!("height=\"{:.3}pt\"", new_h_pt);
+        let new_vb_attr = format!(
+            "viewBox=\"{:.3} {:.3} {:.3} {:.3}\"",
+            new_vx, new_vy, new_vw, new_vh
+        );
+        out = rewrite_attr(out, "width", &new_w_attr);
+        out = rewrite_attr(out, "height", &new_h_attr);
+        out = rewrite_attr(out, "viewBox", &new_vb_attr);
+
+        // Re-find the (now-rewritten) opening tag end and inject rect.
+        if let Some(new_tag_end) = find_tag_close(&out) {
+            let _ = tag_end; // suppress unused
+            out.insert_str(new_tag_end + 1, &rect);
+        }
+    }
+    out
 }
 
 /// Parse a numeric attribute (in points) from the outer `<svg>` tag.
-/// Returns `None` when the attribute is absent or non-numeric.
-/// Strips a trailing `pt` if present; values without a unit suffix
-/// are treated as bare numbers (Typst always emits `Xpt`).
 fn parse_svg_dim(svg: &str, attr: &str) -> Option<f64> {
     let trimmed = svg.trim_start_matches(|c: char| c.is_whitespace());
     let tag_end = trimmed.find('>')?;
@@ -159,8 +176,79 @@ fn parse_svg_dim(svg: &str, attr: &str) -> Option<f64> {
     let val_start = tag.find(&needle)? + needle.len();
     let val_end = tag[val_start..].find('"')? + val_start;
     let val = &tag[val_start..val_end];
-    let num_part = val.trim_end_matches(|c: char| c.is_alphabetic()).trim();
-    num_part.parse().ok()
+    val.trim_end_matches(|c: char| c.is_alphabetic())
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Parse `viewBox="x y w h"` from the outer `<svg>` tag.
+fn parse_viewbox(svg: &str) -> Option<(f64, f64, f64, f64)> {
+    let trimmed = svg.trim_start_matches(|c: char| c.is_whitespace());
+    let tag_end = trimmed.find('>')?;
+    let tag = &trimmed[..tag_end];
+    let needle = "viewBox=\"";
+    let val_start = tag.find(needle)? + needle.len();
+    let val_end = tag[val_start..].find('"')? + val_start;
+    let parts: Vec<&str> = tag[val_start..val_end]
+        .split_ascii_whitespace()
+        .collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    Some((
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+        parts[3].parse().ok()?,
+    ))
+}
+
+/// Find the byte offset of the `>` closing the first `<svg ...>` tag.
+fn find_tag_close(svg: &str) -> Option<usize> {
+    let bytes = svg.as_bytes();
+    let start = svg.find("<svg")?;
+    let mut i = start + 4;
+    let mut in_quotes: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match in_quotes {
+            Some(q) if q == b => in_quotes = None,
+            None if b == b'"' || b == b'\'' => in_quotes = Some(b),
+            None if b == b'>' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Replace `attr="..."` within the first `<svg>` opening tag with
+/// `new`, or insert `new` just before the closing `>` of the tag if
+/// the attribute is absent.
+fn rewrite_attr(svg: String, attr: &str, new: &str) -> String {
+    let tag_end = match find_tag_close(&svg) {
+        Some(p) => p,
+        None => return svg,
+    };
+    let needle = format!("{attr}=\"");
+    if let Some(attr_start) = svg[..tag_end].find(&needle) {
+        if let Some(val_end_rel) = svg[attr_start + needle.len()..tag_end].find('"') {
+            let attr_end = attr_start + needle.len() + val_end_rel + 1;
+            let mut out = String::with_capacity(svg.len() + new.len());
+            out.push_str(&svg[..attr_start]);
+            out.push_str(new);
+            out.push_str(&svg[attr_end..]);
+            return out;
+        }
+    }
+    // Attribute absent — insert just before the `>`.
+    let mut out = String::with_capacity(svg.len() + new.len() + 1);
+    out.push_str(&svg[..tag_end]);
+    out.push(' ');
+    out.push_str(new);
+    out.push_str(&svg[tag_end..]);
+    out
 }
 
 /// Apply a border to every `FragmentResult' whose source content is
