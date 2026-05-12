@@ -79,19 +79,25 @@ pub fn fills_to_current_color(svg: &str, hex: &str) -> String {
 /// variant targets that specific encoding plus the common textual
 /// aliases.
 /// Wrap an existing SVG in a slightly larger outer SVG that draws a
-/// subtle border around it.  Used by display-math post-processing
-/// so the resulting image carries a frame around the equation.  The
+/// subtle border around it.  Used by display-math post-processing so
+/// the resulting image carries a frame around the equation.  The
 /// stroke uses `currentColor` so the border picks up the Emacs face
 /// color at display time (theme changes are free); opacity is
 /// caller-supplied.
 ///
-/// `width_pt' / `height_pt' are the dimensions of the INNER SVG.
-/// The output's dimensions are `inner + 2 * (padding + stroke_width / 2)`,
-/// with the inner SVG translated to sit centered.  Wrapping (rather
-/// than injecting into the inner SVG's `viewBox`) sidesteps any
-/// coordinate transforms / nested viewBoxes Typst or dvisvgm might
-/// apply — the outer SVG owns its own coordinate space and the inner
-/// content keeps whatever transforms it had.
+/// The outer SVG's dimensions come from parsing the INNER SVG's own
+/// `width="Xpt"` / `height="Xpt"` attributes — NOT from
+/// `FragmentResult.width_pt`, which is ink-width and may be narrower
+/// than the actual viewBox (bottom-up renders display math on a
+/// page-width-wide canvas with the ink centered).  The inner SVG is
+/// embedded verbatim inside a `<g transform="translate(edge, edge)">`,
+/// preserving its own viewBox + coordinate system.  Wrapping (rather
+/// than injecting into the inner SVG's viewBox) sidesteps any
+/// internal transforms Typst or dvisvgm might apply.
+///
+/// `width_pt' / `height_pt' are fallbacks used when the inner SVG
+/// has no parseable `width`/`height` attribute (defensive — Typst
+/// always writes them).
 pub fn add_viewbox_border(
     svg: &str,
     width_pt: f64,
@@ -99,25 +105,24 @@ pub fn add_viewbox_border(
     stroke_opacity: f64,
     stroke_width_pt: f64,
 ) -> String {
-    if stroke_opacity <= 0.0 || width_pt <= 0.0 || height_pt <= 0.0 {
+    if stroke_opacity <= 0.0 {
         return svg.to_string();
     }
-    // Small breathing room between the border and the ink, plus
-    // half the stroke width so the visible border line sits inside
-    // the outer viewBox.
+    let iw = parse_svg_dim(svg, "width").unwrap_or(width_pt);
+    let ih = parse_svg_dim(svg, "height").unwrap_or(height_pt);
+    if iw <= 0.0 || ih <= 0.0 {
+        return svg.to_string();
+    }
+
     let inner_pad = 2.0_f64;
     let edge = inner_pad + stroke_width_pt / 2.0;
-    let outer_w = width_pt + 2.0 * edge;
-    let outer_h = height_pt + 2.0 * edge;
+    let outer_w = iw + 2.0 * edge;
+    let outer_h = ih + 2.0 * edge;
 
-    // The rect goes around the inner content + breathing room,
-    // centered on the visible border line.
     let rect_x = stroke_width_pt / 2.0;
     let rect_y = stroke_width_pt / 2.0;
     let rect_w = outer_w - stroke_width_pt;
     let rect_h = outer_h - stroke_width_pt;
-
-    let inner_body = strip_outer_svg_tags(svg);
 
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" \
@@ -138,45 +143,24 @@ pub fn add_viewbox_border(
         sw = stroke_width_pt,
         tx = edge,
         ty = edge,
-        inner = inner_body,
+        inner = svg.trim_start_matches(|c: char| c.is_whitespace()),
     )
 }
 
-/// Return the content of an SVG between its outer `<svg ...>` opening
-/// tag and `</svg>` closing tag.  If the input isn't a well-formed
-/// `<svg>...</svg>`, returns the input verbatim — we'd rather wrap a
-/// malformed payload than silently lose data.
-fn strip_outer_svg_tags(svg: &str) -> &str {
+/// Parse a numeric attribute (in points) from the outer `<svg>` tag.
+/// Returns `None` when the attribute is absent or non-numeric.
+/// Strips a trailing `pt` if present; values without a unit suffix
+/// are treated as bare numbers (Typst always emits `Xpt`).
+fn parse_svg_dim(svg: &str, attr: &str) -> Option<f64> {
     let trimmed = svg.trim_start_matches(|c: char| c.is_whitespace());
-    let after_open = match find_tag_close(trimmed, "<svg") {
-        Some(p) => &trimmed[p + 1..],
-        None => return svg,
-    };
-    match after_open.rfind("</svg>") {
-        Some(p) => &after_open[..p],
-        None => svg,
-    }
-}
-
-/// Find the byte offset of the `>` that closes `<{tag} …>`, accounting
-/// for `>` characters that might appear inside attribute values.
-/// Returns the offset of the `>` itself.
-fn find_tag_close(s: &str, tag: &str) -> Option<usize> {
-    let start = s.find(tag)?;
-    let bytes = s.as_bytes();
-    let mut i = start + tag.len();
-    let mut in_quotes: Option<u8> = None;
-    while i < bytes.len() {
-        let b = bytes[i];
-        match in_quotes {
-            Some(q) if q == b => in_quotes = None,
-            None if b == b'"' || b == b'\'' => in_quotes = Some(b),
-            None if b == b'>' => return Some(i),
-            _ => {}
-        }
-        i += 1;
-    }
-    None
+    let tag_end = trimmed.find('>')?;
+    let tag = &trimmed[..tag_end];
+    let needle = format!("{attr}=\"");
+    let val_start = tag.find(&needle)? + needle.len();
+    let val_end = tag[val_start..].find('"')? + val_start;
+    let val = &tag[val_start..val_end];
+    let num_part = val.trim_end_matches(|c: char| c.is_alphabetic()).trim();
+    num_part.parse().ok()
 }
 
 /// Apply a border to every `FragmentResult' whose source content is
