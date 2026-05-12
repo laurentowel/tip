@@ -420,6 +420,27 @@ fn collect_scope_nodes(
             | SyntaxKind::ShowRule
             | SyntaxKind::ModuleImport
             | SyntaxKind::ModuleInclude => {
+                let raw = &source[offset..node_end];
+                // Filter out two doc-level rules that would either
+                // poison or wrap our synthetic single-fragment compile:
+                //
+                //   `#set page(...)' — we emit our own page geometry
+                //   for baseline accounting; doc's would conflict.
+                //
+                //   `#show: rest => …' (body-transform with no
+                //   selector) — wraps everything that follows in a
+                //   container, including our page_setup → "page
+                //   configuration is not allowed inside of containers".
+                //   Doc-level `#show:` typically does multi-column
+                //   layout / page-frame wrapping, not anything we
+                //   want for a fragment preview.
+                let is_set_page = matches!(node.kind(), SyntaxKind::SetRule)
+                    && raw.trim_start().starts_with("set page");
+                let is_body_show = matches!(node.kind(), SyntaxKind::ShowRule)
+                    && raw.trim_start().starts_with("show:");
+                if is_set_page || is_body_show {
+                    return;
+                }
                 // Include the # prefix if present (it's the preceding Hash sibling)
                 let start = if offset > 0 && source.as_bytes().get(offset - 1) == Some(&b'#') {
                     offset - 1
