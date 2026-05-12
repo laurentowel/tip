@@ -78,6 +78,87 @@ pub fn fills_to_current_color(svg: &str, hex: &str) -> String {
 /// as `rgba(0,0,0,1)` and doesn't offer a stand-in knob — so this
 /// variant targets that specific encoding plus the common textual
 /// aliases.
+/// Inject a `<rect>` border that traces the SVG's viewBox.  Used by
+/// the Typst backend for multi-line display math so the resulting
+/// image carries a subtle frame around the equation.  The stroke
+/// uses `currentColor` and the caller-supplied opacity, so the
+/// border picks up the Emacs face color at display time (theme
+/// changes are free) and "transparentized" without baking a
+/// fragile color into the SVG.
+///
+/// `width_pt' / `height_pt' must match the SVG's viewBox (origin
+/// 0,0).  The rect is inset by half the stroke width so the border
+/// sits inside the viewBox rather than being half-clipped at the
+/// edge.  `stroke_width_pt' defaults to 0.5pt — bumped to 1pt+ if
+/// the caller wants something more visible.
+pub fn add_viewbox_border(
+    svg: &str,
+    width_pt: f64,
+    height_pt: f64,
+    stroke_opacity: f64,
+    stroke_width_pt: f64,
+) -> String {
+    if stroke_opacity <= 0.0 || width_pt <= 0.0 || height_pt <= 0.0 {
+        return svg.to_string();
+    }
+    let half = stroke_width_pt / 2.0;
+    let w = (width_pt - stroke_width_pt).max(0.0);
+    let h = (height_pt - stroke_width_pt).max(0.0);
+    let rect = format!(
+        "<rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" \
+         stroke=\"currentColor\" stroke-opacity=\"{:.3}\" stroke-width=\"{:.3}\" \
+         fill=\"none\"/>",
+        half, half, w, h, stroke_opacity, stroke_width_pt
+    );
+    if let Some(pos) = svg.rfind("</svg>") {
+        let mut s = String::with_capacity(svg.len() + rect.len());
+        s.push_str(&svg[..pos]);
+        s.push_str(&rect);
+        s.push_str(&svg[pos..]);
+        s
+    } else {
+        svg.to_string()
+    }
+}
+
+/// Apply a border to every `FragmentResult' whose source content is
+/// classified as multi-line display math by `is_multiline_display'.
+/// Each backend supplies its own classifier (Typst recognizes `$ ... $'
+/// with internal newlines; LaTeX recognizes `\\[...\\]' and
+/// `\\begin{equation}/align/...}'; KaTeX recognizes `$$...$$'),
+/// keeping per-backend display-math semantics out of this transport-
+/// agnostic helper.
+///
+/// `width_pt' / `height_pt' on the result must match the SVG's
+/// viewBox; the rect uses those dimensions verbatim.  Border is
+/// skipped when `opacity' is `None' or `<= 0', when the result has no
+/// SVG (compile error / empty), or when the classifier says false.
+pub fn apply_display_border<F>(
+    results: &mut [crate::messages::FragmentResult],
+    document_content: &str,
+    opacity: Option<f64>,
+    is_multiline_display: F,
+) where
+    F: Fn(&str) -> bool,
+{
+    let op = match opacity {
+        Some(o) if o > 0.0 => o,
+        _ => return,
+    };
+    for r in results.iter_mut() {
+        if r.svg.is_empty() || r.error.is_some() {
+            continue;
+        }
+        let Some(text) = document_content.get(r.start..r.end) else {
+            continue;
+        };
+        if !is_multiline_display(text) {
+            continue;
+        }
+        r.svg = add_viewbox_border(&r.svg, r.width_pt, r.height_pt, op, 0.5);
+    }
+}
+
 pub fn replace_default_black(svg: &str) -> String {
     svg.replace("fill=\"rgba(0,0,0,1)\"", "fill=\"currentColor\"")
         .replace("fill='rgba(0,0,0,1)'", "fill='currentColor'")

@@ -62,6 +62,12 @@ impl KatexBackend {
                 Err(e) => results.push(fragment_error(loc, e)),
             }
         }
+        tip_protocol::svg_color::apply_display_border(
+            &mut results,
+            &content,
+            params.display_math_border_opacity,
+            is_multiline_display_katex,
+        );
         ResponseResult::Fragments { fragments: results }
     }
 
@@ -110,6 +116,13 @@ fn fragment_error(loc: &FragmentLocation, msg: String) -> FragmentResult {
 fn is_display_delims(s: &str) -> bool {
     let t = s.trim_start();
     t.starts_with("$$") || t.starts_with("\\[")
+}
+
+/// Multi-line display variant of `is_display_delims': true only when
+/// the fragment is display-delimited AND contains a newline between
+/// the delimiters.  Used by the shared border post-processor.
+fn is_multiline_display_katex(s: &str) -> bool {
+    is_display_delims(s) && s.contains('\n')
 }
 
 /// `ratex-parser::parse` strips outer `$`/`$$` if present, but our
@@ -192,6 +205,7 @@ mod tests {
             preamble: None,
             display_math_width: None,
             strategy: None,
+            display_math_border_opacity: None,
         });
         match resp {
             ResponseResult::Fragments { fragments } => {

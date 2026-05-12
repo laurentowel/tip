@@ -203,6 +203,12 @@ impl LatexBackend {
                         }),
                     }
                 }
+                tip_protocol::svg_color::apply_display_border(
+                    &mut results,
+                    &content,
+                    params.display_math_border_opacity,
+                    is_multiline_display_latex,
+                );
                 ResponseResult::Fragments { fragments: results }
             }
             Err(err) => ResponseResult::Error {
@@ -286,6 +292,37 @@ fn adjust_fragment_error(
         e.detail = Some(d.replace(color_cmd, ""));
     }
     e
+}
+
+/// Classify a LaTeX fragment as multi-line display math.  Used by the
+/// shared `apply_display_border' post-processor to gate the subtle
+/// border feature.
+///
+/// Recognized multi-line display forms:
+///   - `\[...\]' / `$$...$$' that contain a `\n' between delimiters
+///   - any `\begin{ENV}...\end{ENV}' where ENV is an AMS-math
+///     display environment (equation, align, gather, multline,
+///     eqnarray, displaymath, etc., with or without the trailing `*')
+///
+/// Single-line `\[x\]' and inline `$x$' / `\(x\)' return false.
+fn is_multiline_display_latex(s: &str) -> bool {
+    let t = s.trim();
+    const ENVS: &[&str] = &[
+        "equation", "align", "gather", "multline", "eqnarray",
+        "displaymath", "alignat", "flalign", "split", "cases",
+    ];
+    for env in ENVS {
+        let open_star = format!("\\begin{{{env}*}}");
+        let open = format!("\\begin{{{env}}}");
+        if t.starts_with(&open) || t.starts_with(&open_star) {
+            return true;
+        }
+    }
+    let multi_line = t.contains('\n');
+    if !multi_line {
+        return false;
+    }
+    t.starts_with("\\[") || t.starts_with("$$")
 }
 
 /// Convert `#RRGGBB` or a named color to a LaTeX `\color[HTML]{RRGGBB}`.
@@ -410,6 +447,7 @@ mod tests {
             preamble: None,
             display_math_width: None,
             strategy: None,
+            display_math_border_opacity: None,
         });
         match resp {
             ResponseResult::Error { error } => assert!(error.contains("not synced")),

@@ -245,6 +245,15 @@ pub struct CompileFragmentsParams {
     /// bottom-up for low per-call latency.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<String>,
+    /// Opacity (0.0–1.0) for a subtle border drawn around multi-line
+    /// display-math SVGs.  When unset (or `<= 0'), no border is
+    /// emitted.  The rect uses `stroke="currentColor"' so the line
+    /// color tracks the Emacs face foreground automatically — no
+    /// theme-color baking, no recompile on theme change.  Bottom-up
+    /// and top-down both honor this for multi-line display fragments
+    /// only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_math_border_opacity: Option<f64>,
 }
 
 /// Envelope wrapping a request with an ID.
@@ -432,6 +441,7 @@ mod tests {
                 preamble: None,
                 display_math_width: None,
             strategy: None,
+            display_math_border_opacity: None,
             }),
         };
         let json = serde_json::to_string(&msg).unwrap();

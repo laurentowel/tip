@@ -125,7 +125,7 @@ impl TypstBackend {
             _ => self.strategy,
         };
         if matches!(effective_strategy, CompileStrategy::TopDown) {
-            if let Ok(results) =
+            if let Ok(mut results) =
                 TopDownCompiler::compile_all(
                     &mut self.world,
                     &content,
@@ -133,6 +133,12 @@ impl TypstBackend {
                     params.display_math_width.as_deref(),
                 )
             {
+                tip_protocol::svg_color::apply_display_border(
+                    &mut results,
+                    &content,
+                    params.display_math_border_opacity,
+                    tip_core_typst::bottom_up::is_multiline_math,
+                );
                 return ResponseResult::Fragments { fragments: results };
             }
         }
@@ -201,6 +207,12 @@ impl TypstBackend {
             }
         }
 
+        tip_protocol::svg_color::apply_display_border(
+            &mut results,
+            &content,
+            params.display_math_border_opacity,
+            tip_core_typst::bottom_up::is_multiline_math,
+        );
         ResponseResult::Fragments { fragments: results }
     }
 
@@ -263,6 +275,7 @@ mod tests {
             preamble: None,
             display_math_width: None,
             strategy: None,
+            display_math_border_opacity: None,
         }
     }
 

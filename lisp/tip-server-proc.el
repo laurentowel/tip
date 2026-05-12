@@ -371,6 +371,23 @@ treats it as Typst per `BackendId::default')."
   (let ((b (and (fboundp 'tip-active-backend) (tip-active-backend))))
     (if b (symbol-name (tip-backend-name b)) "typst")))
 
+(defvar tip-display-math-border-opacity)
+
+(defun tip--inject-display-math-border (method params)
+  "Add `display_math_border_opacity' for `compile_fragments' requests.
+Backend-agnostic — every backend's `apply_display_border' on the
+server gates by its own multi-line-display classifier.  Reads
+`tip-display-math-border-opacity'; nil means no border.  Idempotent:
+existing value in PARAMS wins."
+  (if (and (string= method "compile_fragments")
+           (numberp tip-display-math-border-opacity)
+           (> tip-display-math-border-opacity 0.0)
+           (not (assoc "display_math_border_opacity" params)))
+      (append params
+              `(("display_math_border_opacity"
+                 . ,tip-display-math-border-opacity)))
+    params))
+
 (defun tip--inject-typst-strategy (method params)
   "Add a `strategy' field to PARAMS for `compile_fragments' on Typst buffers.
 Idempotent: existing `strategy' value wins (callers may force a
@@ -407,6 +424,7 @@ CALLBACK is called with the result alist when response arrives."
                      (cons `("backend" . ,(tip--current-backend-id)) params)
                    params))
          (params (tip--inject-typst-strategy method params))
+         (params (tip--inject-display-math-border method params))
          (request `(("id" . ,id)
                     ("method" . ,method)
                     ("params" . ,params))))

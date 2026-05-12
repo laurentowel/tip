@@ -213,6 +213,21 @@ Buffer-local."
   :group 'tip
   :local t)
 
+(defcustom tip-display-math-border-opacity nil
+  "Stroke opacity (0.0–1.0) for a subtle border around multi-line
+display-math overlays, or nil to disable.  The border is drawn
+server-side as an SVG `<rect>' tracing the image's viewBox, using
+`stroke=\"currentColor\"' so Emacs's face foreground (with theme
+applied) shows through automatically — no recompile on theme
+change.  Backend-agnostic: applies to Typst `$ ... $' with newlines,
+LaTeX `\\=\\begin{align/equation/...}' / multi-line `\\=\\[...\\]',
+and KaTeX `$$...$$' with newlines.  Single-line display and inline
+math get no border."
+  :type '(choice (const :tag "No border" nil)
+                 (number :tag "Stroke opacity 0.0–1.0"))
+  :safe #'numberp
+  :group 'tip)
+
 
 ;;; * misc helpers
 
