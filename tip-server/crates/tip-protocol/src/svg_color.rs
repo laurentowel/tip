@@ -145,32 +145,37 @@ pub fn add_viewbox_border(
     out
 }
 
-/// Parse a numeric attribute (in points) from the outer `<svg>` tag.
-fn parse_svg_dim(svg: &str, attr: &str) -> Option<f64> {
+/// Parse `attr="VAL"` or `attr='VAL'` from the outer `<svg>` tag.
+/// Both quote styles are valid SVG; Typst emits double, dvisvgm
+/// (LaTeX backend) emits single.  Returns the value WITHOUT quotes.
+fn parse_attr_value<'a>(svg: &'a str, attr: &str) -> Option<&'a str> {
     let trimmed = svg.trim_start_matches(|c: char| c.is_whitespace());
     let tag_end = trimmed.find('>')?;
     let tag = &trimmed[..tag_end];
-    let needle = format!("{attr}=\"");
-    let val_start = tag.find(&needle)? + needle.len();
-    let val_end = tag[val_start..].find('"')? + val_start;
-    let val = &tag[val_start..val_end];
+    for quote in ['"', '\''] {
+        let needle = format!("{attr}={quote}");
+        if let Some(start) = tag.find(&needle) {
+            let val_start = start + needle.len();
+            let val_end = tag[val_start..].find(quote)? + val_start;
+            return Some(&tag[val_start..val_end]);
+        }
+    }
+    None
+}
+
+/// Parse a numeric attribute (in points) from the outer `<svg>` tag.
+fn parse_svg_dim(svg: &str, attr: &str) -> Option<f64> {
+    let val = parse_attr_value(svg, attr)?;
     val.trim_end_matches(|c: char| c.is_alphabetic())
         .trim()
         .parse()
         .ok()
 }
 
-/// Parse `viewBox="x y w h"` from the outer `<svg>` tag.
+/// Parse `viewBox` from the outer `<svg>` tag (double or single quotes).
 fn parse_viewbox(svg: &str) -> Option<(f64, f64, f64, f64)> {
-    let trimmed = svg.trim_start_matches(|c: char| c.is_whitespace());
-    let tag_end = trimmed.find('>')?;
-    let tag = &trimmed[..tag_end];
-    let needle = "viewBox=\"";
-    let val_start = tag.find(needle)? + needle.len();
-    let val_end = tag[val_start..].find('"')? + val_start;
-    let parts: Vec<&str> = tag[val_start..val_end]
-        .split_ascii_whitespace()
-        .collect();
+    let val = parse_attr_value(svg, "viewBox")?;
+    let parts: Vec<&str> = val.split_ascii_whitespace().collect();
     if parts.len() != 4 {
         return None;
     }

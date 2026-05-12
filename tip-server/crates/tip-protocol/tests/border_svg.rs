@@ -15,14 +15,19 @@ fn make_svg(opening_attrs: &str) -> String {
     format!("<svg {opening_attrs}><circle cx=\"5\" cy=\"5\" r=\"3\"/></svg>")
 }
 
-/// Pull `attr="VAL"` from the FIRST `<svg ...>` tag.  Returns `VAL`.
+/// Pull `attr="VAL"` or `attr='VAL'` from the FIRST `<svg ...>` tag.
 fn attr<'a>(svg: &'a str, attr: &str) -> Option<&'a str> {
     let tag_end = svg.find('>')?;
     let tag = &svg[..tag_end];
-    let needle = format!("{attr}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let end = tag[start..].find('"')? + start;
-    Some(&tag[start..end])
+    for q in ['"', '\''] {
+        let needle = format!("{attr}={q}");
+        if let Some(s) = tag.find(&needle) {
+            let val_start = s + needle.len();
+            let val_end = tag[val_start..].find(q)? + val_start;
+            return Some(&tag[val_start..val_end]);
+        }
+    }
+    None
 }
 
 // ---- dimensions preserved: SVG is rewritten in place ----
@@ -115,6 +120,35 @@ fn other_svg_attrs_preserved() {
     assert!(out.contains("class=\"typst-doc\""));
     assert!(out.contains("xmlns=\"http://www.w3.org/2000/svg\""));
     assert!(out.contains("xmlns:xlink=\"http://www.w3.org/1999/xlink\""));
+}
+
+#[test]
+fn single_quoted_attributes_are_recognized() {
+    // dvisvgm (LaTeX backend) emits SVGs with SINGLE-quoted attributes:
+    //   <svg width='10pt' height='20pt' viewBox='0 0 10 20' ...>
+    // Both quote styles are valid per the SVG spec.  Must parse both
+    // so the border lands at the right place.
+    let svg = "<svg width='10pt' height='20pt' viewBox='0 0 10 20'><circle r='3'/></svg>";
+    let out = add_viewbox_border(svg, 10.0, 20.0, 0.5, 1.0);
+    // Rect was inserted (border applied).
+    assert!(out.contains("<rect "), "rect missing from output:\n{out}");
+    // Rect uses the parsed viewBox, not the fallback.
+    let rect = find_rect(&out);
+    assert_eq!(attr_in_tag(rect, "x"), Some("0.500"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("9.000"));
+}
+
+#[test]
+fn single_quoted_nonzero_viewbox_origin() {
+    // dvisvgm typically emits a non-zero viewBox origin (the
+    // preview.sty tight-page box starts at e.g. `0 -8 ...`).
+    let svg = "<svg width='10pt' height='20pt' viewBox='5 -8 10 20'><circle r='3'/></svg>";
+    let out = add_viewbox_border(svg, 10.0, 20.0, 0.5, 1.0);
+    let rect = find_rect(&out);
+    assert_eq!(attr_in_tag(rect, "x"), Some("5.500"));
+    assert_eq!(attr_in_tag(rect, "y"), Some("-7.500"));
+    assert_eq!(attr_in_tag(rect, "width"), Some("9.000"));
+    assert_eq!(attr_in_tag(rect, "height"), Some("19.000"));
 }
 
 #[test]
