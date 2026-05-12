@@ -30,6 +30,7 @@
 ;; Forward-declares from tip / tip-typst.
 (defvar tip-echo-errors)
 (defvar tip-mode)
+(defvar tip-display-math-border-opacity)
 (declare-function tip--color-to-hex "tip" (color))
 (declare-function tip-edit-indirect--live-preview "tip-edit-indirect" ())
 (defvar tip-edit-indirect-mode)
@@ -66,9 +67,14 @@
           (let ((byte-start (1- (position-bytes (car bound))))
                 (byte-end (1- (position-bytes (cdr bound)))))
             (tip--sync-buffer)
-            (tip--send-compile-fragments
-             (list (cons byte-start byte-end))
-             #'tip-echo--handle-result)))
+            ;; The live preview already carries its own visual
+            ;; distinction (`tip-live-image' bg + box).  Skip the
+            ;; server-side display-math border so the preview doesn't
+            ;; double up.
+            (let ((tip-display-math-border-opacity nil))
+              (tip--send-compile-fragments
+               (list (cons byte-start byte-end))
+               #'tip-echo--handle-result))))
       (setq tip-echo--content-cache ""))))
 
 ;;; * live preview
@@ -281,9 +287,13 @@ Works in both normal typst-ts-mode and tip-edit-indirect buffers."
             (let ((byte-start (1- (position-bytes (car bound))))
                   (byte-end   (1- (position-bytes (cdr bound)))))
               (tip--sync-buffer)
-              (tip--send-compile-fragments
-               (list (cons byte-start byte-end))
-               #'tip-live--handle-result)))))))))))
+              ;; Same rationale as `tip-echo--compile-partial': the
+              ;; live overlay has its own visual chrome, so skip the
+              ;; server-side display-math border for live requests.
+              (let ((tip-display-math-border-opacity nil))
+                (tip--send-compile-fragments
+                 (list (cons byte-start byte-end))
+                 #'tip-live--handle-result))))))))))))
 
 (defun tip-live--post-command ()
   "Drop the live preview the moment point leaves its fragment.
