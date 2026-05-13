@@ -1,0 +1,26 @@
+tip started as "typst-inline-preview" 2 years ago.  But it's been
+completely rewritten so that it is now a versatile system for
+previewing math.  More accurate expansions are "Typeset in place",
+"Toolkit for inline preview", etc.
+
+So far we have
+
+* A server program (in ./tip-server) written in rust that supports
+  Typst/LaTeX/KaTeX.
+
+* Emacs clients (in ./lisp) for `typst-ts-mode', `latex-mode' and
+`markdown-ts-mode'.
+
+The architecture is designed for easy extensibility.
+
+                               ***
+
+To start using tip, add ./lisp to load-path and (require 'tip).  Then
+use `tip-send-nbd' or `tip-render-all' to render math fragments in a
+buffer.
+
+                               ***
+
+Development of the project heavily relies on LLMs.  While I've been
+using it on a daily basis, I'm still thinking about how to make it
+maintainable.
