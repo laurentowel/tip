@@ -210,6 +210,32 @@ to the enclosing figure's bounds."
         (should (string-prefix-p "#figure(" text))
         (should (string-match-p "caption" text))))))
 
+(ert-deftest tip-test-collect-avoid-pos-after-outermost-filter ()
+  "`tip-collect-fragment-locations' must apply AVOID-POS after the
+outermost-filter, not during initial collection.  If applied during
+collection, an enclosing outer math whose body contains AVOID-POS
+is dropped first, leaving a nested inner math (which does NOT
+contain AVOID-POS itself) to survive as if it were top-level — and
+`tip-send-nbd' then renders that inner fragment in isolation."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "Text.\n$\n  #diagram(node((0,0), [${W_n (g)}_(n=1)^oo$]))\n$\nEnd.\n")
+    ;; Point at the newline inside the outer `$ ... $' but outside the
+    ;; inner `${W_n...}$' — outer contains point, inner does not.
+    (goto-char (point-min))
+    (search-forward "$")
+    (forward-char)  ; just past the opening `$' onto the newline
+    (let* ((frags (tip-collect-fragment-locations (point-min) (point-max) (point)))
+           (texts (mapcar
+                   (lambda (f)
+                     (let ((sb (1+ (alist-get "start" f nil nil #'equal)))
+                           (eb (1+ (alist-get "end"   f nil nil #'equal))))
+                       (buffer-substring-no-properties
+                        (byte-to-position sb) (byte-to-position eb))))
+                   frags)))
+      ;; Outer is skipped (contains point); inner must NOT leak out.
+      (should-not (cl-some (lambda (s) (string-match-p "W_n" s)) texts)))))
+
 (ert-deftest tip-test-bounds-at-point-outermost-math ()
   "Math nested inside another math fragment (e.g. inline `$x$' inside
 a diagram node label inside outer display math) resolves to the

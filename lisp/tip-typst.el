@@ -147,7 +147,12 @@ Filters out nested ranges — only keeps outermost fragments.
 When `tip-render-figure' is non-nil, top-level `#figure(...)' calls are
 also included (and any math inside them is filtered as nested)."
   (let (ranges fragments)
-    ;; Collect math ranges (skip empty, skip inside #let bindings)
+    ;; Collect math ranges (skip empty, skip inside #let bindings).
+    ;; NOTE: avoid-pos is applied AFTER the outermost-filter below, not
+    ;; here.  Filtering during collection would drop the enclosing outer
+    ;; math first, leaving a nested inner math looking like a top-level
+    ;; range — e.g. point at the newline inside `$ #diagram(node((0,0),
+    ;; [$x$])) $' would otherwise emit `$x$' as the fragment.
     (dolist (pair (treesit-query-range 'typst "((math) @math)"))
       (when (and
              (>= (car pair) beg)
@@ -157,18 +162,17 @@ also included (and any math inside them is filtered as nested)."
                    (buffer-substring-no-properties
                     (1+ (car pair)) (1- (cdr pair))))) ;; skip $ $
              (not (tip--inside-let-binding-p
-                   (treesit-node-at (car pair) 'typst)))
-             (or (null avoid-pos)
-                 (not (and (>= avoid-pos (car pair))
-                           (<= avoid-pos (cdr pair))))))
+                   (treesit-node-at (car pair) 'typst))))
         (push pair ranges)))
-    ;; Collect figure ranges when enabled
+    ;; Collect figure ranges when enabled.  Same avoid-pos rationale:
+    ;; defer the filter so a figure that encloses point still shields
+    ;; its inner math from being emitted as a standalone fragment.
     (when tip-render-figure
       (let ((root (treesit-buffer-root-node 'typst)))
         (when root
           (setq ranges (nconc ranges
-                              (tip--collect-figure-ranges root beg end avoid-pos))))))
-    ;; Filter nested ranges
+                              (tip--collect-figure-ranges root beg end nil))))))
+    ;; Filter to outermost ranges, then apply avoid-pos.
     (setq ranges (nreverse ranges))
     (let (outer)
       (dolist (r ranges)
@@ -179,9 +183,12 @@ also included (and any math inside them is filtered as nested)."
                          ranges)
           (push r outer)))
       (dolist (pair (nreverse outer))
-        (push `(("start" . ,(1- (position-bytes (car pair))))
-                ("end" . ,(1- (position-bytes (cdr pair)))))
-              fragments)))
+        (unless (and avoid-pos
+                     (>= avoid-pos (car pair))
+                     (<= avoid-pos (cdr pair)))
+          (push `(("start" . ,(1- (position-bytes (car pair))))
+                  ("end" . ,(1- (position-bytes (cdr pair)))))
+                fragments))))
     (nreverse fragments)))
 
 ;;; * bounds at point
