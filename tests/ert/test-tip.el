@@ -636,13 +636,11 @@ fragment text under any color is correct."
       (kill-buffer bufA)
       (kill-buffer bufB))))
 
-(ert-deftest tip-latex-test-collects-all-math-including-blank ()
-  "The elisp collector returns every math fragment in range, including
-whitespace-only ones (`$ $', `\\[ \\]', empty env).  Filtering moved
-server-side: the server classifier sees the blank text and decides
-not to render it (returns an empty SVG / no result).  This keeps the
-client purely structural — it doesn't have to encode \"empty math\"
-rules."
+(ert-deftest tip-latex-test-collector-filters-blank-fragments ()
+  "The elisp collector drops whitespace-only math fragments (`$ $',
+`\\[ \\]', empty env) — they produce empty SVGs and don't deserve a
+server round-trip.  Real fragments pass through.  See
+`tip-latex--fragment-blank-p'."
   (with-temp-buffer
     (delay-mode-hooks (latex-mode))
     (insert "Real $a$\nblank1 $ $\nblank2 \\[  \\]\n"
@@ -655,10 +653,7 @@ rules."
                       (buffer-substring-no-properties
                        (byte-to-position sb) (byte-to-position eb))))
                   (tip-latex-collect-fragments (point-min) (point-max)))))
-      ;; All six fragments collected — real and blank alike.
-      (should (= 6 (length texts)))
-      (should (member "$a$" texts))
-      (should (member "$b$" texts)))))
+      (should (equal '("$a$" "$b$") texts)))))
 
 (ert-deftest tip-latex-test-commented-include-allowed ()
   "A \\input inside a comment must NOT disable previewing."
