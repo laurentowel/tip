@@ -211,6 +211,24 @@ to the enclosing figure's bounds."
         (should (string-prefix-p "#figure(" text))
         (should (string-match-p "caption" text))))))
 
+(ert-deftest tip-test-bounds-at-point-outermost-math ()
+  "Math nested inside another math fragment (e.g. inline `$x$' inside
+a diagram node label inside outer display math) resolves to the
+OUTERMOST math — matches `tip-collect-fragment-locations' which only
+keeps outermost ranges."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "$\n  #diagram(node((0,0), [${W_n (g)}_(n=1)^oo$]))\n$\n")
+    (let ((tip-render-figure nil))
+      (goto-char (point-min))
+      (search-forward "W_n")
+      (let* ((bounds (tip--get-bounds-of-math-at-point (point)))
+             (text (and bounds
+                        (buffer-substring-no-properties (car bounds) (cdr bounds)))))
+        (should bounds)
+        (should (string-match-p "diagram" text))
+        (should (string-match-p "W_n" text))))))
+
 (ert-deftest tip-test-figure-bounds-at-point-flag-off ()
   "With `tip-render-figure' nil, a position inside a non-math call inside
 a figure returns nil (nothing renderable there)."

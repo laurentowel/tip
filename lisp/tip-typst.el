@@ -211,15 +211,23 @@ Half-open interval: returns bounds only if BEG <= X < END."
                  (end (treesit-node-end found)))
              (when (and (<= beg x) (< x end))
                (cons beg end))))))
-     ;; Check if we're inside a math node (walk up).
-     (let ((n node))
-       (while (and n (not (equal "math" (treesit-node-type n))))
+     ;; Walk up to the OUTERMOST math ancestor — matches the overlay
+     ;; pipeline (`tip-collect-fragment-locations' filters to outermost
+     ;; only).  Without this, math nested inside a diagram node label
+     ;; (e.g. `node((0,0), [$x$])' inside `$ diagram(...) $') would
+     ;; resolve to the inner `$x$' and get compiled in isolation,
+     ;; producing a fragment that doesn't match the visual the overlay
+     ;; renders.
+     (let ((n node) (outer nil))
+       (while n
+         (when (equal "math" (treesit-node-type n))
+           (setq outer n))
          (setq n (treesit-node-parent n)))
-       (when (and n
-                  (<= (treesit-node-start n) x)
-                  (< x (treesit-node-end n))
-                  (not (tip--inside-let-binding-p n)))
-         (cons (treesit-node-start n) (treesit-node-end n)))))))
+       (when (and outer
+                  (<= (treesit-node-start outer) x)
+                  (< x (treesit-node-end outer))
+                  (not (tip--inside-let-binding-p outer)))
+         (cons (treesit-node-start outer) (treesit-node-end outer)))))))
 
 ;;; * preamble (theme sync)
 
