@@ -306,10 +306,18 @@ fn build_scoped_source(
             let targets_html = skeleton.contains("html.elem")
                 || skeleton.contains("html.frame")
                 || skeleton.contains("html.figure");
+            // Anchor body text to 11pt and tell math.equation to use 1em
+            // (ambient-relative).  An absolute `#show math.equation: set
+            // text(size: 11pt)' would re-pin every nested math equation
+            // to 11pt regardless of any surrounding `#text(0.7em)[...]'
+            // wrapper in the fragment — defeating users who scale edge
+            // labels / sub-figures.  With `1em', top-level math inherits
+            // the 11pt body anchor while nested math inside a `text(...)'
+            // scope inherits that scope's ambient size.
             let size_rule = if targets_html {
                 ""
             } else {
-                "#show math.equation: set text(size: 11pt)\n"
+                "#set text(size: 11pt)\n#show math.equation: set text(size: 1em)\n"
             };
             let page = if is_multiline {
                 "#set page(width: 16cm, height: auto, fill: none, margin: (top: 20pt, bottom: 20pt, rest: 0pt), header: none, footer: none)\n"
