@@ -44,7 +44,7 @@ fn cetz_canvas_compiles() {
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
     let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
-        Some(page_setup), None,
+        Some(page_setup), None, None,
     );
     match &result {
         Ok(out) => {
@@ -90,7 +90,7 @@ fn fletcher_diagram_compiles() {
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
     let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
-        Some(page_setup), None,
+        Some(page_setup), None, None,
     );
     match &result {
         Ok(out) => {
@@ -128,7 +128,7 @@ fn fletcher_commutative_square_compiles() {
     let page_setup = "#set page(height: auto, width: auto, margin: 0.5cm, fill: none)\n";
     let result = BottomUpCompiler::compile_fragment_scoped(
         &mut world, &doc, start, end, "#000000",
-        Some(page_setup), None,
+        Some(page_setup), None, None,
     );
     match &result {
         Ok(out) => {

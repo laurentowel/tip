@@ -385,6 +385,7 @@ $x + y$ default size
                 tip_protocol::svg_color::STANDIN_HEX,
                 None,
                 None,
+                None,
             )
             .is_ok()
             {
@@ -660,7 +661,7 @@ $x + y$ default size
                 let t0 = Instant::now();
                 let r = BottomUpCompiler::compile_fragment_scoped(
                     &mut world, &buf, frag_start, frag_end,
-                    tip_protocol::svg_color::STANDIN_HEX, None, None,
+                    tip_protocol::svg_color::STANDIN_HEX, None, None, None,
                 );
                 if r.is_ok() { synth_ok += 1; }
                 synth_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
@@ -748,7 +749,7 @@ $x + y$ default size
                 let t0 = Instant::now();
                 let r = BottomUpCompiler::compile_fragment_scoped(
                     &mut world, &buf, frag_start, frag_end,
-                    tip_protocol::svg_color::STANDIN_HEX, None, None,
+                    tip_protocol::svg_color::STANDIN_HEX, None, None, None,
                 );
                 if r.is_ok() { synth_ok += 1; }
                 synth_lat.push(t0.elapsed().as_secs_f64() * 1000.0);
@@ -863,6 +864,7 @@ $x + y$ default size
                     tip_protocol::svg_color::STANDIN_HEX,
                     None,
                     None,
+                    None,
                 );
                 if r.is_ok() { succeeded += 1; }
                 let dt = t0.elapsed().as_secs_f64() * 1000.0;
@@ -894,6 +896,7 @@ $x + y$ default size
             r.start,
             r.end,
             tip_protocol::svg_color::STANDIN_HEX,
+            None,
             None,
             None,
         )
@@ -949,7 +952,7 @@ text $phantom(a)^2$ and $a^2$ done
             let mut wsynth = TipWorld::new();
             let s = BottomUpCompiler::compile_fragment_scoped(
                 &mut wsynth, src, r.start, r.end,
-                tip_protocol::svg_color::STANDIN_HEX, None, None,
+                tip_protocol::svg_color::STANDIN_HEX, None, None, None,
             ).unwrap();
             eprintln!(
                 "[{} synth]: h={:.3} d={:.3} w={:.3}  ascent={:.1}%",
@@ -1081,6 +1084,7 @@ text $phantom(a)^2$ and $a^2$ done
             tip_protocol::svg_color::STANDIN_HEX,
             None,
             None,
+            None,
         )
         .unwrap();
         let spans = collect_leaf_spans(&w_full, &doc);
@@ -1122,6 +1126,7 @@ text $phantom(a)^2$ and $a^2$ done
             r.start,
             r.end,
             tip_protocol::svg_color::STANDIN_HEX,
+            None,
             None,
             None,
         )
@@ -1487,6 +1492,7 @@ text $frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, frac(1, x)))))))$ done
             frag_end,
             tip_protocol::svg_color::STANDIN_HEX,
             Some(&page_setup),
+            None,
             None,
         )
         .expect("synth compile");

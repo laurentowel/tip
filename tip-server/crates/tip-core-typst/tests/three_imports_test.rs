@@ -83,6 +83,7 @@ fn three_imports_all_fragments() {
             "#000000",
             None,
             None,
+            None,
         ) {
             Ok(output) => {
                 write_svg(&format!("3imp_{idx}"), &output.svg);

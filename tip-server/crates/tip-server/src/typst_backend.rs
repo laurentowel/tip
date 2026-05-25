@@ -174,6 +174,7 @@ impl TypstBackend {
                 tip_protocol::svg_color::STANDIN_HEX,
                 params.page_setup.as_deref(),
                 params.preamble.as_deref(),
+                params.display_math_width.as_deref(),
             ) {
                 Ok(output) => {
                     results.push(FragmentResult {
