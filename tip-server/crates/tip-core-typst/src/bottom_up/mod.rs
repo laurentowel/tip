@@ -65,6 +65,7 @@ impl BottomUpCompiler {
         color: &str,
         page_setup: Option<&str>,
         preamble: Option<&str>,
+        display_math_width: Option<&str>,
     ) -> Result<FragmentOutput, String> {
         if frag_end > document_source.len() || frag_start >= frag_end {
             return Err("invalid fragment range".into());
@@ -75,7 +76,10 @@ impl BottomUpCompiler {
         let is_multiline = is_math && is_multiline_math(content);
         let is_inline = is_math && !is_display_math(content);
 
-        let source = build_scoped_source(document_source, frag_start, frag_end, color, is_multiline, page_setup, preamble)?;
+        let source = build_scoped_source(
+            document_source, frag_start, frag_end, color, is_multiline,
+            page_setup, preamble, display_math_width,
+        )?;
         compile_source(world, &source, is_inline)
     }
 
@@ -92,7 +96,7 @@ impl BottomUpCompiler {
         let content = &document_source[frag_start..frag_end];
         let is_math = content.starts_with('$');
         let is_multiline = is_math && is_multiline_math(content);
-        build_scoped_source(document_source, frag_start, frag_end, "#000000", is_multiline, None, None)
+        build_scoped_source(document_source, frag_start, frag_end, "#000000", is_multiline, None, None, None)
     }
 }
 
@@ -293,6 +297,7 @@ fn build_scoped_source(
     is_multiline: bool,
     page_setup_override: Option<&str>,
     preamble_override: Option<&str>,
+    display_math_width: Option<&str>,
 ) -> Result<String, String> {
     let root = typst::syntax::parse(document_source);
     let (skeleton, closing) = extract_scope_skeleton(&root, document_source, frag_start);
@@ -319,12 +324,22 @@ fn build_scoped_source(
             } else {
                 "#set text(size: 11pt)\n#show math.equation: set text(size: 1em)\n"
             };
+            // Multi-line display uses a wide canvas so Typst centers
+            // the math during layout.  Prefer the client-supplied
+            // `display_math_width' (sent as a Typst length string like
+            // "28em" / "400pt" / "16cm") when provided; fall back to
+            // the historical 16cm default.
             let page = if is_multiline {
-                "#set page(width: 16cm, height: auto, fill: none, margin: (top: 20pt, bottom: 20pt, rest: 0pt), header: none, footer: none)\n"
+                let width = display_math_width.unwrap_or("16cm");
+                format!(
+                    "#set page(width: {width}, height: auto, fill: none, \
+                     margin: (top: 20pt, bottom: 20pt, rest: 0pt), \
+                     header: none, footer: none)\n"
+                )
             } else if is_inline {
-                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
+                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n".to_string()
             } else {
-                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n"
+                "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none, header: none, footer: none)\n".to_string()
             };
             format!("{size_rule}{page}")
         }
@@ -426,8 +441,7 @@ fn collect_scope_nodes(
             SyntaxKind::LetBinding
             | SyntaxKind::SetRule
             | SyntaxKind::ShowRule
-            | SyntaxKind::ModuleImport
-            | SyntaxKind::ModuleInclude => {
+            | SyntaxKind::ModuleImport => {
                 let raw = &source[offset..node_end];
                 // Filter out two doc-level rules that would either
                 // poison or wrap our synthetic single-fragment compile:
@@ -491,8 +505,7 @@ fn collect_scope_nodes(
             let has_scope_children = node.children().any(|child| {
                 matches!(child.kind(),
                     SyntaxKind::LetBinding | SyntaxKind::SetRule |
-                    SyntaxKind::ShowRule | SyntaxKind::ModuleImport |
-                    SyntaxKind::ModuleInclude)
+                    SyntaxKind::ShowRule | SyntaxKind::ModuleImport)
             });
             if has_scope_children {
                 result.push_str("[\n");
@@ -538,6 +551,7 @@ fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
         is_multiline_math(content),
         None,
         preamble,
+        None,
     )
     .expect("build_scoped_source: 0..len() is always a valid range")
 }
@@ -666,7 +680,7 @@ mod tests {
         let frag_start = doc.find("$foo$").unwrap();
         let frag_end = frag_start + "$foo$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, frag_start, frag_end, "#000000", None, None,
+            &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
     }
@@ -678,7 +692,7 @@ mod tests {
         let frag_start = doc.find("$x$").unwrap();
         let frag_end = frag_start + "$x$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, frag_start, frag_end, "#000000", None, None,
+            &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
     }
@@ -690,7 +704,7 @@ mod tests {
         let frag_start = doc.find("$a + b$").unwrap();
         let frag_end = frag_start + "$a + b$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, frag_start, frag_end, "#000000", None, None,
+            &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
         ).unwrap();
         assert!(output.svg.contains("<svg"));
     }
@@ -701,7 +715,7 @@ mod tests {
         let doc = "#let x = 1\nLots of text here that should NOT appear\n$x$";
         let frag_start = doc.find("$x$").unwrap();
         let frag_end = frag_start + "$x$".len();
-        let source = build_scoped_source(doc, frag_start, frag_end, "#000000", false, None, None).unwrap();
+        let source = build_scoped_source(doc, frag_start, frag_end, "#000000", false, None, None, None).unwrap();
         assert!(!source.contains("Lots of text"), "generated source should not contain text content: {source}");
     }
 
@@ -709,7 +723,7 @@ mod tests {
     fn scoped_compile_invalid_range() {
         let mut world = TipWorld::new();
         assert!(BottomUpCompiler::compile_fragment_scoped(
-            &mut world, "$a$", 0, 999, "#000000", None, None,
+            &mut world, "$a$", 0, 999, "#000000", None, None, None,
         ).is_err());
     }
 
@@ -723,7 +737,7 @@ mod tests {
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, start, end, "#000000", None, None,
+            &mut world, doc, start, end, "#000000", None, None, None,
         ).expect("math in #list should compile");
         assert!(output.svg.contains("<svg"));
     }
@@ -736,7 +750,7 @@ mod tests {
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, start, end, "#000000", None, None,
+            &mut world, doc, start, end, "#000000", None, None, None,
         ).expect("math in nested funcall should compile");
         assert!(output.svg.contains("<svg"));
     }
@@ -749,7 +763,7 @@ mod tests {
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, start, end, "#000000", None, None,
+            &mut world, doc, start, end, "#000000", None, None, None,
         ).expect("math in multi-arg list should compile");
         assert!(output.svg.contains("<svg"));
     }
@@ -762,7 +776,7 @@ mod tests {
         let start = doc.find(needle).unwrap();
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
-            &mut world, doc, start, end, "#000000", None, None,
+            &mut world, doc, start, end, "#000000", None, None, None,
         ).expect("math in #enum should compile");
         assert!(output.svg.contains("<svg"));
     }
