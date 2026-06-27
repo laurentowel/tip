@@ -114,6 +114,37 @@
     (tip-clear-buffer)
     (should (= (length (overlays-in (point-min) (point-max))) 0))))
 
+(ert-deftest tip-test-mode-disable-clears-error-markups ()
+  "Disabling `tip-mode' removes stale in-buffer error overlays."
+  (with-temp-buffer
+    (insert "bad $\\bet$ ok")
+    (let ((err (make-overlay 5 10))
+          (other (make-overlay 1 4)))
+      (overlay-put err 'tip 'tip)
+      (overlay-put err 'tip-error-severity 'error)
+      (overlay-put err 'face 'tip-error-face)
+      (overlay-put other 'face 'bold)
+      (cl-letf (((symbol-function 'tip-ensure) #'ignore)
+                ((symbol-function 'preview-toggle-mode)
+                 (lambda (&optional arg)
+                   (setq preview-toggle-mode
+                         (> (prefix-numeric-value (or arg 1)) 0))))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (&rest _args) 'tip-test-timer))
+                ((symbol-function 'run-with-timer)
+                 (lambda (&rest _args) nil))
+                ((symbol-function 'cancel-timer) #'ignore))
+        (tip-mode 1)
+        (should (seq-some (lambda (ov)
+                            (overlay-get ov 'tip-error-severity))
+                          (overlays-in (point-min) (point-max))))
+        (tip-mode -1))
+      (should-not
+       (seq-some (lambda (ov)
+                   (overlay-get ov 'tip-error-severity))
+                 (overlays-in (point-min) (point-max))))
+      (should (overlay-buffer other)))))
+
 ;;; * Figure rendering (tip-render-figure)
 
 (defun tip-test--setup-typst-buffer (content)

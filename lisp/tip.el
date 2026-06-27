@@ -528,6 +528,10 @@ Automatically renders visible fragments and enables live preview."
     (when tip-live-mode (tip-live-mode -1))
     (remove-hook 'buffer-face-mode-hook #'tip--on-font-change t)
     (when (bound-and-true-p tip-kodama-mode) (tip-kodama-mode -1))
+    ;; Clear overlays before disabling Flymake so its backend reports
+    ;; an empty diagnostic set instead of leaving stale in-buffer marks.
+    (tip-clear-buffer)
+    (tip--flymake-refresh)
     (when (bound-and-true-p tip-flymake-mode) (tip-flymake-mode -1))
     (remove-hook 'eldoc-documentation-functions #'tip--eldoc-error t)
     (remove-hook 'after-change-functions #'tip--cleanup-stale-overlays t)
