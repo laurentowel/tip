@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use tip_core_typst::bottom_up::BottomUpCompiler;
-use tip_protocol::DocumentStore;
 use tip_core_typst::top_down::TopDownCompiler;
 use tip_core_typst::world::TipWorld;
 use tip_core_typst::CompileStrategy;
 use tip_protocol::messages::*;
+use tip_protocol::DocumentStore;
 
 /// Read `TIP_COMPILE_STRATEGY` at process start.  Unrecognized values
 /// silently fall back to `BottomUp` so a typo can't brick the server.
@@ -125,14 +125,12 @@ impl TypstBackend {
             _ => self.strategy,
         };
         if matches!(effective_strategy, CompileStrategy::TopDown) {
-            if let Ok(mut results) =
-                TopDownCompiler::compile_all(
-                    &mut self.world,
-                    &content,
-                    &params.fragments,
-                    params.display_math_width.as_deref(),
-                )
-            {
+            if let Ok(mut results) = TopDownCompiler::compile_all(
+                &mut self.world,
+                &content,
+                &params.fragments,
+                params.display_math_width.as_deref(),
+            ) {
                 tip_protocol::svg_color::apply_display_border(
                     &mut results,
                     &content,
@@ -153,9 +151,9 @@ impl TypstBackend {
                     height_pt: 0.0,
                     depth_pt: 0.0,
                     width_pt: 0.0,
-                            font_size_pt: Some(11.0),
+                    font_size_pt: Some(11.0),
                     error: Some("invalid fragment range".into()),
-                            error_detail: None,
+                    error_detail: None,
                 });
                 continue;
             }
@@ -187,9 +185,9 @@ impl TypstBackend {
                         height_pt: output.height_pt,
                         depth_pt: output.depth_pt,
                         width_pt: output.width_pt,
-                            font_size_pt: Some(11.0),
+                        font_size_pt: Some(11.0),
                         error: None,
-                            error_detail: None,
+                        error_detail: None,
                     });
                 }
                 Err(err) => {
@@ -200,9 +198,9 @@ impl TypstBackend {
                         height_pt: 0.0,
                         depth_pt: 0.0,
                         width_pt: 0.0,
-                            font_size_pt: Some(11.0),
+                        font_size_pt: Some(11.0),
                         error: Some(err),
-                            error_detail: None,
+                        error_detail: None,
                     });
                 }
             }
@@ -235,9 +233,11 @@ impl TypstBackend {
     pub fn handle_debug_skeleton(&self, params: DebugSkeletonParams) -> ResponseResult {
         let content = match self.documents.get(&params.uri) {
             Some(c) => c.to_string(),
-            None => return ResponseResult::Error {
-                error: format!("document not synced: {}", params.uri),
-            },
+            None => {
+                return ResponseResult::Error {
+                    error: format!("document not synced: {}", params.uri),
+                }
+            }
         };
         match BottomUpCompiler::debug_scoped_source(&content, params.start, params.end) {
             Ok(source) => ResponseResult::DebugSkeleton { source },
@@ -305,7 +305,11 @@ mod tests {
             client_version: Some(tip_protocol::messages::PROTOCOL_VERSION.to_string()),
         });
         match resp {
-            ResponseResult::Init { ok, version_mismatch, .. } => {
+            ResponseResult::Init {
+                ok,
+                version_mismatch,
+                ..
+            } => {
                 assert!(ok);
                 assert!(version_mismatch.is_empty());
             }
@@ -321,7 +325,11 @@ mod tests {
             client_version: Some("9.99".into()),
         });
         match resp {
-            ResponseResult::Init { ok, version_mismatch, .. } => {
+            ResponseResult::Init {
+                ok,
+                version_mismatch,
+                ..
+            } => {
                 // Mismatch is non-fatal.
                 assert!(ok);
                 assert!(version_mismatch.contains("9.99"));
@@ -358,5 +366,4 @@ mod tests {
             other => panic!("expected error, got {:?}", other),
         }
     }
-
 }

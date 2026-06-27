@@ -12,10 +12,12 @@ fn write_svg(name: &str, svg: &str) {
 }
 
 fn compile_scoped(world: &mut TipWorld, doc: &str, needle: &str, name: &str) {
-    let frag_start = doc.find(needle).expect(&format!("needle {needle:?} not found"));
+    let frag_start = doc
+        .find(needle)
+        .expect(&format!("needle {needle:?} not found"));
     let frag_end = frag_start + needle.len();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        world, doc, frag_start, frag_end, "#000000", None, None,
+        world, doc, frag_start, frag_end, "#000000", None, None, None,
     )
     .expect(&format!("{name} should compile"));
     write_svg(name, &out.svg);
@@ -48,7 +50,12 @@ fn nest_deep_mode_switch() {
     let mut world = TipWorld::new();
     // math → code → content → math → code → content → math
     let doc = "Deep $a + #[#let x = $b$; #x] + c$";
-    compile_scoped(&mut world, doc, "$a + #[#let x = $b$; #x] + c$", "nest_deep_mode_switch");
+    compile_scoped(
+        &mut world,
+        doc,
+        "$a + #[#let x = $b$; #x] + c$",
+        "nest_deep_mode_switch",
+    );
 }
 
 #[test]

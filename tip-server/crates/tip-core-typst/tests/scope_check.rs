@@ -15,7 +15,7 @@ fn compile_scoped(world: &mut TipWorld, doc: &str, needle: &str, name: &str) {
     let frag_start = doc.find(needle).expect("fragment not found in doc");
     let frag_end = frag_start + needle.len();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        world, doc, frag_start, frag_end, "#000000", None, None,
+        world, doc, frag_start, frag_end, "#000000", None, None, None,
     )
     .expect(&format!("{name} should compile"));
     write_svg(name, &out.svg);

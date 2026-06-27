@@ -6,21 +6,20 @@ fn fixtures_dir() -> String {
 }
 
 fn write_svg(name: &str, svg: &str) {
-    let path = format!("{}/test-output/{}.svg",
-        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core-typst", ""), name);
+    let path = format!(
+        "{}/test-output/{}.svg",
+        env!("CARGO_MANIFEST_DIR").replace("/crates/tip-core-typst", ""),
+        name
+    );
     std::fs::write(&path, svg).unwrap();
     eprintln!("wrote {path}");
 }
 
 #[test]
 fn list_math_fragments_compile_cleanly() {
-    let doc = std::fs::read_to_string(
-        format!("{}/list_math.typ", fixtures_dir())
-    ).unwrap();
+    let doc = std::fs::read_to_string(format!("{}/list_math.typ", fixtures_dir())).unwrap();
 
-    let mut world = TipWorld::builder()
-        .root(fixtures_dir())
-        .build();
+    let mut world = TipWorld::builder().root(fixtures_dir()).build();
 
     // Find all $ delimited fragments
     let mut frags = Vec::new();
@@ -32,16 +31,23 @@ fn list_math_fragments_compile_cleanly() {
             i += 1;
             let mut depth = 0u32;
             while i < bytes.len() {
-                if bytes[i] == b'$' && depth == 0 { break; }
-                if bytes[i] == b'{' || bytes[i] == b'[' { depth += 1; }
-                else if (bytes[i] == b'}' || bytes[i] == b']') && depth > 0 { depth -= 1; }
+                if bytes[i] == b'$' && depth == 0 {
+                    break;
+                }
+                if bytes[i] == b'{' || bytes[i] == b'[' {
+                    depth += 1;
+                } else if (bytes[i] == b'}' || bytes[i] == b']') && depth > 0 {
+                    depth -= 1;
+                }
                 i += 1;
             }
             if i < bytes.len() {
                 i += 1;
                 frags.push((start, i));
             }
-        } else { i += 1; }
+        } else {
+            i += 1;
+        }
     }
 
     eprintln!("found {} fragments", frags.len());
@@ -51,7 +57,7 @@ fn list_math_fragments_compile_cleanly() {
     for (idx, (start, end)) in frags.iter().enumerate() {
         let content = &doc[*start..*end];
         match BottomUpCompiler::compile_fragment_scoped(
-            &mut world, &doc, *start, *end, "#000000", None, None,
+            &mut world, &doc, *start, *end, "#000000", None, None, None,
         ) {
             Ok(output) => {
                 write_svg(&format!("list_{idx}"), &output.svg);
@@ -59,14 +65,30 @@ fn list_math_fragments_compile_cleanly() {
                 // The SVG should only contain math, not layout elements
                 let has_svg = output.svg.contains("<svg");
                 let height_ok = output.height_pt > 0.0;
-                eprintln!("  [{idx}] OK  h={:.1}  {:?}",
+                eprintln!(
+                    "  [{idx}] OK  h={:.1}  {:?}",
                     output.height_pt,
-                    if content.len() > 50 { &content[..47] } else { content });
-                if has_svg && height_ok { ok += 1; } else { bad += 1; }
+                    if content.len() > 50 {
+                        &content[..47]
+                    } else {
+                        content
+                    }
+                );
+                if has_svg && height_ok {
+                    ok += 1;
+                } else {
+                    bad += 1;
+                }
             }
             Err(e) => {
-                eprintln!("  [{idx}] FAIL {:?}: {e}",
-                    if content.len() > 40 { &content[..37] } else { content });
+                eprintln!(
+                    "  [{idx}] FAIL {:?}: {e}",
+                    if content.len() > 40 {
+                        &content[..37]
+                    } else {
+                        content
+                    }
+                );
                 bad += 1;
             }
         }

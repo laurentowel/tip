@@ -33,9 +33,7 @@ pub struct FlatLeaf {
 impl FlatLeaf {
     pub fn category_for(&self, start: usize, end: usize) -> LeafCategory {
         // Fast path: union of ranges in main is fully outside [start, end).
-        if !self.ranges_in_main.is_empty()
-            && (self.max_range <= start || self.min_range >= end)
-        {
+        if !self.ranges_in_main.is_empty() && (self.max_range <= start || self.min_range >= end) {
             // None of our main-attached ranges overlap.  Decide
             // OutAttached vs Detached without scanning ranges.
             return LeafCategory::OutAttached;
@@ -184,9 +182,7 @@ pub fn flatten_leaves_inner(
         match item {
             FrameItem::Group(g) => {
                 let before = out_leaves.len();
-                flatten_leaves_inner(
-                    &g.frame, abs, main, span_index, out_leaves, out_groups,
-                );
+                flatten_leaves_inner(&g.frame, abs, main, span_index, out_leaves, out_groups);
                 let after = out_leaves.len();
                 if g.frame.has_baseline() {
                     out_groups.push(GroupRecord {

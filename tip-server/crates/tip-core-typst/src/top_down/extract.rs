@@ -3,17 +3,17 @@
 //! See `super` for the strategy overview.
 
 use typst::layout::{Abs, Frame, FrameItem, Point, Size};
-use typst_svg::svg_frame;
 
 use super::flatten::{FlatLeaf, GroupRecord, LeafCategory};
 use crate::geometry::text_item_frame_bbox;
+use crate::svg::svg_frame;
 
 #[cfg(test)]
 use {
     super::flatten::flatten_leaves,
-    typst::layout::PagedDocument,
     typst::syntax::{FileId, Source},
     typst::World,
+    typst_layout::PagedDocument,
 };
 
 /// Render output for a single fragment extracted from a full document.
@@ -67,7 +67,7 @@ pub fn extract_fragment_svg(
     // Pick the first page that has any matching item.  Multi-page
     // fragments are not a typical case for inline math; we'd need a
     // different strategy (e.g., merge frames) if it ever comes up.
-    for (page_idx, page) in doc.pages.iter().enumerate() {
+    for (page_idx, page) in doc.pages().iter().enumerate() {
         // Step 1: flatten the page's frame tree into a linear leaf
         // list in iteration order.  Groups become transparent for
         // leaf-level decisions; their baselines (if set) are
@@ -113,8 +113,7 @@ pub fn extract_fragment_svg(
                     // line.  Without this filter, the marker glyphs
                     // bleed into the extracted SVG.  Same-line dy slack
                     // accommodates stacked accents above the base.
-                    let attach_threshold =
-                        leaf.text_size.unwrap_or(Abs::pt(11.0));
+                    let attach_threshold = leaf.text_size.unwrap_or(Abs::pt(11.0));
                     let in_x = leaf.pos.x;
                     let in_y = leaf.pos.y;
                     for j in detached_buffer.drain(..) {
@@ -201,8 +200,15 @@ pub fn extract_fragment_svg(
         // always at least as authoritative as frag_max.
         let frag_max = frag_baselines.iter().copied().max();
         let group_baseline = outermost_group_baseline;
-        let external_y =
-            find_external_baseline(&page.frame, &frag_baselines, max_text_size, main, &main_src, start, end);
+        let external_y = find_external_baseline(
+            &page.frame,
+            &frag_baselines,
+            max_text_size,
+            main,
+            &main_src,
+            start,
+            end,
+        );
         let (baseline_y, external) = match (group_baseline, external_y, frag_max) {
             (Some(gb), _, _) => (gb, false),
             (None, Some(ex), _) => (ex, true),
@@ -330,7 +336,7 @@ fn span_in_range(
     if span.id() != Some(main) {
         return false;
     }
-    match src.range(span) {
+    match src.find(span).map(|node| node.range()) {
         Some(r) => r.start < end && r.end > start,
         None => false,
     }
@@ -398,7 +404,9 @@ fn find_external_baseline_from_leaves(
     // Phase 1: tight tol scaled to fragment's own text size.  Catches
     // body-sized fragments in body-sized prose where surrounding text
     // sits at the fragment's baseline.
-    if let Some(b) = pick_external_baseline(leaves, frag_baselines, line_tol(max_text_size), start, end) {
+    if let Some(b) =
+        pick_external_baseline(leaves, frag_baselines, line_tol(max_text_size), start, end)
+    {
         return Some(b);
     }
     // Phase 2: fragment is sub/super-only — its glyphs sit a script-
@@ -419,7 +427,13 @@ fn find_external_baseline_from_leaves(
     if max_external_size <= max_text_size {
         return None;
     }
-    pick_external_baseline(leaves, frag_baselines, line_tol(max_external_size), start, end)
+    pick_external_baseline(
+        leaves,
+        frag_baselines,
+        line_tol(max_external_size),
+        start,
+        end,
+    )
 }
 
 fn pick_external_baseline(
@@ -463,7 +477,9 @@ fn find_external_line_size_from_leaves(
     // only fragments (e.g. `$#sym.zws^2$') would leave font_size_pt at
     // ~7.7pt (the script size), causing tip-scale='auto' to inflate
     // the displayed image by 11/7.7 ≈ 1.4×.
-    if let Some(s) = pick_external_line_size(leaves, line_anchors, line_tol(max_text_size), start, end) {
+    if let Some(s) =
+        pick_external_line_size(leaves, line_anchors, line_tol(max_text_size), start, end)
+    {
         return Some(s);
     }
     let max_external_size = leaves
@@ -479,7 +495,13 @@ fn find_external_line_size_from_leaves(
     if max_external_size <= max_text_size {
         return None;
     }
-    pick_external_line_size(leaves, line_anchors, line_tol(max_external_size), start, end)
+    pick_external_line_size(
+        leaves,
+        line_anchors,
+        line_tol(max_external_size),
+        start,
+        end,
+    )
 }
 
 fn pick_external_line_size(
@@ -630,13 +652,11 @@ pub fn extract_from_index(
             all_clusters.push((page_idx, cluster));
         }
     }
-    let (page_idx, picked) = all_clusters
-        .into_iter()
-        .max_by(|a, b| {
-            a.1.max_text_size
-                .partial_cmp(&b.1.max_text_size)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
+    let (page_idx, picked) = all_clusters.into_iter().max_by(|a, b| {
+        a.1.max_text_size
+            .partial_cmp(&b.1.max_text_size)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
     if picked.keep.is_empty() || picked.bounds.is_empty() {
         return None;
     }
@@ -649,76 +669,74 @@ pub fn extract_from_index(
     let max_text_size = picked.max_text_size;
 
     let group_has_in_range = |g: &GroupRecord| {
-            leaves[g.leaf_range.clone()]
-                .iter()
-                .any(|l| matches!(l.category_for(start, end), LeafCategory::InRange))
-        };
-        let outermost_group_baseline = group_records
+        leaves[g.leaf_range.clone()]
             .iter()
-            .rev()
-            .find(|g| group_has_in_range(g))
-            .map(|g| g.baseline_y);
-        let group_baselines: Vec<Abs> = group_records
-            .iter()
-            .filter(|g| group_has_in_range(g))
-            .map(|g| g.baseline_y)
-            .collect();
-        let frag_baselines: Vec<Abs> = keep
-            .iter()
-            .filter_map(|(p, item)| match item {
-                FrameItem::Text(_) => Some(p.y),
-                _ => None,
-            })
-            .collect();
-        let frag_max = frag_baselines.iter().copied().max();
-        let group_baseline = outermost_group_baseline;
-        let external_y = find_external_baseline_from_leaves(
-            leaves, &frag_baselines, max_text_size, start, end,
-        );
-        let (baseline_y, external) = match (group_baseline, external_y, frag_max) {
-            (Some(gb), _, _) => (gb, false),
-            (None, Some(ex), _) => (ex, true),
-            (None, None, Some(fm)) => (fm, false),
-            (None, None, None) => (bounds.max_y, false),
-        };
+            .any(|l| matches!(l.category_for(start, end), LeafCategory::InRange))
+    };
+    let outermost_group_baseline = group_records
+        .iter()
+        .rev()
+        .find(|g| group_has_in_range(g))
+        .map(|g| g.baseline_y);
+    let group_baselines: Vec<Abs> = group_records
+        .iter()
+        .filter(|g| group_has_in_range(g))
+        .map(|g| g.baseline_y)
+        .collect();
+    let frag_baselines: Vec<Abs> = keep
+        .iter()
+        .filter_map(|(p, item)| match item {
+            FrameItem::Text(_) => Some(p.y),
+            _ => None,
+        })
+        .collect();
+    let frag_max = frag_baselines.iter().copied().max();
+    let group_baseline = outermost_group_baseline;
+    let external_y =
+        find_external_baseline_from_leaves(leaves, &frag_baselines, max_text_size, start, end);
+    let (baseline_y, external) = match (group_baseline, external_y, frag_max) {
+        (Some(gb), _, _) => (gb, false),
+        (None, Some(ex), _) => (ex, true),
+        (None, None, Some(fm)) => (fm, false),
+        (None, None, None) => (bounds.max_y, false),
+    };
 
-        let pad = Abs::pt(0.5);
-        let crop_max_y = bounds.max_y.max(baseline_y);
-        let crop_min_y = bounds.min_y.min(baseline_y);
-        let min_x = bounds.min_x - pad;
-        let min_y = crop_min_y - pad;
-        let ink_width = bounds.max_x - bounds.min_x + pad * 2.0;
-        let height = crop_max_y - crop_min_y + pad * 2.0;
-        let depth = ((crop_max_y - baseline_y) + pad).max(Abs::zero());
+    let pad = Abs::pt(0.5);
+    let crop_max_y = bounds.max_y.max(baseline_y);
+    let crop_min_y = bounds.min_y.min(baseline_y);
+    let min_x = bounds.min_x - pad;
+    let min_y = crop_min_y - pad;
+    let ink_width = bounds.max_x - bounds.min_x + pad * 2.0;
+    let height = crop_max_y - crop_min_y + pad * 2.0;
+    let depth = ((crop_max_y - baseline_y) + pad).max(Abs::zero());
 
-        // Canvas widening for display math: Frame becomes `canvas_width'
-        // wide with the inner content centered.  When unset, output is
-        // tight (just ink + pad) — same as before.
-        let (final_width, x_offset) = match canvas_width {
-            Some(cw) if cw > ink_width => (cw, (cw - ink_width) / 2.0),
-            _ => (ink_width, Abs::zero()),
-        };
+    // Canvas widening for display math: Frame becomes `canvas_width'
+    // wide with the inner content centered.  When unset, output is
+    // tight (just ink + pad) — same as before.
+    let (final_width, x_offset) = match canvas_width {
+        Some(cw) if cw > ink_width => (cw, (cw - ink_width) / 2.0),
+        _ => (ink_width, Abs::zero()),
+    };
 
-        let mut out = Frame::soft(Size::new(final_width, height));
-        for (pos, item) in keep {
-            out.push(Point::new(pos.x - min_x + x_offset, pos.y - min_y), item);
-        }
+    let mut out = Frame::soft(Size::new(final_width, height));
+    for (pos, item) in keep {
+        out.push(Point::new(pos.x - min_x + x_offset, pos.y - min_y), item);
+    }
 
-        let line_anchors: Vec<Abs> = group_baselines
-            .iter()
-            .copied()
-            .chain(frag_baselines.iter().copied())
-            .collect();
-        let external_size = find_external_line_size_from_leaves(
-            leaves, &line_anchors, max_text_size, start, end,
-        );
-        let candidate_sizes = [Some(max_text_size), external_size];
-        let derived = candidate_sizes
-            .iter()
-            .filter_map(|x| *x)
-            .filter(|s| *s > Abs::zero())
-            .max();
-        let font_size = derived.map(|a| a.to_pt()).unwrap_or(11.0);
+    let line_anchors: Vec<Abs> = group_baselines
+        .iter()
+        .copied()
+        .chain(frag_baselines.iter().copied())
+        .collect();
+    let external_size =
+        find_external_line_size_from_leaves(leaves, &line_anchors, max_text_size, start, end);
+    let candidate_sizes = [Some(max_text_size), external_size];
+    let derived = candidate_sizes
+        .iter()
+        .filter_map(|x| *x)
+        .filter(|s| *s > Abs::zero())
+        .max();
+    let font_size = derived.map(|a| a.to_pt()).unwrap_or(11.0);
 
     Some(FragmentRender {
         svg: svg_frame(&out),
@@ -864,15 +882,9 @@ fn walk_external_size(
     for (pos, item) in frame.items() {
         let abs = Point::new(offset.x + pos.x, offset.y + pos.y);
         match item {
-            FrameItem::Group(g) => walk_external_size(
-                &g.frame,
-                abs,
-                main,
-                src,
-                exclude_start,
-                exclude_end,
-                out,
-            ),
+            FrameItem::Group(g) => {
+                walk_external_size(&g.frame, abs, main, src, exclude_start, exclude_end, out)
+            }
             FrameItem::Text(t) => {
                 let any_in = t
                     .glyphs

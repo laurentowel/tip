@@ -10,12 +10,17 @@ fn dump_frame_structures() {
         ("a_b", "$a_b$"),
         ("frac", "$frac(a,b)$"),
     ] {
-        let out = BottomUpCompiler::compile_fragment(
-            &mut world, content, "#000000", "",
-        ).unwrap();
-        eprintln!("{label:5}: h={:.2}pt d={:.2}pt ascent={:.0}%",
-                  out.height_pt, out.depth_pt,
-                  if out.height_pt > 0.0 { 100.0 * (1.0 - out.depth_pt / out.height_pt) } else { 0.0 });
+        let out = BottomUpCompiler::compile_fragment(&mut world, content, "#000000", "").unwrap();
+        eprintln!(
+            "{label:5}: h={:.2}pt d={:.2}pt ascent={:.0}%",
+            out.height_pt,
+            out.depth_pt,
+            if out.height_pt > 0.0 {
+                100.0 * (1.0 - out.depth_pt / out.height_pt)
+            } else {
+                0.0
+            }
+        );
     }
 
     // Now test: what does ascent=center mean numerically?

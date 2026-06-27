@@ -6,6 +6,9 @@ fn include_is_omitted_from_skeleton() {
     let frag_start = doc.find("$x").unwrap();
     let frag_end = doc.rfind('$').unwrap() + 1;
     let src = BottomUpCompiler::debug_scoped_source(doc, frag_start, frag_end).unwrap();
-    assert!(!src.contains("include"), "skeleton must drop #include:\n{src}");
+    assert!(
+        !src.contains("include"),
+        "skeleton must drop #include:\n{src}"
+    );
     assert!(src.contains("#let x"), "skeleton must keep #let:\n{src}");
 }

@@ -12,10 +12,12 @@ fn write_svg(name: &str, svg: &str) {
 }
 
 fn compile_scoped(world: &mut TipWorld, doc: &str, needle: &str, name: &str) {
-    let frag_start = doc.find(needle).expect(&format!("needle {needle:?} not found"));
+    let frag_start = doc
+        .find(needle)
+        .expect(&format!("needle {needle:?} not found"));
     let frag_end = frag_start + needle.len();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        world, doc, frag_start, frag_end, "#000000", None, None,
+        world, doc, frag_start, frag_end, "#000000", None, None, None,
     )
     .expect(&format!("{name} should compile"));
     write_svg(name, &out.svg);
@@ -53,7 +55,12 @@ fn insane_recursive_op() {
   result
 }
 Result: $#fold(aa, bb, cc, dd)$";
-    compile_scoped(&mut world, doc, "$#fold(aa, bb, cc, dd)$", "insane_recursive_op");
+    compile_scoped(
+        &mut world,
+        doc,
+        "$#fold(aa, bb, cc, dd)$",
+        "insane_recursive_op",
+    );
 }
 
 #[test]
@@ -136,7 +143,12 @@ fn insane_greek_soup() {
 #let ii = sym.iota
 #let kk = sym.kappa
 Soup $aa bb cc dd ee zz hh tt ii kk$";
-    compile_scoped(&mut world, doc, "$aa bb cc dd ee zz hh tt ii kk$", "insane_greek_soup");
+    compile_scoped(
+        &mut world,
+        doc,
+        "$aa bb cc dd ee zz hh tt ii kk$",
+        "insane_greek_soup",
+    );
 }
 
 #[test]
@@ -145,7 +157,7 @@ fn insane_operator_override() {
     // Show rule replaces all + in math with ⊕
     let doc = "\
 #show math.equation: it => {
-  show sym.plus: sym.plus.circle
+  show sym.plus: sym.plus.o
   it
 }
 Formula $a + b$";

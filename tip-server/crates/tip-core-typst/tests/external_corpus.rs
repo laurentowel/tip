@@ -133,8 +133,7 @@ fn external_corpus_compiles_cleanly() {
 
     for doc_path in &docs {
         let name = doc_path.file_name().unwrap().to_string_lossy().to_string();
-        let src = fs::read_to_string(doc_path)
-            .unwrap_or_else(|e| panic!("read {doc_path:?}: {e}"));
+        let src = fs::read_to_string(doc_path).unwrap_or_else(|e| panic!("read {doc_path:?}: {e}"));
         let frags = collect_inline_math(&src);
 
         let mut world = TipWorld::new();
@@ -142,7 +141,7 @@ fn external_corpus_compiles_cleanly() {
         let mut empties = 0usize;
         for (start, end) in &frags {
             match BottomUpCompiler::compile_fragment_scoped(
-                &mut world, &src, *start, *end, "#000000", None, None,
+                &mut world, &src, *start, *end, "#000000", None, None, None,
             ) {
                 Ok(out) if !out.svg.is_empty() => {}
                 Ok(_) => empties += 1,

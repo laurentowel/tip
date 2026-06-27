@@ -64,9 +64,13 @@ fn walk_ink(frame: &Frame, x_off: f64, y_off: f64, bounds: &mut InkBounds) {
         let item_y = y_off + pos.y.to_pt();
         match item {
             FrameItem::Text(text) => {
-                let (lx, ly, hx, hy) =
-                    text_item_frame_bbox(text, Point::new(typst::layout::Abs::pt(item_x),
-                                                          typst::layout::Abs::pt(item_y)));
+                let (lx, ly, hx, hy) = text_item_frame_bbox(
+                    text,
+                    Point::new(
+                        typst::layout::Abs::pt(item_x),
+                        typst::layout::Abs::pt(item_y),
+                    ),
+                );
                 bounds.min_x = bounds.min_x.min(lx.to_pt());
                 bounds.max_x = bounds.max_x.max(hx.to_pt());
                 bounds.min_y = bounds.min_y.min(ly.to_pt());

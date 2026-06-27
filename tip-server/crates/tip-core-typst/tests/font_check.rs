@@ -14,13 +14,7 @@ fn write_svg(name: &str, svg: &str) {
 #[test]
 fn visual_default_math_font() {
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(
-        &mut world,
-        "$a + b = c$",
-        "#000000",
-        "",
-    )
-    .unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$a + b = c$", "#000000", "").unwrap();
     write_svg("math_default", &out.svg);
     eprintln!("height: {:.2}pt", out.height_pt);
 }
@@ -38,13 +32,8 @@ fn visual_pennstander_math() {
         "#set text(font: \"Pennstander\")\n",
     );
 
-    let out = BottomUpCompiler::compile_fragment(
-        &mut world,
-        "$a + b = c$",
-        "#000000",
-        preamble,
-    )
-    .unwrap();
+    let out =
+        BottomUpCompiler::compile_fragment(&mut world, "$a + b = c$", "#000000", preamble).unwrap();
     write_svg("math_pennstander_inline", &out.svg);
     eprintln!("height: {:.2}pt", out.height_pt);
 }

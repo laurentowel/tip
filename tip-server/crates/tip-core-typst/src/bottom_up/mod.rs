@@ -1,8 +1,9 @@
 use typst::compile;
-use typst::layout::{Abs, Frame, PagedDocument, Point, Size};
+use typst::layout::{Abs, Frame, Point, Size};
 use typst::syntax::SyntaxKind;
-use typst_svg::svg_frame;
+use typst_layout::PagedDocument;
 
+use crate::svg::svg_frame;
 use crate::world::TipWorld;
 use baseline::{collect_text_items, find_ink_extent, find_outermost_group_baseline};
 
@@ -11,7 +12,10 @@ mod baseline;
 /// Detect display math. In Typst, display math has whitespace after opening `$`.
 pub fn is_display_math(content: &str) -> bool {
     content.starts_with('$')
-        && content.as_bytes().get(1).map_or(false, |b| b.is_ascii_whitespace())
+        && content
+            .as_bytes()
+            .get(1)
+            .map_or(false, |b| b.is_ascii_whitespace())
 }
 
 /// Detect multi-line display math (has newlines between `$` delimiters).
@@ -77,8 +81,14 @@ impl BottomUpCompiler {
         let is_inline = is_math && !is_display_math(content);
 
         let source = build_scoped_source(
-            document_source, frag_start, frag_end, color, is_multiline,
-            page_setup, preamble, display_math_width,
+            document_source,
+            frag_start,
+            frag_end,
+            color,
+            is_multiline,
+            page_setup,
+            preamble,
+            display_math_width,
         )?;
         compile_source(world, &source, is_inline)
     }
@@ -96,27 +106,41 @@ impl BottomUpCompiler {
         let content = &document_source[frag_start..frag_end];
         let is_math = content.starts_with('$');
         let is_multiline = is_math && is_multiline_math(content);
-        build_scoped_source(document_source, frag_start, frag_end, "#000000", is_multiline, None, None, None)
+        build_scoped_source(
+            document_source,
+            frag_start,
+            frag_end,
+            "#000000",
+            is_multiline,
+            None,
+            None,
+            None,
+        )
     }
 }
 
 /// Compile a prepared source string and return the fragment output.
 /// `is_inline` controls whether baseline measurement + SVG cropping is applied.
-fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result<FragmentOutput, String> {
+fn compile_source(
+    world: &mut TipWorld,
+    source: &str,
+    is_inline: bool,
+) -> Result<FragmentOutput, String> {
     world.set_main_source(source);
 
     let warned = compile::<PagedDocument>(world);
-    let document = warned
-        .output
-        .map_err(|errors: ecow::EcoVec<typst::diag::SourceDiagnostic>| {
-            errors
-                .into_iter()
-                .map(|e| e.message.to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
-        })?;
+    let document =
+        warned
+            .output
+            .map_err(|errors: ecow::EcoVec<typst::diag::SourceDiagnostic>| {
+                errors
+                    .into_iter()
+                    .map(|e| e.message.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?;
 
-    let pages = &document.pages;
+    let pages = document.pages();
     if pages.is_empty() {
         return Err("compilation produced no pages".into());
     }
@@ -143,17 +167,16 @@ fn compile_source(world: &mut TipWorld, source: &str, is_inline: bool) -> Result
         // top_down uses (extract.rs:221).  Cleaner than rewriting an
         // already-rendered SVG's `viewBox' string and gives us one
         // mental model for cropping across both strategies.
-        let baseline_y = find_baseline_depth(&page.frame, 0.0)
-            .unwrap_or_else(|| {
-                // Last resort: page is auto-sized to content + margins,
-                // so the body baseline lives at `page_height -
-                // bottom_margin'.  Hit when the only text item is a
-                // sub/super-script glyph (e.g. `$#sym.zws^2$') and
-                // there's no Group baseline either — the page
-                // reserves a body-line height even if the body
-                // glyph is invisible (ZWS).
-                page.frame.height().to_pt() - 20.0
-            });
+        let baseline_y = find_baseline_depth(&page.frame, 0.0).unwrap_or_else(|| {
+            // Last resort: page is auto-sized to content + margins,
+            // so the body baseline lives at `page_height -
+            // bottom_margin'.  Hit when the only text item is a
+            // sub/super-script glyph (e.g. `$#sym.zws^2$') and
+            // there's no Group baseline either — the page
+            // reserves a body-line height even if the body
+            // glyph is invisible (ZWS).
+            page.frame.height().to_pt() - 20.0
+        });
 
         // Always include the baseline in the crop region.  Without this,
         // a fragment whose ink lives entirely above the baseline (e.g.
@@ -256,10 +279,7 @@ fn crop_frame_y(src: &Frame, crop_top: f64, cropped_height: f64, width: f64) -> 
 /// for stacked accents (`hat(tilde(phi))') because the closest-to-
 /// page-midpoint y was an accent, not the base.  See
 /// `tests/phantom_force_baseline.rs' for the empirical demonstration.
-fn find_baseline_depth(
-    frame: &typst::layout::Frame,
-    y_offset: f64,
-) -> Option<f64> {
+fn find_baseline_depth(frame: &typst::layout::Frame, y_offset: f64) -> Option<f64> {
     if frame.has_baseline() {
         return Some(y_offset + frame.baseline().to_pt());
     }
@@ -361,16 +381,13 @@ fn build_scoped_source(
     // doesn't inflate the SVG or interfere with our ink-extent crop.
     // `#hide[..]' makes the contents layout-only (invisible).
     let fragment_owned;
-    let fragment: &str = if is_inline
-        && content.starts_with('$')
-        && content.ends_with('$')
-        && content.len() >= 2
-    {
-        fragment_owned = format!("{} #hide[#sym.zws]$", &content[..content.len() - 1]);
-        &fragment_owned
-    } else {
-        &document_source[frag_start..frag_end]
-    };
+    let fragment: &str =
+        if is_inline && content.starts_with('$') && content.ends_with('$') && content.len() >= 2 {
+            fragment_owned = format!("{} #hide[#sym.zws]$", &content[..content.len() - 1]);
+            &fragment_owned
+        } else {
+            &document_source[frag_start..frag_end]
+        };
 
     // The color override goes LAST among the setup chunks so it wins
     // over any client-supplied `set text(rgb(...))' in preamble_override
@@ -390,7 +407,10 @@ fn build_scoped_source(
         color_override.trim(),
         fragment,
         closing.as_str(),
-    ].into_iter().filter(|s| !s.is_empty()).collect();
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
     let source = sections.join("\n") + "\n";
     Ok(source)
 }
@@ -409,7 +429,10 @@ fn extract_scope_skeleton(
     let mut result = String::new();
     let mut closers: Vec<&str> = Vec::new();
     collect_scope_nodes(root, source, frag_start, 0, &mut result, &mut closers);
-    (result, closers.into_iter().rev().collect::<Vec<_>>().join(""))
+    (
+        result,
+        closers.into_iter().rev().collect::<Vec<_>>().join(""),
+    )
 }
 
 /// Recursively collect scope-defining nodes and structural ancestors
@@ -480,8 +503,7 @@ fn collect_scope_nodes(
     // Case 2: node CONTAINS frag_start — must recurse to preserve structure
     match node.kind() {
         // Transparent containers: just recurse
-        SyntaxKind::Markup
-        | SyntaxKind::Code => {
+        SyntaxKind::Markup | SyntaxKind::Code => {
             let mut child_offset = offset;
             for child in node.children() {
                 collect_scope_nodes(child, source, frag_start, child_offset, result, closers);
@@ -503,9 +525,13 @@ fn collect_scope_nodes(
         // Content blocks: only emit [ if they contain scope-defining children
         SyntaxKind::ContentBlock => {
             let has_scope_children = node.children().any(|child| {
-                matches!(child.kind(),
-                    SyntaxKind::LetBinding | SyntaxKind::SetRule |
-                    SyntaxKind::ShowRule | SyntaxKind::ModuleImport)
+                matches!(
+                    child.kind(),
+                    SyntaxKind::LetBinding
+                        | SyntaxKind::SetRule
+                        | SyntaxKind::ShowRule
+                        | SyntaxKind::ModuleImport
+                )
             });
             if has_scope_children {
                 result.push_str("[\n");
@@ -542,7 +568,11 @@ fn collect_scope_nodes(
 /// page setup, color override, and phantom injection identically to the
 /// production path — no need to duplicate that logic here.
 fn build_fragment_source(content: &str, color: &str, preamble: &str) -> String {
-    let preamble = if preamble.is_empty() { None } else { Some(preamble) };
+    let preamble = if preamble.is_empty() {
+        None
+    } else {
+        Some(preamble)
+    };
     build_scoped_source(
         content,
         0,
@@ -575,22 +605,30 @@ mod tests {
     #[test]
     fn build_single_line_display_source() {
         let src = build_fragment_source("$ a + b $", "#000000", "");
-        assert!(src.contains("width: auto"), "single-line display should use auto width");
-        assert!(!src.contains("16cm"), "single-line display should not use 16cm");
+        assert!(
+            src.contains("width: auto"),
+            "single-line display should use auto width"
+        );
+        assert!(
+            !src.contains("16cm"),
+            "single-line display should not use 16cm"
+        );
     }
 
     #[test]
     fn build_multiline_display_source() {
         let src = build_fragment_source("$\n  a + b\n$", "#000000", "");
-        assert!(src.contains("width: 16cm"), "multiline display should use 16cm");
+        assert!(
+            src.contains("width: 16cm"),
+            "multiline display should use 16cm"
+        );
     }
 
     #[test]
     fn compile_simple_inline() {
         let mut world = TipWorld::new();
-        let output = BottomUpCompiler::compile_fragment(
-            &mut world, "$a + b$", "#000000", "",
-        ).unwrap();
+        let output =
+            BottomUpCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
         assert!(output.svg.contains("<svg"));
         assert!(output.height_pt > 0.0);
     }
@@ -598,9 +636,9 @@ mod tests {
     #[test]
     fn compile_block_math() {
         let mut world = TipWorld::new();
-        let output = BottomUpCompiler::compile_fragment(
-            &mut world, "$ sum_(i=0)^n i^2 $", "#000000", "",
-        ).unwrap();
+        let output =
+            BottomUpCompiler::compile_fragment(&mut world, "$ sum_(i=0)^n i^2 $", "#000000", "")
+                .unwrap();
         assert!(output.svg.contains("<svg"));
     }
 
@@ -608,8 +646,20 @@ mod tests {
     fn compile_with_preamble() {
         let mut world = TipWorld::new();
         let output = BottomUpCompiler::compile_fragment(
-            &mut world, "$cl$", "#000000", "#let cl = math.cal(\"L\")\n",
-        ).unwrap();
+            &mut world,
+            "$cl$",
+            "#000000",
+            "#let cl = math.cal(\"L\")\n",
+        )
+        .unwrap();
+        assert!(output.svg.contains("<svg"));
+    }
+
+    #[test]
+    fn compile_typst_0_15_symbol() {
+        let mut world = TipWorld::new();
+        let output =
+            BottomUpCompiler::compile_fragment(&mut world, "$lt.closed$", "#000000", "").unwrap();
         assert!(output.svg.contains("<svg"));
     }
 
@@ -617,7 +667,10 @@ mod tests {
     fn compile_invalid_returns_error() {
         let mut world = TipWorld::new();
         let result = BottomUpCompiler::compile_fragment(
-            &mut world, "$#nonexistent_function()$", "#000000", "",
+            &mut world,
+            "$#nonexistent_function()$",
+            "#000000",
+            "",
         );
         assert!(result.is_err());
     }
@@ -658,7 +711,10 @@ mod tests {
         let frag_start = doc.find("$x$").unwrap();
         let (skel, _closers) = extract_scope_skeleton(&root, doc, frag_start);
         assert!(skel.contains("let x = 1"));
-        assert!(!skel.contains("Hello world"), "should not contain text: {skel}");
+        assert!(
+            !skel.contains("Hello world"),
+            "should not contain text: {skel}"
+        );
     }
 
     #[test]
@@ -681,7 +737,8 @@ mod tests {
         let frag_end = frag_start + "$foo$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(output.svg.contains("<svg"));
     }
 
@@ -693,7 +750,8 @@ mod tests {
         let frag_end = frag_start + "$x$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(output.svg.contains("<svg"));
     }
 
@@ -705,7 +763,8 @@ mod tests {
         let frag_end = frag_start + "$a + b$".len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(output.svg.contains("<svg"));
     }
 
@@ -715,8 +774,14 @@ mod tests {
         let doc = "#let x = 1\nLots of text here that should NOT appear\n$x$";
         let frag_start = doc.find("$x$").unwrap();
         let frag_end = frag_start + "$x$".len();
-        let source = build_scoped_source(doc, frag_start, frag_end, "#000000", false, None, None, None).unwrap();
-        assert!(!source.contains("Lots of text"), "generated source should not contain text content: {source}");
+        let source = build_scoped_source(
+            doc, frag_start, frag_end, "#000000", false, None, None, None,
+        )
+        .unwrap();
+        assert!(
+            !source.contains("Lots of text"),
+            "generated source should not contain text content: {source}"
+        );
     }
 
     #[test]
@@ -724,7 +789,8 @@ mod tests {
         let mut world = TipWorld::new();
         assert!(BottomUpCompiler::compile_fragment_scoped(
             &mut world, "$a$", 0, 999, "#000000", None, None, None,
-        ).is_err());
+        )
+        .is_err());
     }
 
     // --- Math inside function calls ---
@@ -738,7 +804,8 @@ mod tests {
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None, None,
-        ).expect("math in #list should compile");
+        )
+        .expect("math in #list should compile");
         assert!(output.svg.contains("<svg"));
     }
 
@@ -751,7 +818,8 @@ mod tests {
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None, None,
-        ).expect("math in nested funcall should compile");
+        )
+        .expect("math in nested funcall should compile");
         assert!(output.svg.contains("<svg"));
     }
 
@@ -764,7 +832,8 @@ mod tests {
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None, None,
-        ).expect("math in multi-arg list should compile");
+        )
+        .expect("math in multi-arg list should compile");
         assert!(output.svg.contains("<svg"));
     }
 
@@ -777,7 +846,8 @@ mod tests {
         let end = start + needle.len();
         let output = BottomUpCompiler::compile_fragment_scoped(
             &mut world, doc, start, end, "#000000", None, None, None,
-        ).expect("math in #enum should compile");
+        )
+        .expect("math in #enum should compile");
         assert!(output.svg.contains("<svg"));
     }
 }

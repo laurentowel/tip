@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use typst::diag::{FileError, FileResult};
-use typst::foundations::{Bytes, Datetime};
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::foundations::{Bytes, Datetime, Duration};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
-use typst_kit::download::{Downloader, ProgressSink};
-use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
-use typst_kit::package::PackageStorage;
+use typst_kit::downloader::SystemDownloader;
+use typst_kit::files::FsRoot;
+use typst_kit::fonts::FontStore;
+use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
 use typst_library::Feature;
 
 /// A World implementation for TIP that keeps the main source in memory
@@ -23,14 +24,14 @@ pub struct TipWorld {
     root: Option<PathBuf>,
     /// Typst's standard library.
     library: LazyHash<Library>,
-    /// Font metadata.
-    book: LazyHash<FontBook>,
-    /// Lazily loaded fonts.
-    fonts: Vec<FontSlot>,
+    /// Lazily loaded fonts and metadata.
+    fonts: FontStore,
+    /// Number of font faces discovered while building the world.
+    font_count: usize,
     /// In-memory source storage, keyed by FileId.
     sources: Mutex<HashMap<FileId, Source>>,
     /// Package storage for resolving @preview/... imports.
-    packages: PackageStorage,
+    packages: SystemPackages,
 }
 
 impl TipWorld {
@@ -53,6 +54,7 @@ impl TipWorld {
         TipWorldBuilder {
             root: None,
             font_dirs: Vec::new(),
+            package_data_dir: None,
         }
     }
 
@@ -72,9 +74,8 @@ impl TipWorld {
     /// (e.g., `#import "../_lib/kodama.typ"` from a file in a subdirectory).
     pub fn set_main_path(&mut self, file_uri: &str) {
         if let Some(root) = &self.root {
-            if let Ok(relative) = Path::new(file_uri).strip_prefix(root) {
-                let vpath = VirtualPath::new(relative);
-                let new_id = FileId::new_fake(vpath);
+            if let Ok(vpath) = VirtualPath::virtualize(root, Path::new(file_uri)) {
+                let new_id = FileId::unique(RootedPath::new(VirtualRoot::Project, vpath));
                 // Move existing source to new ID
                 let mut sources = self.sources.lock().unwrap();
                 if let Some(source) = sources.remove(&self.main) {
@@ -94,7 +95,7 @@ impl TipWorld {
     /// How many fonts the FontSearcher discovered.  Used by the
     /// server's `health_check` handler for diagnostic reporting.
     pub fn font_count(&self) -> usize {
-        self.fonts.len()
+        self.font_count
     }
 
     /// Reset compilation state (evict stale memoization entries).
@@ -104,25 +105,22 @@ impl TipWorld {
 
     /// Resolve a FileId to a filesystem path.
     fn resolve_path(&self, id: FileId) -> FileResult<PathBuf> {
-        if let Some(spec) = id.package() {
-            // Package import: resolve via PackageStorage
-            let dir = self
-                .packages
-                .prepare_package(spec, &mut ProgressSink)
-                .map_err(|e| FileError::Other(Some(format!("{e}").into())))?;
-            let resolved = id
-                .vpath()
-                .resolve(&dir)
-                .ok_or_else(|| FileError::NotFound(id.vpath().as_rootless_path().into()))?;
-            Ok(resolved)
-        } else {
-            // Project-local import: resolve relative to project root
-            let root = self.root.as_deref().ok_or_else(|| {
-                FileError::Other(Some("no project root set; cannot resolve imports".into()))
-            })?;
-            id.vpath()
-                .resolve(root)
-                .ok_or_else(|| FileError::NotFound(id.vpath().as_rootless_path().into()))
+        match id.root() {
+            VirtualRoot::Package(spec) => {
+                // Package import: resolve via Typst's system package locations.
+                let root = self
+                    .packages
+                    .obtain(spec)
+                    .map_err(|e| FileError::Other(Some(format!("{e}").into())))?;
+                root.resolve(id.vpath())
+            }
+            VirtualRoot::Project => {
+                // Project-local import: resolve relative to project root.
+                let root = self.root.as_deref().ok_or_else(|| {
+                    FileError::Other(Some("no project root set; cannot resolve imports".into()))
+                })?;
+                FsRoot::new(root.to_path_buf()).resolve(id.vpath())
+            }
         }
     }
 
@@ -148,6 +146,7 @@ impl TipWorld {
 pub struct TipWorldBuilder {
     root: Option<PathBuf>,
     font_dirs: Vec<PathBuf>,
+    package_data_dir: Option<PathBuf>,
 }
 
 impl TipWorldBuilder {
@@ -158,6 +157,11 @@ impl TipWorldBuilder {
 
     pub fn font_dir(mut self, dir: &Path) -> Self {
         self.font_dirs.push(dir.to_path_buf());
+        self
+    }
+
+    pub fn package_data_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.package_data_dir = Some(dir.into());
         self
     }
 
@@ -175,20 +179,44 @@ impl TipWorldBuilder {
             }
         }
 
-        let discovered: Fonts =
-            FontSearcher::new().search_with(all_dirs.iter().map(|p| p.as_path()));
+        let mut fonts = FontStore::new();
+        let mut font_count = 0;
 
-        let main = FileId::new_fake(VirtualPath::new("tip-main.typ"));
+        let embedded = typst_kit::fonts::embedded().collect::<Vec<_>>();
+        font_count += embedded.len();
+        fonts.extend(embedded);
 
-        let downloader = Downloader::new("tip-server/0.1.0");
-        let packages = PackageStorage::new(None, None, downloader);
+        for dir in &all_dirs {
+            let scanned = typst_kit::fonts::scan(dir).collect::<Vec<_>>();
+            font_count += scanned.len();
+            fonts.extend(scanned);
+        }
+
+        let system = typst_kit::fonts::system().collect::<Vec<_>>();
+        font_count += system.len();
+        fonts.extend(system);
+
+        let main = FileId::unique(RootedPath::new(
+            VirtualRoot::Project,
+            VirtualPath::new("tip-main.typ").expect("valid virtual path"),
+        ));
+
+        let downloader = SystemDownloader::new("tip-server/0.1.0");
+        let packages = match self.package_data_dir {
+            Some(dir) => SystemPackages::from_parts(
+                Some(FsPackages::new(dir)),
+                FsPackages::system_cache(),
+                UniversePackages::new(downloader),
+            ),
+            None => SystemPackages::new(downloader),
+        };
 
         TipWorld {
             main,
             root: self.root,
             library: LazyHash::new(library),
-            book: LazyHash::new(discovered.book),
-            fonts: discovered.fonts,
+            fonts,
+            font_count,
             sources: Mutex::new(HashMap::new()),
             packages,
         }
@@ -201,7 +229,7 @@ impl World for TipWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        &self.book
+        self.fonts.book()
     }
 
     fn main(&self) -> FileId {
@@ -229,10 +257,10 @@ impl World for TipWorld {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        self.fonts.get(index)?.get()
+        self.fonts.font(index)
     }
 
-    fn today(&self, _offset: Option<i64>) -> Option<Datetime> {
+    fn today(&self, _offset: Option<Duration>) -> Option<Datetime> {
         None
     }
 }

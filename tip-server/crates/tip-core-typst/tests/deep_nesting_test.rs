@@ -15,29 +15,32 @@ fn find_fragments(doc: &str) -> Vec<(usize, usize)> {
             i += 1;
             let mut depth = 0u32;
             while i < bytes.len() {
-                if bytes[i] == b'$' && depth == 0 { break; }
-                if bytes[i] == b'{' || bytes[i] == b'[' { depth += 1; }
-                else if (bytes[i] == b'}' || bytes[i] == b']') && depth > 0 { depth -= 1; }
+                if bytes[i] == b'$' && depth == 0 {
+                    break;
+                }
+                if bytes[i] == b'{' || bytes[i] == b'[' {
+                    depth += 1;
+                } else if (bytes[i] == b'}' || bytes[i] == b']') && depth > 0 {
+                    depth -= 1;
+                }
                 i += 1;
             }
             if i < bytes.len() {
                 i += 1;
                 frags.push((start, i));
             }
-        } else { i += 1; }
+        } else {
+            i += 1;
+        }
     }
     frags
 }
 
 #[test]
 fn deep_nesting_all_fragments_compile() {
-    let doc = std::fs::read_to_string(
-        format!("{}/deep_nesting.typ", fixtures_dir())
-    ).unwrap();
+    let doc = std::fs::read_to_string(format!("{}/deep_nesting.typ", fixtures_dir())).unwrap();
 
-    let mut world = TipWorld::builder()
-        .root(fixtures_dir())
-        .build();
+    let mut world = TipWorld::builder().root(fixtures_dir()).build();
 
     let frags = find_fragments(&doc);
     eprintln!("found {} fragments in deep_nesting.typ", frags.len());
@@ -55,7 +58,7 @@ fn deep_nesting_all_fragments_compile() {
         };
 
         match BottomUpCompiler::compile_fragment_scoped(
-            &mut world, &doc, *start, *end, "#000000", None, None,
+            &mut world, &doc, *start, *end, "#000000", None, None, None,
         ) {
             Ok(output) => {
                 assert!(output.svg.contains("<svg"), "[{idx}] missing <svg>");
@@ -64,7 +67,11 @@ fn deep_nesting_all_fragments_compile() {
                 ok += 1;
             }
             Err(e) => {
-                let short_err = if e.len() > 60 { format!("{}...", &e[..57]) } else { e.clone() };
+                let short_err = if e.len() > 60 {
+                    format!("{}...", &e[..57])
+                } else {
+                    e.clone()
+                };
                 eprintln!("  [{idx:2}] FAIL {short:?}: {short_err}");
                 failures.push((idx, short, e));
                 failed += 1;
@@ -80,6 +87,15 @@ fn deep_nesting_all_fragments_compile() {
         }
     }
 
-    assert!(frags.len() >= 40, "should find many fragments, got {}", frags.len());
-    assert_eq!(failed, 0, "{failed}/{} fragments failed to compile", frags.len());
+    assert!(
+        frags.len() >= 40,
+        "should find many fragments, got {}",
+        frags.len()
+    );
+    assert_eq!(
+        failed,
+        0,
+        "{failed}/{} fragments failed to compile",
+        frags.len()
+    );
 }

@@ -14,7 +14,10 @@ fn top_down_multiline_display_uses_canvas_width() {
     let frag_start = doc.find('$').unwrap();
     let frag_end = doc[frag_start + 1..].find('$').unwrap() + frag_start + 2;
     let mut world = TipWorld::new();
-    let frags = vec![FragmentLocation { start: frag_start, end: frag_end }];
+    let frags = vec![FragmentLocation {
+        start: frag_start,
+        end: frag_end,
+    }];
 
     // Default canvas (None → 16cm fallback).
     let r_default = TopDownCompiler::compile_all(&mut world, doc, &frags, None)
@@ -64,7 +67,10 @@ fn top_down_inline_keeps_tight_crop() {
     let frag_start = doc.find("$x + y$").unwrap();
     let frag_end = frag_start + "$x + y$".len();
     let mut world = TipWorld::new();
-    let frags = vec![FragmentLocation { start: frag_start, end: frag_end }];
+    let frags = vec![FragmentLocation {
+        start: frag_start,
+        end: frag_end,
+    }];
     // Even with a 16cm canvas hint, inline math should crop tight.
     let r = TopDownCompiler::compile_all(&mut world, doc, &frags, Some("16cm"))
         .unwrap()

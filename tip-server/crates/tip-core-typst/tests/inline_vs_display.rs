@@ -31,8 +31,16 @@ fn style_inline_sum() {
     let needle = "$sum_(i=0)^n i$";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_inline_sum", &out.svg);
     eprintln!("inline sum: {:.2}pt", out.height_pt);
 }
@@ -44,8 +52,16 @@ fn style_display_sum() {
     let needle = "$ sum_(i=0)^n i $";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_display_sum", &out.svg);
     eprintln!("display sum: {:.2}pt", out.height_pt);
 }
@@ -57,8 +73,16 @@ fn style_inline_frac() {
     let needle = "$frac(a,b)$";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_inline_frac", &out.svg);
     eprintln!("inline frac: {:.2}pt", out.height_pt);
 }
@@ -70,8 +94,16 @@ fn style_display_frac() {
     let needle = "$ frac(a,b) $";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_display_frac", &out.svg);
     eprintln!("display frac: {:.2}pt", out.height_pt);
 }
@@ -83,8 +115,16 @@ fn style_inline_integral() {
     let needle = "$integral_0^1 f(x) dif x$";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_inline_integral", &out.svg);
     eprintln!("inline integral: {:.2}pt", out.height_pt);
 }
@@ -96,8 +136,16 @@ fn style_display_integral() {
     let needle = "$ integral_0^1 f(x) dif x $";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_display_integral", &out.svg);
     eprintln!("display integral: {:.2}pt", out.height_pt);
 }
@@ -109,8 +157,16 @@ fn style_inline_product() {
     let needle = "$product_(k=1)^n k$";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_inline_product", &out.svg);
     eprintln!("inline product: {:.2}pt", out.height_pt);
 }
@@ -122,8 +178,16 @@ fn style_display_product() {
     let needle = "$ product_(k=1)^n k $";
     let start = doc.find(needle).unwrap();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, start + needle.len(), "#000000", None, None,
-    ).unwrap();
+        &mut world,
+        doc,
+        start,
+        start + needle.len(),
+        "#000000",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     write_svg("style_display_product", &out.svg);
     eprintln!("display product: {:.2}pt", out.height_pt);
 }

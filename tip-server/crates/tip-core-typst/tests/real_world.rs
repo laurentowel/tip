@@ -41,7 +41,7 @@ fn compile_all_fragments(doc: &str, world: &mut TipWorld) -> (usize, usize) {
     let mut ok = 0;
     for (idx, (start, end)) in frags.iter().enumerate() {
         match BottomUpCompiler::compile_fragment_scoped(
-            world, doc, *start, *end, "#000000", None, None,
+            world, doc, *start, *end, "#000000", None, None, None,
         ) {
             Ok(output) => {
                 write_svg(&format!("real_{idx}"), &output.svg);
@@ -60,12 +60,8 @@ fn compile_all_fragments(doc: &str, world: &mut TipWorld) -> (usize, usize) {
 
 #[test]
 fn real_world_all_fragments_compile() {
-    let doc = std::fs::read_to_string(
-        format!("{}/real_world.typ", fixtures_dir())
-    ).unwrap();
-    let mut world = TipWorld::builder()
-        .root(fixtures_dir())
-        .build();
+    let doc = std::fs::read_to_string(format!("{}/real_world.typ", fixtures_dir())).unwrap();
+    let mut world = TipWorld::builder().root(fixtures_dir()).build();
     let (ok, total) = compile_all_fragments(&doc, &mut world);
     eprintln!("compiled {ok}/{total} fragments successfully");
     // Allow some failures (e.g. fragments inside show rules may not parse cleanly)

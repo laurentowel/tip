@@ -12,15 +12,10 @@ use tip_core_typst::world::TipWorld;
 #[test]
 fn text_em_wrapper_around_inner_math_scales_down() {
     let mut world = TipWorld::new();
-    let unwrapped =
-        BottomUpCompiler::compile_fragment(&mut world, "$x y$", "#000000", "").unwrap();
-    let wrapped = BottomUpCompiler::compile_fragment(
-        &mut world,
-        "$x #text(0.7em)[$y$]$",
-        "#000000",
-        "",
-    )
-    .unwrap();
+    let unwrapped = BottomUpCompiler::compile_fragment(&mut world, "$x y$", "#000000", "").unwrap();
+    let wrapped =
+        BottomUpCompiler::compile_fragment(&mut world, "$x #text(0.7em)[$y$]$", "#000000", "")
+            .unwrap();
 
     // Both fragments contain an `x' and a `y'.  When the `y' is wrapped in
     // `#text(0.7em)[...]`, the rendered width must be smaller — the inner
@@ -51,8 +46,7 @@ fn top_level_math_still_at_body_anchor() {
     // show-rule change.  A regression here would mean documents with a
     // doc-level `#set text(size: 14pt)' would now render math at 14pt.
     let mut world = TipWorld::new();
-    let out =
-        BottomUpCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
     // 11pt body, three glyphs + spaces.  An empirical sanity floor: width
     // must be in a plausible 11pt-body range (not crashed to 0, not
     // ballooned past 50pt).

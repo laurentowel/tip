@@ -9,9 +9,9 @@
 
 use std::process::Command;
 
-use tip_protocol::messages::{BinaryProbe, HealthReport, LatexHealth};
 #[cfg(feature = "typst")]
 use tip_protocol::messages::TypstHealth;
+use tip_protocol::messages::{BinaryProbe, HealthReport, LatexHealth};
 
 #[cfg(feature = "typst")]
 use crate::typst_backend::TypstBackend;
@@ -81,9 +81,8 @@ fn probe_latex_deps(warnings: &mut Vec<String>) -> LatexHealth {
     // file specifies `% !TEX program = xelatex' (or lualatex).  Warn
     // so users know upfront, but don't gate `ok' on them.
     if !xelatex.found {
-        warnings.push(
-            "`xelatex` not in PATH — files with `% !TEX program = xelatex' will fail".into(),
-        );
+        warnings
+            .push("`xelatex` not in PATH — files with `% !TEX program = xelatex' will fail".into());
     }
     if !dvilualatex.found {
         warnings.push(
@@ -92,7 +91,14 @@ fn probe_latex_deps(warnings: &mut Vec<String>) -> LatexHealth {
     }
 
     let ok = latex.found && dvisvgm.found && preview_sty.found;
-    LatexHealth { ok, latex, xelatex, dvilualatex, dvisvgm, preview_sty }
+    LatexHealth {
+        ok,
+        latex,
+        xelatex,
+        dvilualatex,
+        dvisvgm,
+        preview_sty,
+    }
 }
 
 /// Run `cmd args...`, parse the first line of stdout as the version.
@@ -101,14 +107,10 @@ fn probe_binary(cmd: &str, args: &[&str], min_version: Option<&str>) -> BinaryPr
     let path = which::which(cmd).ok().map(|p| p.display().to_string());
     let found = path.is_some();
     let version = if found {
-        Command::new(cmd)
-            .args(args)
-            .output()
-            .ok()
-            .and_then(|o| {
-                let s = String::from_utf8_lossy(&o.stdout).to_string();
-                s.lines().next().map(|l| l.trim().to_string())
-            })
+        Command::new(cmd).args(args).output().ok().and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).to_string();
+            s.lines().next().map(|l| l.trim().to_string())
+        })
     } else {
         None
     };
@@ -235,7 +237,7 @@ fn typst_crate_version() -> String {
     // Hardcoded because typst doesn't expose CARGO_PKG_VERSION via its public API
     // and we don't want to parse Cargo.lock at runtime.  Keep in sync with the
     // [dependencies] pin in tip-core-typst/Cargo.toml.
-    "0.14.2".to_string()
+    "0.15.0".to_string()
 }
 
 fn target_triple() -> &'static str {

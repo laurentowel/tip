@@ -13,7 +13,7 @@ use tip_protocol::svg_color::apply_display_border;
 fn one_fragment(doc: &str, start: usize, end: usize) -> FragmentResult {
     let mut world = TipWorld::new();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, end, "#000000", None, None,
+        &mut world, doc, start, end, "#000000", None, None, None,
     )
     .unwrap();
     FragmentResult {

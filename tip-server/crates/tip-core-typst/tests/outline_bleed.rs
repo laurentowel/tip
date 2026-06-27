@@ -20,7 +20,10 @@ Body text.
     let frag_start = doc.find("$G$").unwrap();
     let frag_end = frag_start + "$G$".len();
     let mut world = TipWorld::new();
-    let frags = vec![FragmentLocation { start: frag_start, end: frag_end }];
+    let frags = vec![FragmentLocation {
+        start: frag_start,
+        end: frag_end,
+    }];
     let r = TopDownCompiler::compile_all(&mut world, doc, &frags, None)
         .unwrap()
         .into_iter()

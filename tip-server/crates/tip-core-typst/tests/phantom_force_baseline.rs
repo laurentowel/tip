@@ -21,8 +21,9 @@
 //! This test does not change the compile pipeline; it just measures.
 //! Run: `cargo test -p tip-core-typst --test phantom_force_baseline -- --nocapture`
 
-use typst::layout::{Frame, FrameItem, PagedDocument};
 use tip_core_typst::world::TipWorld;
+use typst::layout::{Frame, FrameItem};
+use typst_layout::PagedDocument;
 
 /// Walk the frame tree and find the OUTERMOST Group with has_baseline.
 /// Returns (depth_in_tree, absolute_y).  Mirrors the logic in
@@ -93,9 +94,14 @@ fn probe(world: &mut TipWorld, label: &str, body: &str) -> Probe {
     let doc = typst::compile::<PagedDocument>(world)
         .output
         .unwrap_or_else(|errs| {
-            panic!("[{label}] compile failed: {:?}", errs.iter().map(|e| e.message.to_string()).collect::<Vec<_>>())
+            panic!(
+                "[{label}] compile failed: {:?}",
+                errs.iter()
+                    .map(|e| e.message.to_string())
+                    .collect::<Vec<_>>()
+            )
         });
-    let page = &doc.pages[0];
+    let page = &doc.pages()[0];
 
     let mut groups = Vec::new();
     dump_groups(&page.frame, 0.0, 0, &mut groups);
@@ -104,9 +110,10 @@ fn probe(world: &mut TipWorld, label: &str, body: &str) -> Probe {
 
     let outer = outermost_group_baseline(&page.frame, 0.0, 0);
 
-    let (y_min, y_max) = texts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, _, y, _)| {
-        (lo.min(y), hi.max(y))
-    });
+    let (y_min, y_max) = texts.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(lo, hi), &(_, _, y, _)| (lo.min(y), hi.max(y)),
+    );
 
     Probe {
         label: label.into(),
@@ -116,12 +123,19 @@ fn probe(world: &mut TipWorld, label: &str, body: &str) -> Probe {
         n_texts: texts.len(),
         page_width: page.frame.width().to_pt(),
         page_height: page.frame.height().to_pt(),
-        text_y_spread: if y_min.is_finite() { y_max - y_min } else { 0.0 },
+        text_y_spread: if y_min.is_finite() {
+            y_max - y_min
+        } else {
+            0.0
+        },
     }
 }
 
 fn print_row(p: &Probe) {
-    let bl = p.group_baseline_y.map(|v| format!("{:>7.2}", v)).unwrap_or("    nil".into());
+    let bl = p
+        .group_baseline_y
+        .map(|v| format!("{:>7.2}", v))
+        .unwrap_or("    nil".into());
     println!(
         "  {:<54} groups={:>2} texts={:>2} w={:>6.2} y_spread={:>5.2}  group_bl={}",
         p.label, p.n_groups, p.n_texts, p.page_width, p.text_y_spread, bl
@@ -137,8 +151,11 @@ fn print_tree(frame: &Frame, x_off: f64, y_off: f64, depth: usize) {
         let iy = y_off + pos.y.to_pt();
         match item {
             FrameItem::Text(t) => {
-                println!("{indent}TEXT  pos=({ix:>6.2},{iy:>6.2}) size={:>5.2} text={:?}",
-                         t.size.to_pt(), t.text.to_string());
+                println!(
+                    "{indent}TEXT  pos=({ix:>6.2},{iy:>6.2}) size={:>5.2} text={:?}",
+                    t.size.to_pt(),
+                    t.text.to_string()
+                );
             }
             FrameItem::Group(g) => {
                 let bl = if g.frame.has_baseline() {
@@ -146,8 +163,11 @@ fn print_tree(frame: &Frame, x_off: f64, y_off: f64, depth: usize) {
                 } else {
                     "  none".into()
                 };
-                println!("{indent}GROUP pos=({ix:>6.2},{iy:>6.2}) size=({:>6.2}x{:>5.2}) baseline={bl}",
-                         g.frame.width().to_pt(), g.frame.height().to_pt());
+                println!(
+                    "{indent}GROUP pos=({ix:>6.2},{iy:>6.2}) size=({:>6.2}x{:>5.2}) baseline={bl}",
+                    g.frame.width().to_pt(),
+                    g.frame.height().to_pt()
+                );
                 print_tree(&g.frame, ix, iy, depth + 1);
             }
             _ => {}
@@ -160,10 +180,10 @@ fn dump_phantom_tree() {
     let mut world = TipWorld::new();
     let cases = [
         "$tilde(hat(phi))$",
-        "$tilde(hat(phi)) #hide[x]$",                // letter phantom — adds visible width pre-crop
-        "$tilde(hat(phi)) #hide[#sym.zws]$",         // ZWS phantom — zero-width
+        "$tilde(hat(phi)) #hide[x]$", // letter phantom — adds visible width pre-crop
+        "$tilde(hat(phi)) #hide[#sym.zws]$", // ZWS phantom — zero-width
         "$phi$",
-        "$phi #hide[#sym.zws]$",                     // does ZWS phantom take on single-glyph?
+        "$phi #hide[#sym.zws]$", // does ZWS phantom take on single-glyph?
         "$a + b$",
         "$a + b #hide[#sym.zws]$",
     ];
@@ -171,8 +191,12 @@ fn dump_phantom_tree() {
         let preamble = "#set page(height: auto, width: auto, margin: (top: 20pt, bottom: 20pt, rest: 0pt), fill: none)\n#show math.equation: set text(size: 11pt)\n";
         world.set_main_source(&format!("{preamble}{src}\n"));
         let doc = typst::compile::<PagedDocument>(&mut world).output.unwrap();
-        let page = &doc.pages[0];
-        println!("\n=== {src} ===  page=({:.2}x{:.2})\n", page.frame.width().to_pt(), page.frame.height().to_pt());
+        let page = &doc.pages()[0];
+        println!(
+            "\n=== {src} ===  page=({:.2}x{:.2})\n",
+            page.frame.width().to_pt(),
+            page.frame.height().to_pt()
+        );
         print_tree(&page.frame, 0.0, 0.0, 0);
     }
 }
@@ -246,7 +270,8 @@ fn phantom_force_group_baseline() {
         assert!(
             (raw.page_width - aug.page_width).abs() < 0.1,
             "[{expr}] ZWS phantom inflated width: raw={:.2} aug={:.2}",
-            raw.page_width, aug.page_width
+            raw.page_width,
+            aug.page_width
         );
     }
 
@@ -270,8 +295,10 @@ fn phantom_force_group_baseline() {
 
         // Property 3: phantom must not BREAK an already-correct
         // baseline.  Group baseline before == after.
-        assert!(raw.has_group_baseline && aug.has_group_baseline,
-                "[{expr}] expected group baseline both before and after");
+        assert!(
+            raw.has_group_baseline && aug.has_group_baseline,
+            "[{expr}] expected group baseline both before and after"
+        );
         let (b0, b1) = (raw.group_baseline_y.unwrap(), aug.group_baseline_y.unwrap());
         assert!(
             (b0 - b1).abs() < 0.1,

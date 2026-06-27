@@ -12,31 +12,22 @@ fn write_svg(name: &str, svg: &str) {
 }
 
 fn fixtures_dir() -> String {
-    format!(
-        "{}/tests/fixtures",
-        env!("CARGO_MANIFEST_DIR"),
-    )
+    format!("{}/tests/fixtures", env!("CARGO_MANIFEST_DIR"),)
 }
 
-fn compile_scoped_with_root(
-    root: &str,
-    font_dirs: &[&str],
-    doc: &str,
-    needle: &str,
-    name: &str,
-) {
-    let mut world = TipWorld::builder()
-        .root(root)
-        .build();
+fn compile_scoped_with_root(root: &str, font_dirs: &[&str], doc: &str, needle: &str, name: &str) {
+    let mut world = TipWorld::builder().root(root).build();
     for dir in font_dirs {
         // Rebuild with font dirs if needed — for simplicity just use new
         let _ = dir;
     }
     // Set root for import resolution
-    let frag_start = doc.find(needle).expect(&format!("needle {needle:?} not found"));
+    let frag_start = doc
+        .find(needle)
+        .expect(&format!("needle {needle:?} not found"));
     let frag_end = frag_start + needle.len();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, frag_start, frag_end, "#000000", None, None,
+        &mut world, doc, frag_start, frag_end, "#000000", None, None, None,
     )
     .expect(&format!("{name} should compile"));
     write_svg(name, &out.svg);
@@ -86,7 +77,8 @@ fn import_function() {
 #[test]
 fn import_multi_file() {
     let root = fixtures_dir();
-    let doc = "#import \"utils.typ\": RR, ZZ\n#import \"operators.typ\": tensor\nResult $RR tensor ZZ$";
+    let doc =
+        "#import \"utils.typ\": RR, ZZ\n#import \"operators.typ\": tensor\nResult $RR tensor ZZ$";
     compile_scoped_with_root(&root, &[], doc, "$RR tensor ZZ$", "import_multi_file");
 }
 

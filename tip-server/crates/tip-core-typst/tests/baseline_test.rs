@@ -27,35 +27,54 @@ fn baseline_simple() {
     let mut world = TipWorld::new();
     let out = BottomUpCompiler::compile_fragment(&mut world, "$a + b$", "#000000", "").unwrap();
     write_svg("bl_simple", &out.svg);
-    eprintln!("simple: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "simple: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     assert!(out.depth_pt >= 0.0, "depth should be non-negative");
-    assert!(out.depth_pt < out.height_pt, "depth should be less than height");
+    assert!(
+        out.depth_pt < out.height_pt,
+        "depth should be less than height"
+    );
     // Simple letters: ascent should be high (>80%)
     let ascent_pct = 100.0 * (1.0 - out.depth_pt / out.height_pt);
-    assert!(ascent_pct > 70.0, "simple letters ascent too low: {:.0}%", ascent_pct);
+    assert!(
+        ascent_pct > 70.0,
+        "simple letters ascent too low: {:.0}%",
+        ascent_pct
+    );
 }
 
 #[test]
 fn baseline_fraction() {
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
+    let out =
+        BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
     write_svg("bl_fraction", &out.svg);
-    eprintln!("fraction: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "fraction: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     assert!(out.depth_pt > 0.0, "fraction should have non-zero depth");
 }
 
 #[test]
 fn baseline_integral() {
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(&mut world, "$integral_0^1 f(x) dif x$", "#000000", "").unwrap();
+    let out =
+        BottomUpCompiler::compile_fragment(&mut world, "$integral_0^1 f(x) dif x$", "#000000", "")
+            .unwrap();
     write_svg("bl_integral", &out.svg);
-    eprintln!("integral: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "integral: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     assert!(out.depth_pt > 0.0, "integral with limits should have depth");
 }
 
@@ -64,11 +83,18 @@ fn baseline_superscript() {
     let mut world = TipWorld::new();
     let out = BottomUpCompiler::compile_fragment(&mut world, "$x^2$", "#000000", "").unwrap();
     write_svg("bl_superscript", &out.svg);
-    eprintln!("superscript: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "superscript: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     // x^2 has minimal depth
-    assert!(out.depth_pt < 4.0, "superscript should have small depth: {:.2}", out.depth_pt);
+    assert!(
+        out.depth_pt < 4.0,
+        "superscript should have small depth: {:.2}",
+        out.depth_pt
+    );
 }
 
 #[test]
@@ -84,13 +110,15 @@ fn baseline_superscript_with_invisible_base() {
     // baseline_y < cropped_height invariant holds and the ascent
     // computation gives "2" a sensible position above the line.
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(
-        &mut world, "$#sym.zws^2$", "#000000", "",
-    ).unwrap();
+    let out =
+        BottomUpCompiler::compile_fragment(&mut world, "$#sym.zws^2$", "#000000", "").unwrap();
     write_svg("bl_zws_super", &out.svg);
-    eprintln!("zws-base ^2: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "zws-base ^2: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     // The image must extend from the superscript top all the way down
     // to the body baseline.  Ink alone (just `^2') is ~5pt; the full
     // body line at 11pt is ~7.5pt; with our 0.5pt pad on each side and
@@ -98,13 +126,17 @@ fn baseline_superscript_with_invisible_base() {
     // means the crop stopped at the ink and the body baseline isn't
     // anchored — `^2' would render at line center instead of as a
     // superscript hovering above.
-    assert!(out.height_pt > 8.0,
-            "crop must extend from glyph top to body baseline; got h={:.2}",
-            out.height_pt);
+    assert!(
+        out.height_pt > 8.0,
+        "crop must extend from glyph top to body baseline; got h={:.2}",
+        out.height_pt
+    );
     let ascent_pct = 100.0 * (1.0 - out.depth_pt / out.height_pt);
-    assert!(ascent_pct >= 90.0,
-            "ascent should be ≥ 90% (image mostly above baseline); got {:.0}%",
-            ascent_pct);
+    assert!(
+        ascent_pct >= 90.0,
+        "ascent should be ≥ 90% (image mostly above baseline); got {:.0}%",
+        ascent_pct
+    );
 }
 
 #[test]
@@ -112,9 +144,12 @@ fn baseline_subscript() {
     let mut world = TipWorld::new();
     let out = BottomUpCompiler::compile_fragment(&mut world, "$x_i$", "#000000", "").unwrap();
     write_svg("bl_subscript", &out.svg);
-    eprintln!("subscript: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "subscript: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     assert!(out.depth_pt > 0.0, "subscript should have depth");
 }
 
@@ -126,36 +161,49 @@ fn baseline_accent() {
     let mut world = TipWorld::new();
     let simple = BottomUpCompiler::compile_fragment(&mut world, "$G$", "#000000", "").unwrap();
     let hat = BottomUpCompiler::compile_fragment(&mut world, "$hat(G)$", "#000000", "").unwrap();
-    let tilde = BottomUpCompiler::compile_fragment(&mut world, "$tilde(G)$", "#000000", "").unwrap();
-    assert!(hat.depth_pt < simple.depth_pt + 2.0,
-            "hat depth ({:.2}) should match G's descender ({:.2})",
-            hat.depth_pt, simple.depth_pt);
-    assert!(tilde.depth_pt < simple.depth_pt + 2.0,
-            "tilde depth ({:.2}) should match G's descender ({:.2})",
-            tilde.depth_pt, simple.depth_pt);
+    let tilde =
+        BottomUpCompiler::compile_fragment(&mut world, "$tilde(G)$", "#000000", "").unwrap();
+    assert!(
+        hat.depth_pt < simple.depth_pt + 2.0,
+        "hat depth ({:.2}) should match G's descender ({:.2})",
+        hat.depth_pt,
+        simple.depth_pt
+    );
+    assert!(
+        tilde.depth_pt < simple.depth_pt + 2.0,
+        "tilde depth ({:.2}) should match G's descender ({:.2})",
+        tilde.depth_pt,
+        simple.depth_pt
+    );
 }
 
 #[test]
 fn baseline_matrix() {
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(&mut world, "$mat(1, 0; 0, 1)$", "#000000", "").unwrap();
+    let out =
+        BottomUpCompiler::compile_fragment(&mut world, "$mat(1, 0; 0, 1)$", "#000000", "").unwrap();
     write_svg("bl_matrix", &out.svg);
-    eprintln!("matrix: h={:.2} d={:.2} ascent={:.0}%",
-              out.height_pt, out.depth_pt,
-              100.0 * (1.0 - out.depth_pt / out.height_pt));
+    eprintln!(
+        "matrix: h={:.2} d={:.2} ascent={:.0}%",
+        out.height_pt,
+        out.depth_pt,
+        100.0 * (1.0 - out.depth_pt / out.height_pt)
+    );
     assert!(out.depth_pt > 0.0, "matrix should have depth (bottom row)");
     // Matrix should be roughly centered: ascent ~45-65%
     let ascent_pct = 100.0 * (1.0 - out.depth_pt / out.height_pt);
-    assert!(ascent_pct > 30.0 && ascent_pct < 80.0,
-            "matrix ascent should be roughly centered: {:.0}%", ascent_pct);
+    assert!(
+        ascent_pct > 30.0 && ascent_pct < 80.0,
+        "matrix ascent should be roughly centered: {:.0}%",
+        ascent_pct
+    );
 }
 
 #[test]
 fn baseline_display_sum() {
     let mut world = TipWorld::new();
-    let out = BottomUpCompiler::compile_fragment(
-        &mut world, "$ sum_(i=0)^n i^2 $", "#000000", ""
-    ).unwrap();
+    let out = BottomUpCompiler::compile_fragment(&mut world, "$ sum_(i=0)^n i^2 $", "#000000", "")
+        .unwrap();
     write_svg("bl_display_sum", &out.svg);
     eprintln!("display sum: h={:.2} d={:.2}", out.height_pt, out.depth_pt);
     // Display math returns depth=0 (no baseline alignment, vertically centered)
@@ -167,16 +215,22 @@ fn baseline_depth_ordering() {
     let mut world = TipWorld::new();
     let simple = BottomUpCompiler::compile_fragment(&mut world, "$a$", "#000000", "").unwrap();
     let sub = BottomUpCompiler::compile_fragment(&mut world, "$a_i$", "#000000", "").unwrap();
-    let frac = BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
+    let frac =
+        BottomUpCompiler::compile_fragment(&mut world, "$frac(a, b)$", "#000000", "").unwrap();
 
-    eprintln!("depth ordering: simple={:.2} sub={:.2} frac={:.2}",
-              simple.depth_pt, sub.depth_pt, frac.depth_pt);
+    eprintln!(
+        "depth ordering: simple={:.2} sub={:.2} frac={:.2}",
+        simple.depth_pt, sub.depth_pt, frac.depth_pt
+    );
 
     // Subscript should have noticeably more depth than simple — its
     // glyph really descends below the baseline.
-    assert!(sub.depth_pt > simple.depth_pt + 0.5,
-            "subscript depth ({:.2}) should exceed simple ({:.2}) by >0.5pt",
-            sub.depth_pt, simple.depth_pt);
+    assert!(
+        sub.depth_pt > simple.depth_pt + 0.5,
+        "subscript depth ({:.2}) should exceed simple ({:.2}) by >0.5pt",
+        sub.depth_pt,
+        simple.depth_pt
+    );
 
     // `compile_fragment` rewraps `$frac(a, b)$` as `$ frac(a, b) $`,
     // i.e. display math.  Strategy 2 picks the lower row's baseline
@@ -184,9 +238,12 @@ fn baseline_depth_ordering() {
     // the ink and depth collapses to the crop pad — same magnitude
     // as a single-letter fragment.  Assertion is "not significantly
     // less than simple", reflecting that reality.
-    assert!(frac.depth_pt >= simple.depth_pt,
-            "fraction depth ({:.2}) should be >= simple ({:.2})",
-            frac.depth_pt, simple.depth_pt);
+    assert!(
+        frac.depth_pt >= simple.depth_pt,
+        "fraction depth ({:.2}) should be >= simple ({:.2})",
+        frac.depth_pt,
+        simple.depth_pt
+    );
 }
 
 #[test]
@@ -207,23 +264,29 @@ fn baseline_bare_fraction_inline() {
     let end = doc.rfind('$').unwrap() + 1;
     let mut world = TipWorld::new();
     let frac = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, end, "#000000", None, None,
-    ).unwrap();
+        &mut world, doc, start, end, "#000000", None, None, None,
+    )
+    .unwrap();
     write_svg("bl_bare_fraction", &frac.svg);
     eprintln!("$1/a$: h={:.2} d={:.2}", frac.height_pt, frac.depth_pt);
-    assert!(frac.depth_pt >= 1.5,
-            "$1/a$ depth too small ({:.2}pt); baseline_y likely chosen too low",
-            frac.depth_pt);
+    assert!(
+        frac.depth_pt >= 1.5,
+        "$1/a$ depth too small ({:.2}pt); baseline_y likely chosen too low",
+        frac.depth_pt
+    );
 
     let doc = "Some text with $a/b$ inline.";
     let start = doc.find('$').unwrap();
     let end = doc.rfind('$').unwrap() + 1;
     let mut world = TipWorld::new();
     let ab = BottomUpCompiler::compile_fragment_scoped(
-        &mut world, doc, start, end, "#000000", None, None,
-    ).unwrap();
+        &mut world, doc, start, end, "#000000", None, None, None,
+    )
+    .unwrap();
     eprintln!("$a/b$: h={:.2} d={:.2}", ab.height_pt, ab.depth_pt);
-    assert!(ab.depth_pt >= 1.5,
-            "$a/b$ depth too small ({:.2}pt); baseline_y likely chosen too low",
-            ab.depth_pt);
+    assert!(
+        ab.depth_pt >= 1.5,
+        "$a/b$ depth too small ({:.2}pt); baseline_y likely chosen too low",
+        ab.depth_pt
+    );
 }

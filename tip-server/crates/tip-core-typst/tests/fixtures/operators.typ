@@ -1,2 +1,2 @@
-#let tensor = math.times.circle
-#let dsum = math.plus.circle
+#let tensor = math.times.o
+#let dsum = math.plus.o

@@ -12,10 +12,12 @@ fn write_svg(name: &str, svg: &str) {
 }
 
 fn compile_scoped(world: &mut TipWorld, doc: &str, needle: &str, name: &str) {
-    let frag_start = doc.find(needle).expect(&format!("needle {needle:?} not found"));
+    let frag_start = doc
+        .find(needle)
+        .expect(&format!("needle {needle:?} not found"));
     let frag_end = frag_start + needle.len();
     let out = BottomUpCompiler::compile_fragment_scoped(
-        world, doc, frag_start, frag_end, "#000000", None, None,
+        world, doc, frag_start, frag_end, "#000000", None, None, None,
     )
     .expect(&format!("{name} should compile"));
     write_svg(name, &out.svg);
@@ -151,7 +153,12 @@ fn stress_multi_import_let() {
 #let DD = math.bold(\"D\")
 #let EE = math.bold(\"E\")
 Product $AA dot BB dot CC dot DD dot EE$";
-    compile_scoped(&mut world, doc, "$AA dot BB dot CC dot DD dot EE$", "stress_multi_import_let");
+    compile_scoped(
+        &mut world,
+        doc,
+        "$AA dot BB dot CC dot DD dot EE$",
+        "stress_multi_import_let",
+    );
 }
 
 #[test]

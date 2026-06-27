@@ -29,7 +29,10 @@ For groups acting on M, TFAE:
 
     let frags: Vec<FragmentLocation> = starts
         .iter()
-        .map(|&s| FragmentLocation { start: s, end: s + "$G$".len() })
+        .map(|&s| FragmentLocation {
+            start: s,
+            end: s + "$G$".len(),
+        })
         .collect();
 
     let mut world = TipWorld::new();
@@ -40,7 +43,10 @@ For groups acting on M, TFAE:
         let label = format!("frag {} starting at {}", i, starts[i]);
         eprintln!(
             "{label}: h={:.2} d={:.2} w={:.2} svg_len={}",
-            r.height_pt, r.depth_pt, r.width_pt, r.svg.len()
+            r.height_pt,
+            r.depth_pt,
+            r.width_pt,
+            r.svg.len()
         );
         // A bare `$G$` is a single italic glyph.  It should be no
         // wider than ~10pt (the glyph + padding).  If width is much

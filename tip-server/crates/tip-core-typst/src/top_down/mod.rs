@@ -25,8 +25,9 @@ mod flatten;
 mod tests;
 
 use typst::compile;
-use typst::layout::{PagedDocument, Point};
+use typst::layout::Point;
 use typst::World;
+use typst_layout::PagedDocument;
 
 use crate::world::TipWorld;
 use tip_protocol::messages::{FragmentLocation, FragmentResult};
@@ -63,16 +64,20 @@ impl TopDownCompiler {
         let main = world.main();
         let main_src = world.source(main).ok();
         let mut page_index: Vec<(Vec<FlatLeaf>, Vec<GroupRecord>)> =
-            Vec::with_capacity(doc.pages.len());
+            Vec::with_capacity(doc.pages().len());
         if let Some(ms) = &main_src {
             // Build span→range index ONCE, reused across all pages.
             let span_index = build_span_index(ms);
-            for page in &doc.pages {
+            for page in doc.pages() {
                 let mut leaves = Vec::new();
                 let mut groups = Vec::new();
                 flatten_leaves_inner(
-                    &page.frame, Point::zero(), main, &span_index,
-                    &mut leaves, &mut groups,
+                    &page.frame,
+                    Point::zero(),
+                    main,
+                    &span_index,
+                    &mut leaves,
+                    &mut groups,
                 );
                 page_index.push((leaves, groups));
             }
@@ -173,6 +178,7 @@ fn parse_typst_length(s: &str) -> Option<typst::layout::Abs> {
 #[derive(Debug, Clone)]
 pub(crate) struct LeafSpan {
     pub source_range: Option<Range<usize>>,
+    #[allow(dead_code)]
     pub page: usize,
     pub pos_pt: (f64, f64),
 }
@@ -201,8 +207,16 @@ pub(crate) fn collect_leaf_spans(world: &dyn World, doc: &PagedDocument) -> Vec<
     let main = world.main();
     let main_src = world.source(main).ok();
     let mut out = Vec::new();
-    for (page_idx, page) in doc.pages.iter().enumerate() {
-        walk(&page.frame, page_idx, 0.0, 0.0, main, main_src.as_ref(), &mut out);
+    for (page_idx, page) in doc.pages().iter().enumerate() {
+        walk(
+            &page.frame,
+            page_idx,
+            0.0,
+            0.0,
+            main,
+            main_src.as_ref(),
+            &mut out,
+        );
     }
     out
 }
@@ -226,20 +240,28 @@ fn walk(
                 for glyph in &t.glyphs {
                     let span = glyph.span.0;
                     let range = if span.id() == Some(main) {
-                        main_src.and_then(|s| s.range(span))
+                        main_src.and_then(|s| s.find(span).map(|node| node.range()))
                     } else {
                         None
                     };
-                    out.push(LeafSpan { source_range: range, page, pos_pt: (ix, iy) });
+                    out.push(LeafSpan {
+                        source_range: range,
+                        page,
+                        pos_pt: (ix, iy),
+                    });
                 }
             }
             FrameItem::Shape(_, span) => {
                 let range = if span.id() == Some(main) {
-                    main_src.and_then(|s| s.range(*span))
+                    main_src.and_then(|s| s.find(*span).map(|node| node.range()))
                 } else {
                     None
                 };
-                out.push(LeafSpan { source_range: range, page, pos_pt: (ix, iy) });
+                out.push(LeafSpan {
+                    source_range: range,
+                    page,
+                    pos_pt: (ix, iy),
+                });
             }
             _ => {}
         }

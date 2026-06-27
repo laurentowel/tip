@@ -61,12 +61,12 @@ fn find_fragments(doc: &str) -> Vec<(usize, usize)> {
 
 #[test]
 fn three_imports_all_fragments() {
-    let doc = std::fs::read_to_string(
-        format!("{}/three_imports.typ", fixtures_dir()),
-    )
-    .unwrap();
+    let doc = std::fs::read_to_string(format!("{}/three_imports.typ", fixtures_dir())).unwrap();
 
-    let mut world = TipWorld::builder().root(fixtures_dir()).build();
+    let mut world = TipWorld::builder()
+        .root(fixtures_dir())
+        .package_data_dir(format!("{}/packages", fixtures_dir()))
+        .build();
 
     let frags = find_fragments(&doc);
     eprintln!("found {} math fragments", frags.len());
@@ -76,14 +76,7 @@ fn three_imports_all_fragments() {
     for (idx, (start, end)) in frags.iter().enumerate() {
         let content = &doc[*start..*end];
         match BottomUpCompiler::compile_fragment_scoped(
-            &mut world,
-            &doc,
-            *start,
-            *end,
-            "#000000",
-            None,
-            None,
-            None,
+            &mut world, &doc, *start, *end, "#000000", None, None, None,
         ) {
             Ok(output) => {
                 write_svg(&format!("3imp_{idx}"), &output.svg);
@@ -99,13 +92,19 @@ fn three_imports_all_fragments() {
                 ok += 1;
             }
             Err(e) => {
-                eprintln!("  [{idx}] FAIL {:?}: {e}", &content[..content.len().min(60)]);
+                eprintln!(
+                    "  [{idx}] FAIL {:?}: {e}",
+                    &content[..content.len().min(60)]
+                );
                 failed += 1;
             }
         }
     }
 
-    eprintln!("\n{ok}/{} fragments compiled ({failed} failed)", frags.len());
+    eprintln!(
+        "\n{ok}/{} fragments compiled ({failed} failed)",
+        frags.len()
+    );
     assert!(frags.len() >= 10, "should find many fragments");
     assert!(
         ok as f64 / frags.len() as f64 > 0.7,
