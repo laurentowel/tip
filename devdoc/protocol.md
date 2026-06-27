@@ -353,7 +353,7 @@ Response:
   "server_version": "0.1.0",
   "target_triple": "x86_64-unknown-linux-gnu",
   "os": "linux", "arch": "x86_64",
-  "typst": {"ok": true, "typst_version": "0.14.2", "fonts_found": 142},
+  "typst": {"ok": true, "typst_version": "0.15.0", "fonts_found": 142},
   "latex": {"ok": true,
             "latex":       {"found": true, "path": "/usr/bin/pdflatex", "version": "TeX Live 2024", "meets_min_version": true},
             "dvisvgm":     {"found": true, "path": "/usr/bin/dvisvgm",  "version": "2.14.2",        "meets_min_version": true},

@@ -138,7 +138,7 @@ TIP builds on ideas and code from several projects:
 
 **[kodama](https://github.com/Andrew15-5/kodama)** (Andrew15-5) — kodama's `bounded()` technique (`text(top-edge: "bounds", bottom-edge: "bounds", eq)`) taught us how to prevent SVG clipping on expressions with deep subscripts or tall fractions. While we ultimately don't use `bounded()` for baseline alignment (it breaks baseline consistency across expressions), the technique remains valuable and is referenced in the server's anti-clipping preamble. kodama's two-pass baseline measurement approach (measure + position introspection) was also studied extensively.
 
-**[Typst](https://github.com/typst/typst)** (Typst GmbH) — TIP compiles fragments using the typst crate (v0.14.2) as a library, with typst-svg for SVG export. The `World` trait design makes it possible to embed the compiler in a long-running server with an in-memory VFS.
+**[Typst](https://github.com/typst/typst)** (Typst GmbH) — TIP compiles fragments using the typst crate (v0.15.0) as a library, with typst-svg for SVG export. The `World` trait design makes it possible to embed the compiler in a long-running server with an in-memory VFS.
 
 ## Contributors
 

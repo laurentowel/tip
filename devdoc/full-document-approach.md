@@ -22,8 +22,9 @@ of this revision), measured performance, and the dispatch policy.
 When Typst compiles a document, every element in the output frame tree
 carries a `Span` — a reference back to the source position that produced
 it.  Math equations are laid out as `Group` frames with explicit
-`baseline` values set by the math layout engine.  And `typst_svg::svg_frame()`
-can render any frame to SVG.
+`baseline` values set by the math layout engine.  TIP renders extracted
+frames through its local `crate::svg::svg_frame` adapter, which wraps the
+frame in a one-page `typst_layout::Page` and calls `typst_svg::svg`.
 
 Three facts together: compile the document **once**, walk the frame
 tree, find math frames by source span, render per-fragment SVGs.  No
@@ -37,7 +38,7 @@ call.
 
 ## How Spans Flow Through Typst (verified)
 
-The span chain from source to rendered output, with Typst 0.14.2
+The span chain from source to rendered output, with Typst 0.15.0
 file references:
 
 ### 1. Parsing: Source → AST
@@ -109,19 +110,21 @@ pub enum FrameItem {
 ### 5. SVG Rendering
 
 ```rust
-pub fn svg(page: &Page) -> String;          // full page
-pub fn svg_frame(frame: &Frame) -> String;  // single frame ← the API we rely on
+pub fn svg(page: &Page, options: &SvgOptions) -> String; // typst-svg 0.15
+pub(crate) fn svg_frame(frame: &Frame) -> String;        // TIP adapter
 ```
 
-`svg_frame` renders any frame to a standalone SVG.  No need to wrap it
-in a synthetic page.
+Typst 0.15 no longer exposes a frame-level SVG function.  The adapter
+creates a `Page` around the extracted frame so the rest of the extraction
+pipeline can still render frame-sized SVGs.
 
 ## What Surprised Us in Practice
 
-The architecture study was correct on every point — Typst really does
-preserve spans through layout, frames really do carry baselines, and
-`svg_frame` really does render a frame to SVG.  But several
-implementation details turned out to need extra care:
+The architecture study was correct on the important data-flow points:
+Typst really does preserve spans through layout, and frames really do
+carry baselines.  The rendering API changed in Typst 0.15, so TIP now
+uses a small local `svg_frame` adapter over page-level SVG rendering.
+Several implementation details turned out to need extra care:
 
 ### Detached spans (`span.id() == None`)
 
@@ -143,7 +146,7 @@ the kind of magic-distance heuristic the study claimed to eliminate.
 ### Simple math expressions are *inlined* into the page frame
 
 The study assumed every `$...$` becomes a `FrameItem::Group` with
-`has_baseline()=true`.  In Typst 0.14, simple expressions (single
+`has_baseline()=true`.  In Typst 0.14/0.15, simple expressions (single
 identifiers, plain `a+b`, subscripts, accents) are inlined directly
 into the page frame — their TextItems sit alongside surrounding
 prose.  No Group, no explicit baseline.
@@ -316,7 +319,7 @@ tunable.
 | `collect_scope_nodes` | Eliminated |
 | `compute_closing_delimiters` | Eliminated (was buggy in synthetic too) |
 | `build_scoped_source` | Eliminated |
-| `crop_svg_viewbox` | Eliminated (`svg_frame` renders at exact size) |
+| `crop_svg_viewbox` | Eliminated (the local `svg_frame` adapter renders the cropped frame as a one-page SVG) |
 | Scope-skeleton bugs (html, delimiters, kodama wrappers) | Eliminated |
 
 ## What We Use Falls Through to Synthetic
@@ -338,8 +341,8 @@ again, full-doc kicks back in.
 ## Performance
 
 **Theoretical**: one compile vs N.  Per-fragment extraction is cheap
-(linear scan over a pre-flattened leaf vec + `svg_frame` on a small
-frame).  Typst's internal layout parallelism kicks in for the
+(linear scan over a pre-flattened leaf vec + the local `svg_frame`
+adapter on a small frame).  Typst's internal layout parallelism kicks in for the
 single full-document compile.
 
 ### Measured (release, math-heavy random corpus)
