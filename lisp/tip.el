@@ -157,19 +157,20 @@ background color (and swapped on theme change)."
 (defcustom tip-image-face-blocklist
   '(font-latex-math-face
     typst-ts-error-face
+    typst-ts-markup-quote-face
     font-lock-warning-face
     error
     warning
     flymake-error
     flymake-warning)
   "Faces excluded by `tip-image-face' = `auto'.
-The default blocks major-mode math fontification and transient
-diagnostic faces.  This keeps overlays from inheriting e.g.
-`font-latex-math-face' in LaTeX or `typst-ts-error-face' while
-Typst syntax is briefly malformed during editing.  Faces inheriting
-from any listed face are blocked too.  Add your own modes'
-math/keyword/comment faces if you see math inheriting unwanted
-tints."
+The default blocks major-mode math fontification, transient
+diagnostic faces, and quote-marker faces.  This keeps overlays from
+inheriting e.g. `font-latex-math-face' in LaTeX or
+`typst-ts-error-face' while Typst syntax is briefly malformed
+during editing.  Faces inheriting from any listed face are blocked
+too.  Add your own modes' math/keyword/comment faces if you see
+math inheriting unwanted tints."
   :type '(repeat face)
   :group 'tip)
 

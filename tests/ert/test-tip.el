@@ -162,6 +162,15 @@
           (tip-image-face-blocklist '(font-lock-warning-face)))
       (should (equal (tip--resolve-image-face 2 5) '(bold default))))))
 
+(ert-deftest tip-test-image-face-auto-filters-typst-quote-face ()
+  "`tip-image-face' auto should ignore Typst quote marker faces."
+  (with-temp-buffer
+    (insert "x$a$ y")
+    (put-text-property 1 2 'face '(bold typst-ts-markup-quote-face))
+    (let ((tip-image-face 'auto)
+          (tip-image-face-blocklist '(typst-ts-markup-quote-face)))
+      (should (equal (tip--resolve-image-face 2 5) '(bold default))))))
+
 (ert-deftest tip-test-mode-disable-clears-error-markups ()
   "Disabling `tip-mode' removes stale in-buffer error overlays."
   (with-temp-buffer
