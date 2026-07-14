@@ -199,6 +199,7 @@ Returns non-nil on success.  Equivalent to one iteration of
       (overlay-put ov 'tip-width-pt (or width-pt 0))
       (overlay-put ov 'tip-font-size-pt font-size-pt)
       (overlay-put ov 'tip-svg svg-data)
+      (tip--set-overlay-source-range ov frag-beg frag-end)
       (overlay-put ov 'display img-spec)
       ;; When `tip-image-face' computed a face, also pin it on the
       ;; overlay itself.  Emacs merges buffer-text-face under the image
@@ -471,6 +472,15 @@ recovery artifact), so we fall back to a plain first-match search."
 
 ;;; * overlay application
 
+(defun tip--set-overlay-source-range (ov frag-beg frag-end)
+  "Record the real source fragment range for OV.
+Image overlays may start before the source fragment (display math can
+swallow a preceding blank line), so cleanup code must not infer the
+source range from `overlay-start' / `overlay-end'.  Markers keep the
+range aligned when edits happen before the fragment."
+  (overlay-put ov 'tip-source-beg (copy-marker frag-beg t))
+  (overlay-put ov 'tip-source-end (copy-marker frag-end)))
+
 (defun tip--invalidate-on-modification (ov after-p _beg _end &optional _len)
   "Delete OV when its covered text is edited, so stale previews don't linger.
 The preview-toggle cursor-transition logic only fires when the cursor
@@ -617,6 +627,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
             (overlay-put ov 'tip-width-pt (or width-pt 0))
             (overlay-put ov 'tip-font-size-pt font-size-pt)
             (overlay-put ov 'tip-svg svg-data)
+            (tip--set-overlay-source-range ov frag-beg frag-end)
             (when image-face (overlay-put ov 'face image-face))
             ;; Populate the compile cache (so cursor transitions don't
             ;; re-compile), but only for backends where the (content+fg)

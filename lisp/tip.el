@@ -600,9 +600,49 @@ keeping previews up to date as you scroll through a large file."
 
 ;;; * stale overlay cleanup
 
+(defun tip--changed-line-span (beg end)
+  "Return a line-expanded span covering the after-change range BEG..END.
+`comment-region' typically edits line prefixes outside math overlays,
+so checking only the raw edit range misses the affected previews."
+  (save-excursion
+    (let ((span-beg (progn
+                      (goto-char beg)
+                      (line-beginning-position)))
+          (span-end (progn
+                      (goto-char end)
+                      (line-end-position))))
+      (cons span-beg
+            (if (< span-end (point-max)) (1+ span-end) span-end)))))
+
+(defun tip--overlay-source-range (ov)
+  "Return OV's recorded source fragment range, or nil.
+The range is stored as markers because the overlay may include display
+padding outside the real source fragment."
+  (let ((beg (overlay-get ov 'tip-source-beg))
+        (end (overlay-get ov 'tip-source-end)))
+    (when (and (markerp beg)
+               (markerp end)
+               (eq (marker-buffer beg) (current-buffer))
+               (eq (marker-buffer end) (current-buffer)))
+      (cons (marker-position beg) (marker-position end)))))
+
+(defun tip--overlay-source-stale-p (ov)
+  "Return non-nil if OV's recorded source is no longer a live fragment."
+  (when-let* ((range (tip--overlay-source-range ov)))
+    (let ((beg (car range))
+          (end (cdr range)))
+      (or (not (< beg end))
+          (not (and (<= (point-min) beg) (<= end (point-max))))
+          (let ((bounds (condition-case nil
+                            (tip-bounds-at-point beg)
+                          (error nil))))
+            (not (and bounds
+                      (= (car bounds) beg)
+                      (= (cdr bounds) end))))))))
+
 (defun tip--cleanup-stale-overlays (beg end _len)
   "Remove invalidated tip overlays after an edit between BEG and END.
-Called from `after-change-functions'.  Two cases:
+Called from `after-change-functions'.  Three cases:
 
 1. Zero-width overlays — deletion shrunk an overlay to a point.
 2. Error overlays whose live extent (overlay markers, which track
@@ -618,20 +658,30 @@ overlay markers DO track edits, so an intersection check on those
 is reliable, and the indiscriminate sweep was bug-visible:
 typing prose between three error fragments wiped all three.
 
-Image overlays (without `tip-error-severity') stay put — the next
-compile cycle replaces them in place."
-  (dolist (ov (overlays-in (point-min) (point-max)))
-    (when (eq (overlay-get ov 'tip) 'tip)
-      (let ((ov-beg (overlay-start ov))
-            (ov-end (overlay-end ov)))
-        (cond
-         ((>= ov-beg ov-end)
-          (delete-overlay ov))
-         ((and (overlay-get ov 'tip-error-severity)
-               ;; Half-open intersection of [beg, end) with [ov-beg, ov-end].
-               (< beg ov-end)
-               (> end ov-beg))
-          (delete-overlay ov)))))))
+3. Image overlays on changed lines whose recorded source range no
+   longer resolves to the same backend fragment.  This catches edits
+   like commenting out a line: the edit happens before the math text,
+   so the overlay's modification hook does not fire."
+  (save-restriction
+    (widen)
+    (let* ((span (tip--changed-line-span beg end))
+           (span-beg (car span))
+           (span-end (cdr span)))
+      (dolist (ov (overlays-in span-beg span-end))
+        (when (eq (overlay-get ov 'tip) 'tip)
+          (let ((ov-beg (overlay-start ov))
+                (ov-end (overlay-end ov)))
+            (cond
+             ((>= ov-beg ov-end)
+              (delete-overlay ov))
+             ((and (overlay-get ov 'tip-error-severity)
+                   ;; Half-open intersection of changed lines and overlay.
+                   (< span-beg ov-end)
+                   (> span-end ov-beg))
+              (delete-overlay ov))
+             ((and (overlay-get ov 'tip-svg)
+                   (tip--overlay-source-stale-p ov))
+              (delete-overlay ov)))))))))
 
 ;;; * cleanup
 

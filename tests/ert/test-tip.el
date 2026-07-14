@@ -223,6 +223,54 @@ Converts byte offsets back to character positions."
               (buffer-substring-no-properties s e)))
           (tip-collect-fragment-locations (point-min) (point-max))))
 
+(defun tip-test--apply-one-svg-overlay (beg end)
+  "Apply a minimal successful SVG overlay for BEG..END and return it."
+  (tip--apply-fragment-results
+   (vector `((start . ,(1- (position-bytes beg)))
+             (end . ,(1- (position-bytes end)))
+             (svg . "<svg width=\"1pt\" height=\"1pt\" viewBox=\"0 0 1 1\"></svg>")
+             (height_pt . 1.0)
+             (depth_pt . 0.0)
+             (width_pt . 1.0)
+             (font_size_pt . 11.0))))
+  (seq-find (lambda (ov) (eq (overlay-get ov 'tip) 'tip))
+            (overlays-in (point-min) (point-max))))
+
+(ert-deftest tip-test-source-revalidation-keeps-overlay-after-prefix-edit ()
+  "Edits before live math should not clear an overlay when the fragment survives."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer "Text $x$.\n")
+    (setq-local tip--active-backend (cdr (assq 'typst tip-backends)))
+    (goto-char (point-min))
+    (search-forward "$x$")
+    (let* ((frag-beg (match-beginning 0))
+           (frag-end (match-end 0))
+           (ov (tip-test--apply-one-svg-overlay frag-beg frag-end)))
+      (should ov)
+      (should (markerp (overlay-get ov 'tip-source-beg)))
+      (let ((beg (point-min)))
+        (goto-char beg)
+        (insert "More ")
+        (tip--cleanup-stale-overlays beg (+ beg 5) 0))
+      (should (overlay-buffer ov)))))
+
+(ert-deftest tip-test-source-revalidation-removes-overlay-after-commenting-line ()
+  "Commenting a line should remove overlays for math that is no longer live."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer "Text $x$.\n")
+    (setq-local tip--active-backend (cdr (assq 'typst tip-backends)))
+    (goto-char (point-min))
+    (search-forward "$x$")
+    (let* ((frag-beg (match-beginning 0))
+           (frag-end (match-end 0))
+           (ov (tip-test--apply-one-svg-overlay frag-beg frag-end)))
+      (should ov)
+      (let ((beg (point-min)))
+        (goto-char beg)
+        (insert "// ")
+        (tip--cleanup-stale-overlays beg (+ beg 3) 0))
+      (should-not (overlay-buffer ov)))))
+
 (ert-deftest tip-test-figure-with-diagram-flag-off ()
   "With `tip-render-figure' nil, a bare #figure(...) — even containing a
 diagram call — produces no fragments.  Non-math content is only rendered
