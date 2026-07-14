@@ -191,7 +191,7 @@ Returns non-nil on success.  Equivalent to one iteration of
                                 (eq (char-before (1- frag-beg)) ?\n)))
                        (1- frag-beg)
                      frag-beg))
-           (ov (make-overlay ov-beg frag-end)))
+           (ov (make-overlay ov-beg frag-end nil t nil)))
       (overlay-put ov 'tip 'tip)
       (overlay-put ov 'view-text nil)
       (overlay-put ov 'tip-height-pt height-pt)
@@ -308,6 +308,33 @@ when no extra face applies."
     (tip-typst--surrounding-extra-face frag-beg frag-end))
    (t nil)))
 
+(defun tip--face-inherits-p (face target &optional seen)
+  "Return non-nil if FACE is TARGET or inherits from TARGET."
+  (cond
+   ((eq face target) t)
+   ((or (not (symbolp face))
+        (not (facep face))
+        (memq face seen))
+    nil)
+   (t
+    (let ((inherit (face-attribute face :inherit nil 'default)))
+      (cond
+       ((or (null inherit) (eq inherit 'unspecified)) nil)
+       ((symbolp inherit)
+        (tip--face-inherits-p inherit target (cons face seen)))
+       ((listp inherit)
+        (seq-some (lambda (parent)
+                    (tip--face-inherits-p parent target (cons face seen)))
+                  inherit)))))))
+
+(defun tip--blocked-image-face-p (face)
+  "Return non-nil if FACE should not be propagated to image overlays."
+  (and (symbolp face)
+       (seq-some (lambda (blocked)
+                   (or (eq face blocked)
+                       (tip--face-inherits-p face blocked)))
+                 tip-image-face-blocklist)))
+
 (defun tip--resolve-image-face (frag-beg frag-end)
   "Return the face to attach to the overlay's image spec, or nil.
 Honors `tip-image-face':
@@ -335,14 +362,14 @@ context (e.g. Typst headings) contributes its scaled `:height'."
             (cond
              ((null raw) nil)
              ((and (symbolp raw)
-                   (memq raw tip-image-face-blocklist))
+                   (tip--blocked-image-face-p raw))
               nil)
              ((symbolp raw) raw)
              ((listp raw)
               (let ((cleaned
                      (seq-remove
                       (lambda (f) (and (symbolp f)
-                                       (memq f tip-image-face-blocklist)))
+                                       (tip--blocked-image-face-p f)))
                       raw)))
                 (cond
                  ((null cleaned) nil)
@@ -533,7 +560,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
                  ;; located, else just the hint region.
                  (under-beg (or (car hint-range) frag-beg))
                  (under-end (or (cdr hint-range) frag-end))
-                 (ov (make-overlay under-beg under-end)))
+                 (ov (make-overlay under-beg under-end nil t nil)))
             (overlay-put ov 'tip 'tip)
             (overlay-put ov 'face face)
             (overlay-put ov 'before-string (propertize marker 'face face))
@@ -582,7 +609,7 @@ Handles narrowed buffers: `byte-to-position' needs full buffer access."
                                       (eq (char-before (1- frag-beg)) ?\n)))
                              (1- frag-beg)
                            frag-beg))
-                 (ov (make-overlay ov-beg frag-end)))
+                 (ov (make-overlay ov-beg frag-end nil t nil)))
             (overlay-put ov 'tip 'tip)
             (overlay-put ov 'view-text nil)
             (overlay-put ov 'tip-height-pt height-pt)

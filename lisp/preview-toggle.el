@@ -36,6 +36,9 @@ Called with two arguments (BEG END).  Should async create overlay.")
 (defvar-local preview-toggle--marker nil
   "Marker recording cursor position before the command.")
 
+(defvar-local preview-toggle--modified-tick nil
+  "Value of `buffer-chars-modified-tick' before the current command.")
+
 ;;; * overlay operations
 
 (defun preview-toggle--overlay-at (pos)
@@ -90,6 +93,7 @@ start/end."
   (when (and preview-toggle-type
              (not (memq this-command preview-toggle-ignored-commands)))
     (setq preview-toggle--was-inside (not (null (preview-toggle--inside-p))))
+    (setq preview-toggle--modified-tick (buffer-chars-modified-tick))
     (set-marker preview-toggle--marker (point))))
 
 (defun preview-toggle--overlay-shows-image-p (ov)
@@ -120,7 +124,11 @@ never got reset."
            (now-ov (and now-inside (preview-toggle--overlay-at (point))))
            (prev-ov (and preview-toggle--was-inside
                          (preview-toggle--overlay-at
-                          (marker-position preview-toggle--marker)))))
+                          (marker-position preview-toggle--marker))))
+           (buffer-changed
+            (and preview-toggle--modified-tick
+                 (/= preview-toggle--modified-tick
+                     (buffer-chars-modified-tick)))))
       (cond
        ;; Leaving a previewable region → re-render the old one.
        ((and (not now-inside) preview-toggle--was-inside)
@@ -130,12 +138,14 @@ never got reset."
              prev-ov now-ov
              (not (eq now-ov prev-ov)))
         (preview-toggle--close-at-marker)
-        (preview-toggle-open-at-point))
+        (unless buffer-changed
+          (preview-toggle-open-at-point)))
        ;; Inside: open if the overlay still shows its image.  This is
        ;; the level-triggered part: covers "cursor was already inside
        ;; when the mode activated" and ignored-command entries that
        ;; skipped a prior open.
-       ((and now-inside
+       ((and (not buffer-changed)
+             now-inside
              (preview-toggle--overlay-shows-image-p now-ov))
         (preview-toggle-open-at-point))))))
 

@@ -114,6 +114,54 @@
     (tip-clear-buffer)
     (should (= (length (overlays-in (point-min) (point-max))) 0))))
 
+(ert-deftest tip-test-insert-before-rendered-overlay-does-not-open-it ()
+  "Typing before a rendered fragment must not reveal that next fragment."
+  (with-temp-buffer
+    (insert "foo $a$ bar")
+    (tip--apply-fragment-results
+     (vector `((start . ,(1- (position-bytes 5)))
+               (end . ,(1- (position-bytes 8)))
+               (svg . "<svg width=\"1pt\" height=\"1pt\" viewBox=\"0 0 1 1\"></svg>")
+               (height_pt . 1.0)
+               (depth_pt . 0.0)
+               (width_pt . 1.0)
+               (font_size_pt . 11.0))))
+    (let ((ov (seq-find (lambda (o) (eq (overlay-get o 'tip) 'tip))
+                        (overlays-in (point-min) (point-max)))))
+      (should ov)
+      (setq-local preview-toggle-type 'tip)
+      (setq-local preview-toggle-region-at-point-fn
+                  (lambda (pos)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (when (search-forward "$a$" nil t)
+                        (let ((beg (match-beginning 0))
+                              (end (match-end 0)))
+                          (when (and (<= beg pos) (< pos end))
+                            (cons beg end)))))))
+      (setq-local preview-toggle-compile-region-fn #'ignore)
+      (preview-toggle-mode 1)
+      (goto-char (overlay-start ov))
+      (let ((this-command 'self-insert-command))
+        (run-hooks 'pre-command-hook)
+        (insert "X")
+        (run-hooks 'post-command-hook))
+      (should (= (overlay-start ov) 6))
+      (should (preview-toggle--overlay-shows-image-p ov)))))
+
+(defface tip-test-warning-derived-face
+  '((t :inherit font-lock-warning-face))
+  "Test face that models a mode-specific syntax-error face.")
+
+(ert-deftest tip-test-image-face-auto-filters-inherited-warning-face ()
+  "`tip-image-face' auto should ignore transient syntax warning faces."
+  (with-temp-buffer
+    (insert "x$a$ y")
+    (put-text-property 1 2 'face '(bold tip-test-warning-derived-face))
+    (let ((tip-image-face 'auto)
+          (tip-image-face-blocklist '(font-lock-warning-face)))
+      (should (equal (tip--resolve-image-face 2 5) '(bold default))))))
+
 (ert-deftest tip-test-mode-disable-clears-error-markups ()
   "Disabling `tip-mode' removes stale in-buffer error overlays."
   (with-temp-buffer
