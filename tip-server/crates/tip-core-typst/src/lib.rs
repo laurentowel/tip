@@ -2,6 +2,7 @@ pub mod bottom_up;
 pub(crate) mod geometry;
 pub(crate) mod svg;
 pub mod top_down;
+pub mod validate;
 pub mod world;
 
 /// Which compilation strategy `TypstBackend::handle_compile_fragments`

@@ -42,6 +42,11 @@ The server handles requests sequentially. This is fine because:
 
 ## The Messages
 
+> **Document validation**: `validate`
+> ([below](#validate--document-level-compile-with-diagnostics)) compiles
+> a synced Typst document and returns structured diagnostics. It is
+> additive (no version bump) and does not change the preview protocol.
+
 This file is the human-readable spec.  The canonical, machine-checked
 source for field types and serde attributes is
 [`tip-server/crates/tip-protocol/src/messages.rs`](../tip-server/crates/tip-protocol/src/messages.rs)
@@ -61,11 +66,17 @@ Bump rules:
 - **Bump major** on a breaking change: removed field, renamed enum
   variant, type change, removed method, semantics change a client
   written for the old version would handle wrong.
-- **Bump minor** on an additive change a client can ignore: new
+- **Don't bump** on an additive change a client can ignore: new
   optional field with `#[serde(default)]`, new method, new optional
-  response variant.
+  response variant.  This matches the doc-comment in `messages.rs`
+  ("Additive changes ... keep the version stable").
 - **Don't bump** on doc-only edits, internal refactors that don't
   cross the wire, test-only additions.
+
+The `validate` method is additive: `ValidateParams` / `ValidateResult`
+and the `validate` response variant leave the version at `0.1`.
+Older servers do not support it; clients must only send it to builds
+that implement it. Existing Emacs preview clients need no changes.
 
 The `init` request carries a `client_version` field; the `init`
 response echoes the server's version as `server_version` and
@@ -149,6 +160,7 @@ The full set of methods is enumerated by `Request` in `messages.rs`:
 | `compile_fragments`    | `CompileFragmentsParams`     | `fragments`          |
 | `compile_live`         | `CompileLiveParams`          | `live`               |
 | `debug_skeleton`       | `DebugSkeletonParams`        | `debug_skeleton`     |
+| `validate`             | `ValidateParams`             | `validate`           |
 | `health_check`         | (none)                       | `health`             |
 | `list_project_files`   | `ListProjectFilesParams`     | `project_files`      |
 | `shutdown`             | (none)                       | `shutdown`           |
@@ -156,6 +168,10 @@ The full set of methods is enumerated by `Request` in `messages.rs`:
 Any method may also yield `{"kind": "error", "error": "..."}` on a
 server-side failure (deserialization error, panic boundary, missing
 backend).
+
+`compile_live` is legacy documentation of a method the current
+`Request` enum no longer carries. Current clients use
+`compile_fragments` with a single fragment for live previews.
 
 ### `init` — Initialize Server State
 
@@ -208,7 +224,7 @@ Mismatch is non-fatal — see [Versioning](#versioning).
 Response: `{"id": 1, "result": {"kind": "sync", "ok": true}}`
 
 Must precede any `compile_fragments` / `compile_live` /
-`debug_skeleton` request for the same `uri`.  The server:
+`debug_skeleton` / `validate` request for the same `uri`.  The server:
 
 1. Stores `content` in an in-memory document store keyed by `uri`.
 2. Resolves the project root: `project_root` if present (used as-is,
@@ -340,6 +356,97 @@ Returns the exact synthesized source the bottom-up compile strategy
 issues — when a compile error mentions a name that isn't visible in
 the user's buffer, the skeleton shows what context the server saw.
 
+### `validate` — Document-Level Compile with Diagnostics
+
+**Status: implemented.** `ValidateParams`, `ValidateResult`, and
+`Diagnostic` in `messages.rs` define this additive method;
+`PROTOCOL_VERSION` remains `0.1`. Validation is opt-in: the Emacs
+preview client continues to use `compile_fragments`.
+
+```json
+{"id": 7, "method": "validate", "params": {
+  "backend": "typst",
+  "uri": "/path/to/file.typ"
+}}
+```
+
+Response:
+
+```json
+{"id": 7, "result": {"kind": "validate", "ok": false, "diagnostics": [
+  {"severity": "error", "message": "unknown variable: foo",
+   "path": null, "line": 2, "column": 2,
+   "byte_start": 12, "byte_end": 15,
+   "hint": "$foo + 1$"}
+]}}
+```
+
+Field reference:
+
+| Field           | Type    | Notes                                                                                      |
+|-----------------|---------|--------------------------------------------------------------------------------------------|
+| `backend`       | string  | See [Backend Dispatch](#backend-dispatch).  Validate supports the Typst backend; LaTeX/KaTeX return `{"kind": "error"}` until specced. |
+| `uri`           | string  | Required.  Must have been `sync`ed first, same rule as `compile_fragments`.                |
+
+`ValidateResult` fields:
+
+| Field           | Type                     | Notes                                                                                       |
+|-----------------|--------------------------|---------------------------------------------------------------------------------------------|
+| `ok`            | bool                     | `true` when `typst::compile` produced a document (no errors); warnings do not clear it.     |
+| `diagnostics`   | array of `Diagnostic`    | All compiler errors followed by warnings, preserving emission order within each group. Empty only when neither occurs.         |
+
+`Diagnostic`:
+
+| Field           | Type                     | Notes                                                                                       |
+|-----------------|--------------------------|---------------------------------------------------------------------------------------------|
+| `severity`      | `"error"` \| `"warning"` | Mirrors `SourceDiagnostic::severity`.                                                       |
+| `message`       | string                   | Single-line summary from `SourceDiagnostic::message`.                                        |
+| `path`          | string \| null           | File the span points into; null = the synced main file.  Imported files come from the world's sources (in-memory or disk). |
+| `line`          | u32 \| null              | 1-based line in that file, converted from the byte span.  Null when the span is detached.   |
+| `column`        | u32 \| null              | 1-based Unicode character column in that file. Null when the span is detached.                               |
+| `byte_start`    | u32 \| null              | 0-based byte offset into that file's content — same indexing as `fragments`.  Clients convert with `position-bytes`. |
+| `byte_end`      | u32 \| null              | Half-open byte range end, as above.                                                         |
+| `hint`          | string \| null           | Source text of the diagnostic's line (best-effort, for locating the range in the buffer).   |
+
+Semantics:
+
+1. The server runs one `typst::compile` (paged mode, the same
+   `Feature::Html`-enabled library as preview) over the *synced*
+   content as the main source.  This is the "real document" compile,
+   not a synthetic skeleton: user `#let`s, imports, packages, and
+   fonts resolve exactly as they would for export.
+2. **Warm world.** The compile reuses a cached `TipWorld` per URI
+   and the process-wide comemo cache. Validation worlds are separate
+   from the preview world so validation cannot replace its source,
+   root, or import cache. Worlds are created lazily using the latest
+   `init.font_dirs` and the URI's `sync.project_root` (or root walk).
+   A root change or a new `init` discards affected validation worlds.
+   Cached imports are checked for disk changes before each validation;
+   unchanged sources retain their parsed syntax trees.  Repeated
+   `validate` calls on the same document are incremental: unchanged
+   imports/packages/stdlib are not re-parsed, so the per-call cost
+   after the first is dominated by the main file alone.  This is the
+   property CLI `typst compile` cannot offer (fresh process, full
+   parse every run).
+3. **Diagnostics, not fragments.**  Unlike `compile_fragments`,
+   there is no SVG or geometry in the response, and errors are
+   document-scoped with real file positions, not fragment-scoped.
+   Clients attribute diagnostics to regions themselves (line/byte
+   filtering, e.g. dsh-typst's repair loop).
+4. **All-or-nothing, exactly like export.**  When errors exist, `ok`
+   is false and no document is produced — validating here has the
+   same verdict as `typst compile` would at export time.  The
+   "synth fallback" of the fragment path does not apply.
+5. **Paged mode only.**  HTML-export validation (`--features html`
+   parity) is out of scope for now; note it if a client needs it.
+
+Intended first consumer: dsh-typst's turn validation (`validate
+before insert, never replace`) and its repair loop, replacing
+`typst compile --diagnostic-format short` snapshots with structured
+diagnostics over the warm world.  The same request shape is the
+planned foundation for server-side PDF/HTML export in a later
+version.
+
 ### `health_check` — Server Diagnostics
 
 ```json
@@ -399,10 +506,10 @@ relative layout when packing into a tar (e.g. for Docker transport).
 ### `shutdown` — Graceful Shutdown
 
 ```json
-{"id": 7, "method": "shutdown"}
+{"id": 8, "method": "shutdown"}
 ```
 
-Response: `{"id": 7, "result": {"kind": "shutdown", "ok": true}}`
+Response: `{"id": 8, "result": {"kind": "shutdown", "ok": true}}`
 
 The server sets an exit flag and leaves the main loop after sending
 the response.  No new requests should be sent after `shutdown`; the
@@ -514,6 +621,24 @@ Total: 3 messages, 2 round-trips (sync doesn't need a response wait — Emacs fi
 **Incremental sync**: Currently sends the full buffer content on every `sync`. Could send diffs (like LSP's `textDocument/didChange`). Not a priority — full sync of a 50KB document takes <1ms.
 
 **Streaming results**: For 1000-fragment batches, the server could stream individual results as they complete instead of buffering all of them. Would require a protocol extension (multiple response lines per request).
+
+**`validate` latency vs the synchronous loop**: A document-level
+compile costs more than a fragment compile, and the server handles
+requests sequentially — a `validate` on a large document queues
+subsequent requests behind it. Separate validation worlds protect
+preview state, but do not provide concurrency. The cached per-URI
+world and comemo cache reduce repeated work; the first call per URI
+also initializes fonts and parses the document and its imports.
+Latency depends on document complexity.  If this ever hurts, the
+escape hatches are (a) a `compose`-style syntax-only mode (parse +
+typecheck without layout), or (b) out-of-band handling for
+`validate` — both additive (version-stable).
+
+**Server-side export**: `validate`'s request shape (sync + one
+paged `typst::compile` over the warm world) is the natural
+predecessor of a `compile_export` method that returns PDF bytes or
+HTML via the same `Feature::Html`-enabled library, removing the
+`typst` CLI from consumers' runtime dependencies.  Not specced yet.
 
 **emacs-lsp-booster**: The JSON-over-stdio protocol is compatible with [emacs-lsp-booster](https://github.com/blahgeek/emacs-lsp-booster), which buffers I/O and optionally pre-compiles JSON into Emacs bytecode for faster parsing.
 

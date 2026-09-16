@@ -2671,6 +2671,7 @@ version = "0.1.0"
 dependencies = [
  "openssl",
  "serde_json",
+ "tempfile",
  "testkit",
  "tip-core-katex",
  "tip-core-latex",

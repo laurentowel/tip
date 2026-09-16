@@ -101,6 +101,15 @@ impl Handler {
             Request::CompileFragments(params) => {
                 dispatch!(self, params, handle_compile_fragments)
             }
+            Request::Validate(params) => match params.backend {
+                #[cfg(feature = "typst")]
+                BackendId::Typst => self.typst.handle_validate(params),
+                #[cfg(not(feature = "typst"))]
+                BackendId::Typst => not_compiled_in(BackendId::Typst),
+                other => ResponseResult::Error {
+                    error: format!("validate is not supported for backend {:?}", other),
+                },
+            },
             Request::DebugSkeleton(params) => dispatch!(self, params, handle_debug_skeleton),
             Request::HealthCheck => ResponseResult::Health {
                 report: diagnostics::collect_report(self.typst_health_input()),

@@ -429,11 +429,16 @@ Encoded in `tip-server/crates/tip-server/src/typst_backend.rs`:
   severity).  The user sees the broken fragment marked, the rest
   rendered.  No per-fragment error info from full-doc itself.
 
-Future enhancement (not yet implemented): map typst's
-`SourceDiagnostic` byte ranges to fragments and decorate
-`FragmentResult.error_detail` with them — useful for flymake /
-eldoc on systems without an LSP.  Lower priority because LSP-using
-setups already see the diagnostics directly.
+Implemented document validation: map typst's
+`SourceDiagnostic` byte ranges to diagnostics.  The mechanism is the
+protocol-level `validate` method (see `devdoc/protocol.md`), which
+runs one paged compile over the warm world and returns
+document-scoped diagnostics with file/byte positions.  Per-fragment
+`error_detail` decoration is a separate, lower-priority idea —
+clients that want document-level verdicts (dsh-typst turn
+validation) get them from `validate` directly; fragment overlays
+keep using the synth fallback as today.  Useful for flymake / eldoc
+on systems without an LSP.
 
 ## Readiness Checklist Before Default
 
@@ -448,7 +453,7 @@ setups already see the diagnostics directly.
 | **Diagram (CeTZ/Fletcher) Shape geometry** | ❌ Shape items contribute 1-pt bbox; figure-wrapped diagrams report bogus widths |
 | **Real-corpus sweep (arxiv, kodama)** | ❌ Synthetic random corpus only; no real-doc fixtures yet |
 | **Synth math-axis baseline audit** | ❌ Synth's `find_group_baseline` likely picks math-axis instead of line-baseline; benign for shallow math, visible for towers (we corrected full-doc but not synth) |
-| **Diagnostic mapping for non-LSP users** | ❌ Optional — typst `SourceDiagnostic` → fragment `error_detail` |
+| **Diagnostic mapping for non-LSP users** | ✅ `validate` method in `devdoc/protocol.md`; fragment diagnostics unchanged |
 
 The first two ❌ items are the substantive blockers for flipping
 the default.  Multi-page is rare in inline math but real for

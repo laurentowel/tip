@@ -10,7 +10,32 @@ See `full-document-approach.md`. Compile once, walk frame tree, extract per-frag
 
 Possible resolution: a hybrid where we compile the full document for baseline/position information but still render fragments in isolation with controlled text size.
 
-## 2. Emacs as a Typst Render Target (Medium-term)
+## 2. Document Validation and Export via the Warm World (Near-term)
+
+The `validate` method (implemented; specified in `devdoc/protocol.md`; additive, so
+it does not bump the wire version) exposes the same compile the
+full-doc path performs, but as a *verdict* instead of SVGs: one
+paged `typst::compile` over the warm world returns structured
+`SourceDiagnostic`s with file/byte positions.  Because `TipWorld`
+and the comemo cache are process-lifetime, repeated validates on a
+synced document are incremental — a property no CLI invocation can
+offer.
+
+**First consumer**: dsh-typst's turn validation ("validate before
+insert, never replace") and its bounded repair loop, replacing
+`typst compile --diagnostic-format short` snapshots.  Down the road
+the same shape grows a `compile_export` sibling (PDF bytes / HTML
+via `Feature::Html`), removing the `typst` CLI from consumers'
+runtime dependencies.
+
+**Why not just use the CLI**: the CLI gives the same verdict but
+with process spawn + full stdlib/package parse per call, and only
+string-shaped diagnostics.  The warm world makes per-turn (and
+eventually per-chunk, debounced) validation cheap enough to run on
+every settle, which is the requirement for streaming validation of
+LLM-generated transcripts.
+
+## 3. Emacs as a Typst Render Target (Medium-term)
 
 Instead of fighting the mismatch between Typst's layout and Emacs's display, make Emacs a first-class Typst target. The idea:
 
@@ -28,7 +53,7 @@ This is essentially what org-mode does for LaTeX — org headings are rendered w
 
 **Prerequisite**: The full-document compilation approach. We need the compiled frame tree to know what font size each text region uses.
 
-## 3. Rust Game Engine WYSIWYG Editor (Far-term)
+## 4. Rust Game Engine WYSIWYG Editor (Far-term)
 
 A dedicated Typst editor built on a Rust game engine framework (bevy, iced, egui, or similar). Unlike Emacs, this would be a true 2D canvas:
 
@@ -52,7 +77,7 @@ A dedicated Typst editor built on a Rust game engine framework (bevy, iced, egui
 
 **Pragmatic middle ground**: Build the WYSIWYG renderer as a **preview pane** alongside an existing text editor (Emacs, Neovim, VS Code). Click on the preview to jump to source. Edit in the text editor, see changes in the preview. This is what tinymist already does, but with tighter integration.
 
-## 4. Reusable Elisp Abstractions
+## 5. Reusable Elisp Abstractions
 
 preview-toggle.el proved that extracting a generic framework from TIP-specific code makes both the framework and TIP cleaner. Other patterns in TIP that could be extracted when a second consumer appears:
 
@@ -66,18 +91,16 @@ preview-toggle.el proved that extracting a generic framework from TIP-specific c
 
 Principle: don't extract until there's a second user. Premature abstraction is worse than duplication.
 
-## 5. Relationship Between These Visions
+## 6. Relationship Between These Visions
 
 ```
 Current TIP (per-fragment, Emacs overlays)
     │
     ├── Full-doc compilation (exact baselines, one compile)
-    │       │
     │       ├── Emacs as render target (faces match typst text)
-    │       │       │
     │       │       └── ...getting close to WYSIWYG in Emacs
-    │       │
-    │       └── Rust WYSIWYG editor (game engine, true 2D)
+    │       ├── Rust WYSIWYG editor (game engine, true 2D)
+    │       └── validate / export over the warm world (dsh-typst, external clients)
     │
     └── (current approach continues to work independently)
 ```

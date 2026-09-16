@@ -8,6 +8,10 @@
 //! versioning notes — lives at `devdoc/protocol.md` (relative to the
 //! repository root).  Keep them aligned: any wire-visible change
 //! here needs a paragraph there.
+//!
+//! Spec-first workflow: methods can be specced in `devdoc/protocol.md`
+//! before they exist here.  See the `validate` section for the
+//! document-level diagnostic contract (additive, no version bump).
 
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +111,38 @@ pub struct FragmentError {
     pub hint: Option<String>,
 }
 
+/// Compile a previously synced document without exporting any output.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ValidateParams {
+    #[serde(default)]
+    pub backend: BackendId,
+    pub uri: String,
+}
+
+/// Document-level compile verdict. Warnings do not make `ok` false.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ValidateResult {
+    pub ok: bool,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// A diagnostic in a real source file, independent of preview fragments.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Diagnostic {
+    pub severity: ErrorSeverity,
+    pub message: String,
+    /// Absolute source path; null denotes the synced main file.
+    pub path: Option<String>,
+    /// One-based line and Unicode character column; null for detached spans.
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    /// Zero-based, half-open UTF-8 byte range in that file.
+    pub byte_start: Option<u32>,
+    pub byte_end: Option<u32>,
+    /// Source text of the diagnostic's line, without its line ending.
+    pub hint: Option<String>,
+}
+
 /// A compiled fragment result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FragmentResult {
@@ -147,6 +183,8 @@ pub enum Request {
     Sync(SyncParams),
     #[serde(rename = "compile_fragments")]
     CompileFragments(CompileFragmentsParams),
+    #[serde(rename = "validate")]
+    Validate(ValidateParams),
     #[serde(rename = "debug_skeleton")]
     DebugSkeleton(DebugSkeletonParams),
     #[serde(rename = "health_check")]
@@ -288,6 +326,8 @@ pub enum ResponseResult {
     Sync { ok: bool },
     #[serde(rename = "fragments")]
     Fragments { fragments: Vec<FragmentResult> },
+    #[serde(rename = "validate")]
+    Validate(ValidateResult),
     #[serde(rename = "shutdown")]
     Shutdown { ok: bool },
     #[serde(rename = "debug_skeleton")]

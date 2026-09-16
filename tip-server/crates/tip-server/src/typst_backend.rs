@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tip_core_typst::bottom_up::BottomUpCompiler;
@@ -23,6 +24,11 @@ pub struct TypstBackend {
     documents: DocumentStore,
     world: TipWorld,
     strategy: CompileStrategy,
+    // Validation is opt-in and owns separate warm worlds: it must never
+    // change the source, root, or cached imports used by Emacs previews.
+    validation_roots: HashMap<String, Option<PathBuf>>,
+    validation_worlds: HashMap<String, TipWorld>,
+    font_dirs: Vec<String>,
 }
 
 impl TypstBackend {
@@ -31,12 +37,17 @@ impl TypstBackend {
             documents: DocumentStore::new(),
             world: TipWorld::new(),
             strategy: strategy_from_env(),
+            validation_roots: HashMap::new(),
+            validation_worlds: HashMap::new(),
+            font_dirs: Vec::new(),
         }
     }
 
     pub fn handle_init(&mut self, params: InitParams) -> ResponseResult {
         let dirs: Vec<&str> = params.font_dirs.iter().map(|s| s.as_str()).collect();
         self.world = TipWorld::with_font_dirs(&dirs);
+        self.font_dirs = params.font_dirs.clone();
+        self.validation_worlds.clear();
         // Version handshake: compare client's reported version to the
         // server's PROTOCOL_VERSION.  Mismatch is non-fatal — we still
         // serve the request; the client decides whether to warn/refuse.
@@ -70,12 +81,37 @@ impl TypstBackend {
                     .parent()
                     .map(|p| Self::find_project_root(p).unwrap_or_else(|| p.to_path_buf()))
             });
+        if self.validation_roots.get(&params.uri) != Some(&root) {
+            self.validation_worlds.remove(&params.uri);
+        }
+        self.validation_roots
+            .insert(params.uri.clone(), root.clone());
         if let Some(root) = root {
             self.world.set_root(root);
             self.world.set_main_path(&params.uri);
         }
         self.documents.sync(params.uri, params.content);
         ResponseResult::Sync { ok: true }
+    }
+
+    pub fn handle_validate(&mut self, params: ValidateParams) -> ResponseResult {
+        let Some(content) = self.documents.get(&params.uri) else {
+            return ResponseResult::Error {
+                error: format!("document not synced: {}", params.uri),
+            };
+        };
+        let world = self
+            .validation_worlds
+            .entry(params.uri.clone())
+            .or_insert_with(|| {
+                let mut world = TipWorld::with_font_dirs(&self.font_dirs);
+                if let Some(Some(root)) = self.validation_roots.get(&params.uri) {
+                    world.set_root(root.clone());
+                    world.set_main_path(&params.uri);
+                }
+                world
+            });
+        ResponseResult::Validate(tip_core_typst::validate::validate(world, content))
     }
 
     /// Walk up from `dir` looking for a project root marker.

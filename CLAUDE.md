@@ -17,7 +17,7 @@ tip-improve/
 │   ├── integration/            # Daemon-driven specs (`tests/integration/run.sh`)
 │   └── manual/                 # Interactive + perf, run by hand
 ├── doc/                    # Public docs — kodama trees → CI-built static site
-├── devdoc/                 # Internal dev notes (architecture, baselines, surveys)
+├── devdoc/                 # Internal dev notes + the human-readable protocol spec (`protocol.md`; spec-first: wire changes land here before `messages.rs`)
 ├── tip-server/         # Active development — Rust-native server
 │   ├── crates/
 │   │   ├── tip-protocol/       # Message types + stdio transport (serde, newline-delimited JSON) — shared across backends
@@ -43,6 +43,8 @@ tip-improve/
 Replacing the Python server with a native Rust binary. See `tip-server/` and the plan at `.claude/plans/iridescent-questing-whisper.md`.
 
 **Communication**: tip.el ↔ tip-server uses **JSON-RPC over stdio** — Emacs spawns tip-server as a child process and exchanges JSON-RPC messages through Unix stdin/stdout pipes (newline-delimited framing). Same pattern as LSP. Replaces the old JSON-RPC over HTTP (localhost TCP) approach.
+
+**Spec-first protocol changes**: the wire contract is `devdoc/protocol.md` (canonical for intent; `tip-protocol/src/messages.rs` canonical for types). New methods are specced in `protocol.md` *before* implementation. **Implemented: `validate`** — document-level compile returning structured diagnostics over separate per-URI warm worlds (see `devdoc/protocol.md`, `devdoc/future-visions.md` item 2). Follow that spec for future changes; `validate` is additive and `PROTOCOL_VERSION` stays `0.1`.
 
 **Future transport options** (tip-core is transport-agnostic, so these are independent of core logic):
 

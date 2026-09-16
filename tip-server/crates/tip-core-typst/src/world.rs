@@ -64,6 +64,34 @@ impl TipWorld {
         self.sources.lock().unwrap().insert(self.main, source);
     }
 
+    /// Update validation sources without reparsing unchanged imports.
+    /// Kept separate from the preview compilation lifecycle.
+    pub(crate) fn refresh_validation_sources(&mut self, content: &str) {
+        let ids: Vec<_> = self.sources.lock().unwrap().keys().copied().collect();
+        for id in ids {
+            if id == self.main {
+                continue;
+            }
+            let text = self
+                .resolve_path(id)
+                .ok()
+                .and_then(|p| std::fs::read_to_string(p).ok());
+            let mut sources = self.sources.lock().unwrap();
+            if let Some(text) = text {
+                sources.get_mut(&id).unwrap().replace(&text);
+            } else {
+                // Deleted/unreadable imports must fail the next compile.
+                sources.remove(&id);
+            }
+        }
+        let mut sources = self.sources.lock().unwrap();
+        if let Some(source) = sources.get_mut(&self.main) {
+            source.replace(content);
+        } else {
+            sources.insert(self.main, Source::new(self.main, content.to_owned()));
+        }
+    }
+
     /// Set the project root for resolving imports.
     pub fn set_root(&mut self, root: PathBuf) {
         self.root = Some(root);
@@ -104,7 +132,7 @@ impl TipWorld {
     }
 
     /// Resolve a FileId to a filesystem path.
-    fn resolve_path(&self, id: FileId) -> FileResult<PathBuf> {
+    pub(crate) fn resolve_path(&self, id: FileId) -> FileResult<PathBuf> {
         match id.root() {
             VirtualRoot::Package(spec) => {
                 // Package import: resolve via Typst's system package locations.
