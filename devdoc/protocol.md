@@ -416,7 +416,8 @@ Semantics:
    not a synthetic skeleton: user `#let`s, imports, packages, and
    fonts resolve exactly as they would for export.
 2. **Warm world.** The compile reuses a cached `TipWorld` per URI
-   and the process-wide comemo cache. Validation worlds are separate
+   and process-wide comemo caches, whose entries are validated
+   against that world's dependencies. Validation worlds are separate
    from the preview world so validation cannot replace its source,
    root, or import cache. Worlds are created lazily using the latest
    `init.font_dirs` and the URI's `sync.project_root` (or root walk).

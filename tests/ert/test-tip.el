@@ -223,6 +223,63 @@ Converts byte offsets back to character positions."
               (buffer-substring-no-properties s e)))
           (tip-collect-fragment-locations (point-min) (point-max))))
 
+(ert-deftest tip-test-value-binding-previews-default-off ()
+  "By default neither value nor function bindings produce previews."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#let claim = [$a$]\n#let f(x) = [$b$]\n$c$\n")
+    (should-not tip-typst-preview-value-bindings)
+    (should (equal (tip-test--fragment-texts) '("$c$")))
+    (goto-char (point-min))
+    (search-forward "$a")
+    (should-not (tip--get-bounds-of-math-at-point (point)))))
+
+(ert-deftest tip-test-value-binding-previews-opt-in ()
+  "Opt-in admits value content, while nested function bodies stay excluded."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     (concat "#let claim = [$a$]\n#let f(x) = [$b$]\n"
+             "#let g(x) = { let nested = [$c$]; nested }\n$d$\n"))
+    (setq-local tip-typst-preview-value-bindings t)
+    (should (equal (tip-test--fragment-texts) '("$a$" "$d$")))
+    (goto-char (point-min))
+    (search-forward "$a")
+    (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+      (should (equal (buffer-substring-no-properties (car bounds) (cdr bounds))
+                     "$a$")))
+    (search-forward "$b")
+    (should-not (tip--get-bounds-of-math-at-point (point)))
+    (search-forward "$c")
+    (should-not (tip--get-bounds-of-math-at-point (point)))))
+
+(ert-deftest tip-test-value-binding-previews-are-buffer-local ()
+  "Enabling value previews in one buffer leaves other buffers unchanged."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer "#let claim = [$a$]")
+    ;; Plain setq must create a buffer-local binding for this defcustom.
+    (setq tip-typst-preview-value-bindings t)
+    (should (local-variable-p 'tip-typst-preview-value-bindings))
+    (with-temp-buffer
+      (tip-test--setup-typst-buffer "#let claim = [$a$]")
+      (should-not tip-typst-preview-value-bindings)
+      (should-not (tip-test--fragment-texts)))
+    (should (equal (tip-test--fragment-texts) '("$a$")))))
+
+(ert-deftest tip-test-value-binding-figure-previews ()
+  "Figure collection and bounds obey the same value-binding option."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#let claim = [#figure($a$)]\n#let f() = [#figure($b$)]\n")
+    (let ((tip-render-figure t))
+      (should-not (tip-test--fragment-texts))
+      (setq-local tip-typst-preview-value-bindings t)
+      (should (equal (tip-test--fragment-texts) '("#figure($a$)")))
+      (goto-char (point-min))
+      (search-forward "$a")
+      (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+        (should (equal (buffer-substring-no-properties (car bounds) (cdr bounds))
+                       "#figure($a$)"))))))
+
 (defun tip-test--apply-one-svg-overlay (beg end)
   "Apply a minimal successful SVG overlay for BEG..END and return it."
   (tip--apply-fragment-results

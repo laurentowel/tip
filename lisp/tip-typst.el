@@ -34,6 +34,17 @@ or display math to opt in.  Buffer-local."
   :group 'tip
   :local t)
 
+(defcustom tip-typst-preview-value-bindings nil
+  "If non-nil, preview content inside Typst value bindings.
+For example, allow math inside `#let claim = [$a + b$]'.
+The default nil excludes all let bindings.  Function definitions such
+as `#let f(x) = [$x$]' remain excluded even when this option is enabled.
+This option is buffer-local and also applies to figure previews."
+  :type 'boolean
+  :safe #'booleanp
+  :group 'tip
+  :local t)
+
 (defcustom tip-typst-strategy 'auto
   "Compile strategy for the Typst backend.
 - `auto' (default): bottom-up.  Per-fragment synthetic compile,
@@ -108,16 +119,28 @@ nil otherwise.  See `tip-typst--heading-face-at' for the why."
   (tip-typst--heading-face-at frag-beg))
 
 (defun tip--inside-let-binding-p (node)
-  "Return non-nil if NODE is inside a `#let' binding (definition, not invocation)."
-  (let ((parent (treesit-node-parent node)))
-    (while (and parent
-                (not (equal "let" (treesit-node-type parent))))
+  "Return non-nil if NODE is inside a let binding excluded from preview.
+All let bindings are excluded unless `tip-typst-preview-value-bindings'
+is non-nil.  Function definitions remain excluded in either case,
+including value bindings nested inside their bodies."
+  (let ((parent (treesit-node-parent node))
+        found)
+    (while (and parent (not found))
+      (when (equal "let" (treesit-node-type parent))
+        ;; Typst's tree-sitter grammar represents a plain value binding as
+        ;; `let', `ident', `=', ... .  Function bindings use a `call' node
+        ;; for the name and argument list instead (e.g. `f(..args) = ...').
+        (let ((binding (treesit-node-child parent 1)))
+          (setq found
+                (or (not tip-typst-preview-value-bindings)
+                    (and binding
+                         (equal "call" (treesit-node-type binding)))))))
       (setq parent (treesit-node-parent parent)))
-    (not (null parent))))
+    found))
 
 (defun tip--collect-figure-ranges (node beg end avoid-pos)
   "Recursively find `#figure(...)' calls under NODE.
-Skips calls inside #let bindings (function definitions, not invocations).
+Honors `tip-typst-preview-value-bindings'; always skips function bodies.
 Does not descend into a matched figure, so nested figures are not emitted.
 Returns a list of (BEG . END) ranges."
   (let ((node-start (treesit-node-start node))
@@ -147,7 +170,7 @@ Filters out nested ranges — only keeps outermost fragments.
 When `tip-render-figure' is non-nil, top-level `#figure(...)' calls are
 also included (and any math inside them is filtered as nested)."
   (let (ranges fragments)
-    ;; Collect math ranges (skip empty, skip inside #let bindings).
+    ;; Collect math ranges, skipping empty math and excluded let bindings.
     ;; NOTE: avoid-pos is applied AFTER the outermost-filter below, not
     ;; here.  Filtering during collection would drop the enclosing outer
     ;; math first, leaving a nested inner math looking like a top-level
