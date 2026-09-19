@@ -59,6 +59,67 @@
   (should (fboundp 'tip-prev-error))
   (should (fboundp 'tip-flymake-mode)))
 
+;;; * Live preview timer isolation
+
+(ert-deftest tip-test-live-timer-stays-in-owning-buffer ()
+  "An enabled buffer's timer must not render another selected buffer."
+  (save-window-excursion
+    (with-temp-buffer
+      (let ((owner (current-buffer)) timer calls)
+        (unwind-protect
+            (cl-letf (((symbol-function 'tip-live--compile-partial)
+                       (lambda () (push (current-buffer) calls))))
+              (tip-live-mode 1)
+              (setq timer tip-live--timer)
+              (set-window-buffer (selected-window) owner)
+              (apply (timer--function timer) (timer--args timer))
+              (should (equal calls (list owner)))
+              (with-temp-buffer
+                (set-window-buffer (selected-window) (current-buffer))
+                (should-not tip-live-mode)
+                (apply (timer--function timer) (timer--args timer))
+                (should (equal calls (list owner))))
+              (set-window-buffer (selected-window) owner)
+              (tip-live-mode -1)
+              (apply (timer--function timer) (timer--args timer))
+              (should (equal calls (list owner))))
+          (tip-live-mode -1))))))
+
+(ert-deftest tip-test-live-timer-cleanup ()
+  "Re-enabling, changing major mode, and killing buffers cancel timers."
+  ;; `with-temp-buffer' creates buffers with kill hooks inhibited.
+  (let ((buffer (generate-new-buffer " *tip-live-test*")) timer)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (tip-live-mode 1)
+            (setq timer tip-live--timer)
+            (tip-live-mode 1)
+            (should-not (memq timer timer-idle-list))
+            (setq timer tip-live--timer)
+            (should (memq timer timer-idle-list))
+            (fundamental-mode)
+            (should-not tip-live-mode)
+            (should-not (memq timer timer-idle-list))
+            (tip-live-mode 1)
+            (setq timer tip-live--timer))
+          (kill-buffer buffer)
+          (should-not (memq timer timer-idle-list)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when timer (cancel-timer timer)))))
+
+(ert-deftest tip-test-live-disabled-ignores-idle-and-response ()
+  "Disabled live preview neither compiles nor displays a late response."
+  (with-temp-buffer
+    (setq major-mode 'typst-ts-mode)
+    (let ((tip-live-style 'childframe))
+      (cl-letf (((symbol-function 'tip-bounds-at-point)
+                 (lambda (&rest _) (ert-fail "Compiled with live preview off")))
+                ((symbol-function 'tip-childframe-show-text)
+                 (lambda (&rest _) (ert-fail "Displayed a late response"))))
+        (tip-live--compile-partial)
+        (tip-live--handle-result '((error . "late compile error")))))))
+
 ;;; * Image spec building
 
 (ert-deftest tip-test-make-image-spec ()
@@ -279,6 +340,68 @@ Converts byte offsets back to character positions."
       (let ((bounds (tip--get-bounds-of-math-at-point (point))))
         (should (equal (buffer-substring-no-properties (car bounds) (cdr bounds))
                        "#figure($a$)"))))))
+
+(ert-deftest tip-test-excluded-functions-canvas-labels ()
+  "Canvas labels are excluded from both collection and bounds lookup."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     (concat "$before$\n#cetz.canvas(length: 1cm, {\n"
+             "let labels = ([$1$], [$2$])\n"
+             "panel(0.55, [$frak(k)$: $theta X=X$])\n"
+             "panel(6.65, [$frak(p)$: $theta X=-X$])\n"
+             "})\n$after$\n"))
+    (setq-local tip-typst-preview-value-bindings t)
+    (should (equal (tip-test--fragment-texts) '("$before$" "$after$")))
+    (goto-char (point-min))
+    (dolist (label '("$1" "$2" "$frak(k)" "$theta X=X"
+                     "$frak(p)" "$theta X=-X"))
+      (search-forward label)
+      (should-not (tip--get-bounds-of-math-at-point (point))))))
+
+(ert-deftest tip-test-excluded-functions-customization ()
+  "Exclusions use exact callee names and can be changed buffer-locally."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer
+     "#cetz.canvas[$a$]\n#canvas[$b$]\n#other.canvas[$c$]\n#cetz.canvas-extra[$d$]\n")
+    (should (equal (tip-test--fragment-texts) '("$b$" "$c$" "$d$")))
+    (setq tip-typst-preview-excluded-functions '("cetz.canvas" "canvas"))
+    (should (local-variable-p 'tip-typst-preview-excluded-functions))
+    (should (equal (tip-test--fragment-texts) '("$c$" "$d$")))
+    (with-temp-buffer
+      (should (equal tip-typst-preview-excluded-functions '("cetz.canvas"))))
+    (setq-local tip-typst-preview-excluded-functions nil)
+    (should (equal (tip-test--fragment-texts) '("$a$" "$b$" "$c$" "$d$")))
+    (goto-char (point-min))
+    (search-forward "$a")
+    (should (tip--get-bounds-of-math-at-point (point)))))
+
+(ert-deftest tip-test-excluded-functions-nested-figure ()
+  "Figures inside excluded calls are also excluded from both APIs."
+  (with-temp-buffer
+    (tip-test--setup-typst-buffer "#cetz.canvas[wrapped #figure($x$)]\n$y$\n")
+    (let ((tip-render-figure t))
+      (should (equal (tip-test--fragment-texts) '("$y$")))
+      (goto-char (point-min))
+      (search-forward "#figure")
+      (should-not (tip--get-bounds-of-math-at-point (point)))
+      (search-forward "$x")
+      (should-not (tip--get-bounds-of-math-at-point (point))))))
+
+(ert-deftest tip-test-excluded-functions-enclosing-fragment ()
+  "A math or figure wrapper can still render an entire excluded call."
+  (dolist (source '("$ cetz.canvas({ content((0, 0), [$x$]) }) $"
+                    "#figure(cetz.canvas({ content((0, 0), [$x$]) }))"))
+    (with-temp-buffer
+      (tip-test--setup-typst-buffer source)
+      (let ((tip-render-figure t))
+        (should (equal (tip-test--fragment-texts) (list source)))
+        (goto-char (point-min))
+        (search-forward "$x")
+        (let ((bounds (tip--get-bounds-of-math-at-point (point))))
+          (should (equal (buffer-substring-no-properties (car bounds) (cdr bounds))
+                         source)))
+        (should-not (tip-collect-fragment-locations
+                     (point-min) (point-max) (point)))))))
 
 (defun tip-test--apply-one-svg-overlay (beg end)
   "Apply a minimal successful SVG overlay for BEG..END and return it."

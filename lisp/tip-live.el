@@ -34,6 +34,7 @@
 (declare-function tip--color-to-hex "tip" (color))
 (declare-function tip-edit-indirect--live-preview "tip-edit-indirect" ())
 (defvar tip-edit-indirect-mode)
+(defvar tip-live-mode)
 
 ;;; * echo-area error feedback
 
@@ -202,43 +203,44 @@ the next-line layout, others get inline-after layout."
 
 (defun tip-live--handle-result (result)
   "Handle compilation RESULT — show SVG or error per `tip-live-style'."
-  (let* ((err (alist-get 'error result))
-         (frags (alist-get 'fragments result))
-         (frag (and frags (> (length frags) 0) (aref frags 0)))
-         (frag-err (and frag (alist-get 'error frag)))
-         (svg (and frag (alist-get 'svg frag)))
-         (h  (and frag (alist-get 'height_pt frag)))
-         (d  (and frag (alist-get 'depth_pt frag)))
-         (w  (and frag (alist-get 'width_pt frag)))
-         (fs (and frag (alist-get 'font_size_pt frag)))
-         (anchor tip-live--anchor-pos)
-         (bound tip-live--bound)
-         (style tip-live-style))
-    (pcase style
-      ('after-string
-       (cond
-        ((or err frag-err)
-         (when bound
-           (tip-live--show-error-after-string (or err frag-err)
-                                              (car bound) (cdr bound)))
-         (tip-log 'warning 'compile "%s" (or err frag-err)))
-        ((and svg (> (length svg) 0) h (> h 0) bound)
-         (let* ((text (buffer-substring-no-properties (car bound) (cdr bound)))
-                (class (tip-classify-fragment text)))
-           (tip-live--show-after-string svg h d w fs class
-                                        (car bound) (cdr bound))))
-        (t (tip-live--cleanup-overlay))))
-      (_  ; childframe
-       (cond
-        (err
-         (tip-childframe-show-text err 'error anchor)
-         (tip-log 'warning 'compile "%s" err))
-        (frag-err
-         (tip-childframe-show-text frag-err 'error anchor)
-         (tip-log 'warning 'compile "%s" frag-err))
-        ((and svg (> (length svg) 0) h (> h 0))
-         (tip-childframe-show svg anchor))
-        (t (tip-childframe-hide)))))))
+  (when tip-live-mode
+    (let* ((err (alist-get 'error result))
+           (frags (alist-get 'fragments result))
+           (frag (and frags (> (length frags) 0) (aref frags 0)))
+           (frag-err (and frag (alist-get 'error frag)))
+           (svg (and frag (alist-get 'svg frag)))
+           (h  (and frag (alist-get 'height_pt frag)))
+           (d  (and frag (alist-get 'depth_pt frag)))
+           (w  (and frag (alist-get 'width_pt frag)))
+           (fs (and frag (alist-get 'font_size_pt frag)))
+           (anchor tip-live--anchor-pos)
+           (bound tip-live--bound)
+           (style tip-live-style))
+      (pcase style
+	('after-string
+	 (cond
+          ((or err frag-err)
+           (when bound
+             (tip-live--show-error-after-string (or err frag-err)
+						(car bound) (cdr bound)))
+           (tip-log 'warning 'compile "%s" (or err frag-err)))
+          ((and svg (> (length svg) 0) h (> h 0) bound)
+           (let* ((text (buffer-substring-no-properties (car bound) (cdr bound)))
+                  (class (tip-classify-fragment text)))
+             (tip-live--show-after-string svg h d w fs class
+                                          (car bound) (cdr bound))))
+          (t (tip-live--cleanup-overlay))))
+	(_  ; childframe
+	 (cond
+          (err
+           (tip-childframe-show-text err 'error anchor)
+           (tip-log 'warning 'compile "%s" err))
+          (frag-err
+           (tip-childframe-show-text frag-err 'error anchor)
+           (tip-log 'warning 'compile "%s" frag-err))
+          ((and svg (> (length svg) 0) h (> h 0))
+           (tip-childframe-show svg anchor))
+          (t (tip-childframe-hide))))))))
 
 (defun tip-live--hide ()
   "Tear down whichever live preview surface is active."
@@ -250,6 +252,7 @@ the next-line layout, others get inline-after layout."
   "Compile the math fragment at point for live preview.
 Works in both normal typst-ts-mode and tip-edit-indirect buffers."
   (cond
+   ((not tip-live-mode) nil)
    ;; In tip-edit-indirect buffer: delegate to the edit preview.
    ((bound-and-true-p tip-edit-indirect-mode)
     (tip-edit-indirect--live-preview))
@@ -316,11 +319,18 @@ command, no recompute."
                (bound-and-true-p tip-live-mode))
     (tip-childframe-hide)))
 
+(defun tip-live--on-idle (buffer)
+  "Preview only when BUFFER owns the timer and is selected."
+  (when (and (buffer-live-p buffer)
+             (eq buffer (window-buffer (selected-window))))
+    (with-current-buffer buffer
+      (when tip-live-mode
+        (tip-live--compile-partial)))))
+
 (defun tip-live--on-buffer-kill ()
-  "Tear down the live preview when a tip-mode buffer is killed."
+  "Disable live preview when its buffer is killed or changes major mode."
   (when (bound-and-true-p tip-live-mode)
-    (tip-live--cleanup-overlay)
-    (tip-childframe-hide)))
+    (tip-live-mode -1)))
 
 ;;;###autoload
 (define-minor-mode tip-live-mode
@@ -331,19 +341,22 @@ org-latex-preview-live style) or a floating childframe.  Opt-in:
 enable with M-x tip-live-mode."
   :init-value nil
   :lighter " TIP-live"
+  ;; Repeated enable calls must not leave untracked idle timers behind.
+  (when tip-live--timer
+    (cancel-timer tip-live--timer)
+    (setq tip-live--timer nil))
   (if tip-live-mode
       (progn
         (setq tip-live--timer
-              (run-with-idle-timer 0.3 t #'tip-live--compile-partial))
+              (run-with-idle-timer 0.3 t #'tip-live--on-idle (current-buffer)))
         (add-hook 'post-command-hook #'tip-live--post-command nil t)
-        (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
-        (add-hook 'kill-buffer-hook #'tip-live--on-buffer-kill nil t))
-    (when tip-live--timer
-      (cancel-timer tip-live--timer)
-      (setq tip-live--timer nil))
+        (add-hook 'window-buffer-change-functions #'tip-live--on-buffer-change nil t)
+        (add-hook 'kill-buffer-hook #'tip-live--on-buffer-kill nil t)
+        (add-hook 'change-major-mode-hook #'tip-live--on-buffer-kill nil t))
     (remove-hook 'post-command-hook #'tip-live--post-command t)
-    (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change)
+    (remove-hook 'window-buffer-change-functions #'tip-live--on-buffer-change t)
     (remove-hook 'kill-buffer-hook #'tip-live--on-buffer-kill t)
+    (remove-hook 'change-major-mode-hook #'tip-live--on-buffer-kill t)
     (tip-live--cleanup-overlay)
     (tip-childframe-hide)
     (setq tip-live--content-cache ""

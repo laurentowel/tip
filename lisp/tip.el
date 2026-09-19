@@ -466,7 +466,8 @@ displayed and where is the backend's choice."
 ;;;###autoload
 (define-minor-mode tip-mode
   "A minor mode for inline preview of Typst math.
-Automatically renders visible fragments and enables live preview."
+Automatically renders visible fragments.
+Live preview is opt-in via `tip-live-mode'."
   :init-value nil
   :lighter " TIP"
   :global nil

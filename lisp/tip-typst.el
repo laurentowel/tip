@@ -45,6 +45,19 @@ This option is buffer-local and also applies to figure previews."
   :group 'tip
   :local t)
 
+(defcustom tip-typst-preview-excluded-functions '("cetz.canvas")
+  "Typst functions whose arguments should not produce separate previews.
+Each entry is an exact function name as written in the source, such as
+\"cetz.canvas\" or \"canvas\" when imported without its module prefix.
+Aliases must be listed explicitly.  Set to nil to disable this exclusion.
+Math and figures inside these calls are excluded, even when
+`tip-typst-preview-value-bindings' is non-nil.  An enclosing math or
+figure fragment can still preview the entire call.  Buffer-local."
+  :type '(repeat string)
+  :safe (lambda (value) (and (proper-list-p value) (cl-every #'stringp value)))
+  :group 'tip
+  :local t)
+
 (defcustom tip-typst-strategy 'auto
   "Compile strategy for the Typst backend.
 - `auto' (default): bottom-up.  Per-fragment synthetic compile,
@@ -138,9 +151,24 @@ including value bindings nested inside their bodies."
       (setq parent (treesit-node-parent parent)))
     found))
 
+(defun tip-typst--preview-excluded-p (node)
+  "Return non-nil if NODE is inside a binding or call excluded from preview."
+  (or (tip--inside-let-binding-p node)
+      (let ((parent (treesit-node-parent node))
+            found)
+        (while (and parent (not found))
+          (when (equal "call" (treesit-node-type parent))
+            (let ((callee (treesit-node-child parent 0)))
+              (setq found
+                    (and callee
+                         (member (treesit-node-text callee t)
+                                 tip-typst-preview-excluded-functions)))))
+          (setq parent (treesit-node-parent parent)))
+        found)))
+
 (defun tip--collect-figure-ranges (node beg end avoid-pos)
   "Recursively find `#figure(...)' calls under NODE.
-Honors `tip-typst-preview-value-bindings'; always skips function bodies.
+Honors value-binding and function-call preview exclusions.
 Does not descend into a matched figure, so nested figures are not emitted.
 Returns a list of (BEG . END) ranges."
   (let ((node-start (treesit-node-start node))
@@ -148,7 +176,7 @@ Returns a list of (BEG . END) ranges."
         (result nil))
     (when (and (<= node-start end) (>= node-end beg))
       (if (and (tip--figure-node-p node)
-               (not (tip--inside-let-binding-p node)))
+               (not (tip-typst--preview-excluded-p node)))
           (let ((start (max beg (1- node-start)))
                 (fend (min end node-end)))
             (when (or (null avoid-pos)
@@ -170,7 +198,7 @@ Filters out nested ranges — only keeps outermost fragments.
 When `tip-render-figure' is non-nil, top-level `#figure(...)' calls are
 also included (and any math inside them is filtered as nested)."
   (let (ranges fragments)
-    ;; Collect math ranges, skipping empty math and excluded let bindings.
+    ;; Collect math ranges, skipping empty math and excluded scopes.
     ;; NOTE: avoid-pos is applied AFTER the outermost-filter below, not
     ;; here.  Filtering during collection would drop the enclosing outer
     ;; math first, leaving a nested inner math looking like a top-level
@@ -184,7 +212,7 @@ also included (and any math inside them is filtered as nested)."
              (not (string-blank-p
                    (buffer-substring-no-properties
                     (1+ (car pair)) (1- (cdr pair))))) ;; skip $ $
-             (not (tip--inside-let-binding-p
+             (not (tip-typst--preview-excluded-p
                    (treesit-node-at (car pair) 'typst))))
         (push pair ranges)))
     ;; Collect figure ranges when enabled.  Same avoid-pos rationale:
@@ -236,7 +264,7 @@ Half-open interval: returns bounds only if BEG <= X < END."
              (if (tip--figure-node-p n)
                  (setq found n)
                (setq n (treesit-node-parent n)))))
-         (when (and found (not (tip--inside-let-binding-p found)))
+         (when (and found (not (tip-typst--preview-excluded-p found)))
            (let ((beg (1- (treesit-node-start found)))
                  (end (treesit-node-end found)))
              (when (and (<= beg x) (< x end))
@@ -256,7 +284,7 @@ Half-open interval: returns bounds only if BEG <= X < END."
        (when (and outer
                   (<= (treesit-node-start outer) x)
                   (< x (treesit-node-end outer))
-                  (not (tip--inside-let-binding-p outer)))
+                  (not (tip-typst--preview-excluded-p outer)))
          (cons (treesit-node-start outer) (treesit-node-end outer)))))))
 
 ;;; * preamble (theme sync)
